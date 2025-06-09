@@ -58,7 +58,82 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 *   Python 3.12+
 *   Database connection details (e.g., Doris Host, Port, User, Password, Database)
 
-## Quick Start
+## 🚀 Quick Start
+
+### Installation from PyPI
+
+```bash
+# Install the latest version
+pip install mcp-doris-server
+
+# Install specific version
+pip install mcp-doris-server==0.3
+```
+
+> **💡 Command Compatibility**: After installation, both `doris-mcp-server` and `mcp-doris-server` commands are available for backward compatibility. You can use either command interchangeably.
+
+### Start Streamable HTTP Mode (Web Service)
+
+```bash
+# Full configuration with database connection
+doris-mcp-server \
+    --transport http \
+    --host 0.0.0.0 \
+    --port 3000 \
+    --db-host 127.0.0.1 \
+    --db-port 9030 \
+    --db-user root \
+    --db-password your_password 
+```
+
+### Start Stdio Mode (for Cursor and other MCP clients)
+
+```bash
+# For direct integration with MCP clients like Cursor
+doris-mcp-server --transport stdio
+```
+
+### Verify Installation
+
+```bash
+# Check installation
+doris-mcp-server --help
+
+# Test HTTP mode (in another terminal)
+curl http://localhost:3000/health
+```
+
+### Environment Variables (Optional)
+
+Instead of command-line arguments, you can use environment variables:
+
+```bash
+export DORIS_HOST="127.0.0.1"
+export DORIS_PORT="9030"
+export DORIS_USER="root"
+export DORIS_PASSWORD="your_password"
+
+# Then start with simplified command
+doris-mcp-server --transport http --host 0.0.0.0 --port 3000
+```
+
+### Command Line Arguments
+
+The `doris-mcp-server` command supports the following arguments:
+
+| Argument | Description | Default | Required |
+|:---------|:------------|:--------|:---------|
+| `--transport` | Transport mode: `http` or `stdio` | `http` | No |
+| `--host` | HTTP server host (HTTP mode only) | `0.0.0.0` | No |
+| `--port` | HTTP server port (HTTP mode only) | `3000` | No |
+| `--db-host` | Doris database host | `localhost` | No |
+| `--db-port` | Doris database port | `9030` | No |
+| `--db-user` | Doris database username | `root` | No |
+| `--db-password` | Doris database password | - | Yes (unless in env) |
+
+## Development Setup
+
+For developers who want to build from source:
 
 ### 1. Clone the Repository
 
@@ -481,9 +556,36 @@ You can connect Cursor to this MCP server using Stdio mode (recommended) or Stre
 
 Stdio mode allows Cursor to manage the server process directly. Configuration is done within Cursor's MCP Server settings file (typically `~/.cursor/mcp.json` or similar).
 
-### Using uv (Recommended)
+### Method 1: Using PyPI Installation (Recommended)
 
-If you have `uv` installed, you can run the server directly:
+Install the package from PyPI and configure Cursor to use it:
+
+```bash
+pip install mcp-doris-server
+```
+
+**Configure Cursor:** Add an entry like the following to your Cursor MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "doris-stdio": {
+      "command": "doris-mcp-server",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "DORIS_HOST": "127.0.0.1",
+        "DORIS_PORT": "9030",
+        "DORIS_USER": "root",
+        "DORIS_PASSWORD": "your_db_password"
+      }
+    }
+  }
+}
+```
+
+### Method 2: Using uv (Development)
+
+If you have `uv` installed and want to run from source:
 
 ```bash
 uv run --project /path/to/doris-mcp-server doris-mcp-server
@@ -491,32 +593,24 @@ uv run --project /path/to/doris-mcp-server doris-mcp-server
 
 **Note:** Replace `/path/to/doris-mcp-server` with the actual absolute path to your project directory.
 
-1.  **Configure Cursor:** Add an entry like the following to your Cursor MCP configuration:
+**Configure Cursor:** Add an entry like the following to your Cursor MCP configuration:
 
-    ```json
-    {
-      "mcpServers": {
-        "doris-stdio": {
-          "command": "uv",
-          "args": ["run", "--project", "/path/to/your/doris-mcp-server", "doris-mcp-server"],
-          "env": {
-            "DORIS_HOST": "127.0.0.1",
-            "DORIS_PORT": "9030",
-            "DORIS_USER": "root",
-            "DORIS_PASSWORD": "your_db_password",
-            "DORIS_DATABASE": "your_default_db",
-            "LOG_LEVEL": "INFO"
-          }
-        }
+```json
+{
+  "mcpServers": {
+    "doris-stdio": {
+      "command": "uv",
+      "args": ["run", "--project", "/path/to/your/doris-mcp-server", "doris-mcp-server"],
+      "env": {
+        "DORIS_HOST": "127.0.0.1",
+        "DORIS_PORT": "9030",
+        "DORIS_USER": "root",
+        "DORIS_PASSWORD": "your_db_password"
       }
     }
-    ```
-
-2.  **Key Points:**
-    *   Replace `/path/to/your/doris-mcp-server` with the actual absolute path to the project's root directory on your system.
-    *   The `--project` argument is crucial for `uv` to find the `pyproject.toml` and run the correct command.
-    *   Database connection details are set directly in the `env` block. Cursor will pass these to the server process.
-    *   No `.env` file is needed for this mode when configured via Cursor.
+  }
+}
+```
 
 ### Streamable HTTP Mode (v0.3.0+)
 

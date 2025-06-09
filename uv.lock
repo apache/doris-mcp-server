@@ -1,19 +1,3 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
 version = 1
 revision = 1
 requires-python = ">=3.12"
@@ -535,170 +519,6 @@ wheels = [
 ]
 
 [[package]]
-name = "doris-mcp-server"
-version = "0.3.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aiofiles" },
-    { name = "aiohttp" },
-    { name = "aiomysql" },
-    { name = "aioredis" },
-    { name = "asyncio-mqtt" },
-    { name = "bcrypt" },
-    { name = "click" },
-    { name = "cryptography" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "numpy" },
-    { name = "orjson" },
-    { name = "pandas" },
-    { name = "passlib", extra = ["bcrypt"] },
-    { name = "prometheus-client" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "pyjwt" },
-    { name = "pymysql" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "python-dateutil" },
-    { name = "python-dotenv" },
-    { name = "python-jose", extra = ["cryptography"] },
-    { name = "python-multipart" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "rich" },
-    { name = "sqlparse" },
-    { name = "starlette" },
-    { name = "structlog" },
-    { name = "toml" },
-    { name = "tqdm" },
-    { name = "typer" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "bandit" },
-    { name = "black" },
-    { name = "flake8" },
-    { name = "isort" },
-    { name = "mypy" },
-    { name = "myst-parser" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "safety" },
-    { name = "sphinx" },
-    { name = "sphinx-rtd-theme" },
-    { name = "tox" },
-]
-docs = [
-    { name = "myst-parser" },
-    { name = "sphinx" },
-    { name = "sphinx-autoapi" },
-    { name = "sphinx-rtd-theme" },
-]
-monitoring = [
-    { name = "grafana-client" },
-    { name = "jaeger-client" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-sdk" },
-    { name = "prometheus-client" },
-]
-performance = [
-    { name = "cchardet" },
-    { name = "orjson" },
-    { name = "uvloop" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiofiles", specifier = ">=23.0.0" },
-    { name = "aiohttp", specifier = ">=3.9.0" },
-    { name = "aiomysql", specifier = ">=0.2.0" },
-    { name = "aioredis", specifier = ">=2.0.0" },
-    { name = "asyncio-mqtt", specifier = ">=0.16.0" },
-    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
-    { name = "bcrypt", specifier = ">=4.1.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=23.12.0" },
-    { name = "cchardet", marker = "extra == 'performance'", specifier = ">=2.1.0" },
-    { name = "click", specifier = ">=8.1.0" },
-    { name = "cryptography", specifier = ">=41.0.0" },
-    { name = "fastapi", specifier = ">=0.108.0" },
-    { name = "flake8", marker = "extra == 'dev'", specifier = ">=7.0.0" },
-    { name = "grafana-client", marker = "extra == 'monitoring'", specifier = ">=3.5.0" },
-    { name = "httpx", specifier = ">=0.26.0" },
-    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.13.0" },
-    { name = "jaeger-client", marker = "extra == 'monitoring'", specifier = ">=4.8.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
-    { name = "myst-parser", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=2.0.0" },
-    { name = "numpy", specifier = ">=1.24.0" },
-    { name = "opentelemetry-api", marker = "extra == 'monitoring'", specifier = ">=1.21.0" },
-    { name = "opentelemetry-sdk", marker = "extra == 'monitoring'", specifier = ">=1.21.0" },
-    { name = "orjson", specifier = ">=3.9.0" },
-    { name = "orjson", marker = "extra == 'performance'", specifier = ">=3.9.0" },
-    { name = "pandas", specifier = ">=2.0.0" },
-    { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.0" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
-    { name = "prometheus-client", specifier = ">=0.19.0" },
-    { name = "prometheus-client", marker = "extra == 'monitoring'", specifier = ">=0.19.0" },
-    { name = "pydantic", specifier = ">=2.5.0" },
-    { name = "pydantic-settings", specifier = ">=2.1.0" },
-    { name = "pyjwt", specifier = ">=2.8.0" },
-    { name = "pymysql", specifier = ">=1.1.0" },
-    { name = "pytest", specifier = ">=8.4.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
-    { name = "pytest-asyncio", specifier = ">=1.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "pytest-cov", specifier = ">=6.1.1" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0" },
-    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
-    { name = "python-dateutil", specifier = ">=2.8.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "python-jose", extras = ["cryptography"], specifier = ">=3.3.0" },
-    { name = "python-multipart", specifier = ">=0.0.6" },
-    { name = "pyyaml", specifier = ">=6.0.0" },
-    { name = "requests", specifier = ">=2.31.0" },
-    { name = "rich", specifier = ">=13.7.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
-    { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
-    { name = "sphinx", marker = "extra == 'dev'", specifier = ">=7.2.0" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.2.0" },
-    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.0.0" },
-    { name = "sphinx-rtd-theme", marker = "extra == 'dev'", specifier = ">=2.0.0" },
-    { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=2.0.0" },
-    { name = "sqlparse", specifier = ">=0.4.4" },
-    { name = "starlette", specifier = ">=0.27.0" },
-    { name = "structlog", specifier = ">=23.2.0" },
-    { name = "toml", specifier = ">=0.10.0" },
-    { name = "tox", marker = "extra == 'dev'", specifier = ">=4.11.0" },
-    { name = "tqdm", specifier = ">=4.66.0" },
-    { name = "typer", specifier = ">=0.9.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.25.0" },
-    { name = "uvloop", marker = "extra == 'performance'", specifier = ">=0.19.0" },
-    { name = "websockets", specifier = ">=12.0" },
-]
-provides-extras = ["dev", "docs", "performance", "monitoring"]
-
-[package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.11.13" }]
-
-[[package]]
 name = "dparse"
 version = "0.6.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1125,6 +945,170 @@ sdist = { url = "https://files.pythonhosted.org/packages/f2/df/8fefc0c6c7a5c6691
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/45/823ad05504bea55cb0feb7470387f151252127ad5c72f8882e8fe6cf5c0e/mcp-1.9.3-py3-none-any.whl", hash = "sha256:69b0136d1ac9927402ed4cf221d4b8ff875e7132b0b06edd446448766f34f9b9", size = 131063 },
 ]
+
+[[package]]
+name = "mcp-doris-server"
+version = "0.3.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiofiles" },
+    { name = "aiohttp" },
+    { name = "aiomysql" },
+    { name = "aioredis" },
+    { name = "asyncio-mqtt" },
+    { name = "bcrypt" },
+    { name = "click" },
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "numpy" },
+    { name = "orjson" },
+    { name = "pandas" },
+    { name = "passlib", extra = ["bcrypt"] },
+    { name = "prometheus-client" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyjwt" },
+    { name = "pymysql" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "python-dateutil" },
+    { name = "python-dotenv" },
+    { name = "python-jose", extra = ["cryptography"] },
+    { name = "python-multipart" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "rich" },
+    { name = "sqlparse" },
+    { name = "starlette" },
+    { name = "structlog" },
+    { name = "toml" },
+    { name = "tqdm" },
+    { name = "typer" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "bandit" },
+    { name = "black" },
+    { name = "flake8" },
+    { name = "isort" },
+    { name = "mypy" },
+    { name = "myst-parser" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "safety" },
+    { name = "sphinx" },
+    { name = "sphinx-rtd-theme" },
+    { name = "tox" },
+]
+docs = [
+    { name = "myst-parser" },
+    { name = "sphinx" },
+    { name = "sphinx-autoapi" },
+    { name = "sphinx-rtd-theme" },
+]
+monitoring = [
+    { name = "grafana-client" },
+    { name = "jaeger-client" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
+]
+performance = [
+    { name = "cchardet" },
+    { name = "orjson" },
+    { name = "uvloop" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiofiles", specifier = ">=23.0.0" },
+    { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "aiomysql", specifier = ">=0.2.0" },
+    { name = "aioredis", specifier = ">=2.0.0" },
+    { name = "asyncio-mqtt", specifier = ">=0.16.0" },
+    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
+    { name = "bcrypt", specifier = ">=4.1.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.12.0" },
+    { name = "cchardet", marker = "extra == 'performance'", specifier = ">=2.1.0" },
+    { name = "click", specifier = ">=8.1.0" },
+    { name = "cryptography", specifier = ">=41.0.0" },
+    { name = "fastapi", specifier = ">=0.108.0" },
+    { name = "flake8", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "grafana-client", marker = "extra == 'monitoring'", specifier = ">=3.5.0" },
+    { name = "httpx", specifier = ">=0.26.0" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.13.0" },
+    { name = "jaeger-client", marker = "extra == 'monitoring'", specifier = ">=4.8.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
+    { name = "myst-parser", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=2.0.0" },
+    { name = "numpy", specifier = ">=1.24.0" },
+    { name = "opentelemetry-api", marker = "extra == 'monitoring'", specifier = ">=1.21.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'monitoring'", specifier = ">=1.21.0" },
+    { name = "orjson", specifier = ">=3.9.0" },
+    { name = "orjson", marker = "extra == 'performance'", specifier = ">=3.9.0" },
+    { name = "pandas", specifier = ">=2.0.0" },
+    { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6.0" },
+    { name = "prometheus-client", specifier = ">=0.19.0" },
+    { name = "prometheus-client", marker = "extra == 'monitoring'", specifier = ">=0.19.0" },
+    { name = "pydantic", specifier = ">=2.5.0" },
+    { name = "pydantic-settings", specifier = ">=2.1.0" },
+    { name = "pyjwt", specifier = ">=2.8.0" },
+    { name = "pymysql", specifier = ">=1.1.0" },
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "pytest-cov", specifier = ">=6.1.1" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
+    { name = "python-dateutil", specifier = ">=2.8.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "python-jose", extras = ["cryptography"], specifier = ">=3.3.0" },
+    { name = "python-multipart", specifier = ">=0.0.6" },
+    { name = "pyyaml", specifier = ">=6.0.0" },
+    { name = "requests", specifier = ">=2.31.0" },
+    { name = "rich", specifier = ">=13.7.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
+    { name = "sphinx", marker = "extra == 'dev'", specifier = ">=7.2.0" },
+    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.2.0" },
+    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.0.0" },
+    { name = "sphinx-rtd-theme", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=2.0.0" },
+    { name = "sqlparse", specifier = ">=0.4.4" },
+    { name = "starlette", specifier = ">=0.27.0" },
+    { name = "structlog", specifier = ">=23.2.0" },
+    { name = "toml", specifier = ">=0.10.0" },
+    { name = "tox", marker = "extra == 'dev'", specifier = ">=4.11.0" },
+    { name = "tqdm", specifier = ">=4.66.0" },
+    { name = "typer", specifier = ">=0.9.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.25.0" },
+    { name = "uvloop", marker = "extra == 'performance'", specifier = ">=0.19.0" },
+    { name = "websockets", specifier = ">=12.0" },
+]
+provides-extras = ["dev", "docs", "performance", "monitoring"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = ">=0.11.13" }]
 
 [[package]]
 name = "mdit-py-plugins"
