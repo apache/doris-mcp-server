@@ -221,9 +221,17 @@ Execute the following command to start the server:
 ```bash
 ./start_server.sh
 ```
-
 This command starts the FastAPI application with Streamable HTTP MCP service.
+### 5. Deploying on docker
 
+If you want to run only Doris MCP Server in docker:
+
+
+```bash
+cd doris-mcp-server
+docker build -t doris-mcp-server .
+docker run -d -p <port>:<port> -v /*your-host*/doris-mcp-server/.env:/app/.env --name <your-mcp-server-name> -it doris-mcp-server:latest
+```
 **Service Endpoints:**
 
 *   **Streamable HTTP**: `http://<host>:<port>/mcp` (Primary MCP endpoint - supports GET, POST, DELETE, OPTIONS)
