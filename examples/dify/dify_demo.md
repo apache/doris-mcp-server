@@ -103,6 +103,9 @@ If your Dify deployment requires a publicly accessible endpoint, you can use the
 2.  Select **Agent** as the template and set the **App Name** (e.g., `Doris ChatBI`).
 ![Agent setup](../images/dify_agent_setup.png)
 
+
+3.  Import from DSL,[dify_doris_dsl.yml](dify_doris_dsl.yml)
+
 -----
 
 ## Instructions & Tool Configuration
