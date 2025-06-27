@@ -24,18 +24,20 @@ github:
     - olap
     - lakehouse
     - mcp
+    - ai
   enabled_merge_buttons:
     squash:  true
     merge:   false
     rebase:  false
+  protected_branches:
+    master:
+      required_pull_request_reviews:
+        dismiss_stale_reviews: true
+        required_approving_review_count: 1
   features:
-    # Enable wiki for documentation
-    wiki: true
-    # Enable issue management
     issues: true
-    # Enable projects for project management boardS
     projects: true
-    # Enable discussions
-    discussions: true
 notifications:
-  pullrequests_status:  commits@doris.apache.org
+  issues:       commits@doris.apache.org
+  commits:      commits@doris.apache.org
+  pullrequests: commits@doris.apache.org

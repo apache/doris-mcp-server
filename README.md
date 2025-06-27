@@ -29,6 +29,7 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 - **🎯 Centralized Configuration Management**: All security keywords now managed through single configuration source with consistent enforcement across all components
 - **🔧 MCP Version Compatibility**: Resolved MCP library version conflicts with intelligent compatibility layer supporting both MCP 1.8.x and 1.9.x versions
 - **🚀 Production Reliability**: Enhanced error handling, connection diagnostics, and automatic recovery from database connection issues
+- **🙏 Community Contribution**: Special thanks to Hailin Xie for supporting the doris-mcp-server project by graciously transferring the PyPI project to the community free of charge, contributing to open source. The mcp-doris-server repository will be retained but no longer maintained, with ongoing development continuing on the doris-mcp-server repository
 
 > **🔧 Key Improvements**: Resolved connection stability issues, unified security keyword management, added comprehensive environment variable configuration for security policies, and fixed MCP library version compatibility conflicts.
 
@@ -63,13 +64,13 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 
 ```bash
 # Install the latest version
-pip install mcp-doris-server
+pip install doris-mcp-server
 
 # Install specific version
-pip install mcp-doris-server==0.4.2
+pip install doris-mcp-server==0.4.2
 ```
 
-> **💡 Command Compatibility**: After installation, both `doris-mcp-server` and `mcp-doris-server` commands are available for backward compatibility. You can use either command interchangeably.
+> **💡 Command Compatibility**: After installation, both `doris-mcp-server` commands are available for backward compatibility. You can use either command interchangeably.
 
 ### Start Streamable HTTP Mode (Web Service)
 
