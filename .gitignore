@@ -1,0 +1,25 @@
+*.log
+*.log.*
+*.bak
+logs
+/configs/*.py
+.vscode/
+__pycache__/
+*.log
+
+.python-version
+Pipfile.lock
+poetry.lock
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.idea/
+
+
+
+
