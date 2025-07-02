@@ -87,14 +87,14 @@ The necessary dependencies are listed in `requirements.txt` and will be managed 
         "run",
         "--project",
         "/path/to/your/doris-mcp-server",
-        "mcp-doris-server"
+        "doris-mcp-server"
       ],  
       "env": {
-        "DB_HOST": "your_doris_fe_host",
-        "DB_PORT": "9030",
-        "DB_USER": "your_username",
-        "DB_PASSWORD": "your_password",
-        "DB_DATABASE": "ssb"
+        "DORIS_HOST": "your_doris_fe_host",
+        "DORIS_PORT": "9030",
+        "DORIS_USER": "your_username",
+        "DORIS_PASSWORD": "your_password",
+        "DORIS_DATABASE": "ssb"
       }
     }
   }
