@@ -53,11 +53,18 @@ class DatabaseConfig:
     be_webserver_port: int = 8040
 
     # Connection pool configuration
-    min_connections: int = 5
+    # Note: min_connections is fixed at 0 to avoid at_eof connection issues
+    # This prevents pre-creation of connections which can cause state problems
+    _min_connections: int = field(default=0, init=False)  # Internal use only, always 0
     max_connections: int = 20
     connection_timeout: int = 30
     health_check_interval: int = 60
     max_connection_age: int = 3600
+
+    @property
+    def min_connections(self) -> int:
+        """Minimum connections is always 0 to prevent at_eof issues"""
+        return self._min_connections
 
 
 @dataclass
@@ -248,9 +255,6 @@ class DorisConfig:
         config.database.be_webserver_port = int(os.getenv("DORIS_BE_WEBSERVER_PORT", str(config.database.be_webserver_port)))
 
         # Connection pool configuration
-        config.database.min_connections = int(
-            os.getenv("DORIS_MIN_CONNECTIONS", str(config.database.min_connections))
-        )
         config.database.max_connections = int(
             os.getenv("DORIS_MAX_CONNECTIONS", str(config.database.max_connections))
         )
@@ -414,7 +418,7 @@ class DorisConfig:
                 "fe_http_port": self.database.fe_http_port,
                 "be_hosts": self.database.be_hosts,
                 "be_webserver_port": self.database.be_webserver_port,
-                "min_connections": self.database.min_connections,
+                "min_connections": self.database.min_connections,  # Always 0, shown for reference
                 "max_connections": self.database.max_connections,
                 "connection_timeout": self.database.connection_timeout,
                 "health_check_interval": self.database.health_check_interval,
@@ -492,11 +496,8 @@ class DorisConfig:
         if not self.database.user:
             errors.append("Database username cannot be empty")
 
-        if self.database.min_connections <= 0:
-            errors.append("Minimum connections must be greater than 0")
-
-        if self.database.max_connections <= self.database.min_connections:
-            errors.append("Maximum connections must be greater than minimum connections")
+        if self.database.max_connections <= 0:
+            errors.append("Maximum connections must be greater than 0")
 
         # Validate security configuration
         if self.security.auth_type not in ["token", "basic", "oauth"]:
@@ -549,7 +550,7 @@ class DorisConfig:
         return {
             "server": f"{self.server_name} v{self.server_version}",
             "database": f"{self.database.host}:{self.database.port}/{self.database.database}",
-            "connection_pool": f"{self.database.min_connections}-{self.database.max_connections}",
+            "connection_pool": f"0-{self.database.max_connections} (min fixed at 0 for stability)",
             "security": {
                 "auth_type": self.security.auth_type,
                 "masking_enabled": self.security.enable_masking,
