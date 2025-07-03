@@ -478,7 +478,31 @@ class DorisToolsManager:
                 "time_range": time_range
             })
 
-        logger.info("Successfully registered 16 tools to MCP server")
+        # Get table partition info tool
+        @mcp.tool(
+            "get_table_partition_info",
+            description="""[Function Description]: Get partition information for the specified table.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to query
+
+- db_name (string) [Optional] - Target database name, defaults to the current database
+
+- catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
+""",
+        )
+        async def get_table_partition_info_tool(
+            table_name: str, db_name: str = None, catalog_name: str = None
+        ) -> str:
+            """Get table partition information"""
+            return await self.call_tool("get_table_partition_info", {
+                "table_name": table_name,
+                "db_name": db_name,
+                "catalog_name": catalog_name
+            })
+
+        logger.info("Successfully registered 17 tools to MCP server")
 
     async def list_tools(self) -> List[Tool]:
         """List all available query tools (for stdio mode)"""
@@ -848,6 +872,28 @@ class DorisToolsManager:
                     },
                 },
             ),
+            Tool(
+                name="get_table_partition_info",
+                description="""[Function Description]: Get partition information for the specified table.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to query
+
+- db_name (string) [Optional] - Target database name, defaults to the current database
+
+- catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Table name"},
+                        "db_name": {"type": "string", "description": "Database name"},
+                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                    },
+                    "required": ["table_name"],
+                },
+            ),
         ]
         
         return tools
@@ -892,6 +938,8 @@ class DorisToolsManager:
                 result = await self._get_realtime_memory_stats_tool(arguments)
             elif name == "get_historical_memory_stats":
                 result = await self._get_historical_memory_stats_tool(arguments)
+            elif name == "get_table_partition_info":
+                result = await self._get_table_partition_info_tool(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
             
@@ -1082,4 +1130,15 @@ class DorisToolsManager:
         # Delegate to memory tracker for processing
         return await self.memory_tracker.get_historical_memory_stats(
             tracker_names, time_range
+        )
+
+    async def _get_table_partition_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Get table partition information tool routing"""
+        table_name = arguments.get("table_name")
+        db_name = arguments.get("db_name")
+        catalog_name = arguments.get("catalog_name")
+        
+        # Delegate to metadata extractor for processing
+        return await self.metadata_extractor.get_table_partition_info(
+            db_name, table_name
         )

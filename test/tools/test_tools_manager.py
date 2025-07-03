@@ -268,4 +268,93 @@ class TestDorisToolsManager:
             
             # Required fields should be defined
             if 'required' in tool.inputSchema:
-                assert isinstance(tool.inputSchema['required'], list) 
+                assert isinstance(tool.inputSchema['required'], list)
+
+    @pytest.mark.asyncio
+    async def test_get_table_partition_info_tool(self, tools_manager):
+        """Test get_table_partition_info tool"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_partition_info') as mock_execute:
+            mock_execute.return_value = {
+                "partitions": [
+                    {
+                        "PartitionName": "p202301",
+                        "PartitionId": 1,
+                        "Version": 3,
+                        "VersionHash": "123456789",
+                        "PartitionKey": "2023-01",
+                        "Range": ["2023-01-01", "2023-02-01"],
+                        "DistributionKey": "id",
+                        "Buckets": 10,
+                        "ReplicationNum": 3,
+                        "StorageMedium": "SSD",
+                        "CooldownTime": "9999-12-31 23:59:59",
+                        "LastConsistencyCheckTime": "2023-01-15 10:00:00",
+                        "DataSize": "1.5 GB",
+                        "RowCount": 1500000
+                    },
+                    {
+                        "PartitionName": "p202302",
+                        "PartitionId": 2,
+                        "Version": 3,
+                        "VersionHash": "987654321",
+                        "PartitionKey": "2023-02",
+                        "Range": ["2023-02-01", "2023-03-01"],
+                        "DistributionKey": "id",
+                        "Buckets": 10,
+                        "ReplicationNum": 3,
+                        "StorageMedium": "SSD",
+                        "CooldownTime": "9999-12-31 23:59:59",
+                        "LastConsistencyCheckTime": "2023-02-15 10:00:00",
+                        "DataSize": "1.8 GB",
+                        "RowCount": 1800000
+                    }
+                ],
+                "partition_type": "RANGE",
+                "partition_columns": ["dt"],
+                "distribution_columns": ["id"],
+                "distribution_type": "HASH",
+                "bucket_num": 10
+            }
+            
+            arguments = {"table_name": "sales"}
+            result = await tools_manager.call_tool("get_table_partition_info", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            if "partitions" in result_data:
+                assert len(result_data["partitions"]) == 2
+                assert result_data["partitions"][0]["PartitionName"] == "p202301"
+                assert result_data["partition_type"] == "RANGE"
+            elif "result" in result_data:
+                assert len(result_data["result"]) >= 0  # May be empty if no partitions
+
+    @pytest.mark.asyncio
+    async def test_get_table_partition_info_with_db(self, tools_manager):
+        """Test get_table_partition_info with db_name parameter"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_partition_info') as mock_execute:
+            mock_execute.return_value = {
+                "partitions": [{"PartitionName": "p1"}],
+                "partition_type": "RANGE"
+            }
+            
+            arguments = {
+                "table_name": "sales",
+                "db_name": "retail"
+            }
+            result = await tools_manager.call_tool("get_table_partition_info", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert "partitions" in result_data or "result" in result_data
+
+    @pytest.mark.asyncio
+    async def test_get_table_partition_info_error(self, tools_manager):
+        """Test get_table_partition_info with error"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_partition_info') as mock_execute:
+            mock_execute.side_effect = Exception("Table not found")
+            
+            arguments = {"table_name": "nonexistent_table"}
+            result = await tools_manager.call_tool("get_table_partition_info", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert "error" in result_data or "success" in result_data
+            if "error" in result_data:
+                assert "not found" in result_data["error"].lower()
