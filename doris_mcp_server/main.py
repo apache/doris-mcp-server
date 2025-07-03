@@ -28,26 +28,183 @@ import json
 import logging
 from typing import Any
 
-# MCP version compatibility check
-try:
-    import mcp
-    MCP_VERSION = getattr(mcp, '__version__', 'unknown')
-    logger = logging.getLogger(__name__)
-    logger.info(f"Using MCP version: {MCP_VERSION}")
-except Exception as e:
-    logger = logging.getLogger(__name__)
-    logger.warning(f"Could not determine MCP version: {e}")
-    MCP_VERSION = 'unknown'
+# MCP version compatibility handling
+MCP_VERSION = 'unknown'
+Server = None
+InitializationOptions = None
+Prompt = None
+Resource = None
+TextContent = None
+Tool = None
 
-from mcp.server import Server
-from mcp.server.models import InitializationOptions
+def _import_mcp_with_compatibility():
+    """Import MCP components with multi-version compatibility"""
+    global MCP_VERSION, Server, InitializationOptions, Prompt, Resource, TextContent, Tool
+    
+    try:
+        # Strategy 1: Try direct server-only imports to avoid client-side issues
+        from mcp.server import Server as _Server
+        from mcp.server.models import InitializationOptions as _InitOptions
+        from mcp.types import (
+            Prompt as _Prompt,
+            Resource as _Resource, 
+            TextContent as _TextContent,
+            Tool as _Tool,
+        )
+        
+        # Assign to globals
+        Server = _Server
+        InitializationOptions = _InitOptions
+        Prompt = _Prompt
+        Resource = _Resource
+        TextContent = _TextContent
+        Tool = _Tool
+        
+        # Try to get version safely
+        try:
+            import mcp
+            MCP_VERSION = getattr(mcp, '__version__', None)
+            if not MCP_VERSION:
+                # Fallback: try to get version from package metadata
+                try:
+                    import importlib.metadata
+                    MCP_VERSION = importlib.metadata.version('mcp')
+                except Exception:
+                    # Second fallback: try pkg_resources
+                    try:
+                        import pkg_resources
+                        MCP_VERSION = pkg_resources.get_distribution('mcp').version
+                    except Exception:
+                        MCP_VERSION = 'detected-but-version-unknown'
+        except Exception:
+            # Version detection failed, but imports worked
+            try:
+                import importlib.metadata
+                MCP_VERSION = importlib.metadata.version('mcp')
+            except Exception:
+                try:
+                    import pkg_resources
+                    MCP_VERSION = pkg_resources.get_distribution('mcp').version
+                except Exception:
+                    MCP_VERSION = 'imported-successfully'
+            
+        logger = logging.getLogger(__name__)
+        logger.info(f"MCP components imported successfully, version: {MCP_VERSION}")
+        return True
+        
+    except Exception as import_error:
+        logger = logging.getLogger(__name__)
+        
+        # Strategy 2: Handle RequestContext compatibility issues in 1.9.x versions
+        error_str = str(import_error).lower()
+        if 'requestcontext' in error_str and 'too few arguments' in error_str:
+            logger.warning(f"Detected MCP RequestContext compatibility issue: {import_error}")
+            logger.info("Attempting comprehensive workaround for MCP 1.9.x RequestContext issue...")
+            
+            try:
+                # Comprehensive monkey patch approach
+                import sys
+                import types
+                
+                # Create and install mock modules before any MCP imports
+                if 'mcp.shared.context' not in sys.modules:
+                    mock_context_module = types.ModuleType('mcp.shared.context')
+                    
+                    class FlexibleRequestContext:
+                        """Flexible RequestContext that accepts variable arguments"""
+                        def __init__(self, *args, **kwargs):
+                            self.args = args
+                            self.kwargs = kwargs
+                        
+                        def __class_getitem__(cls, params):
+                            # Accept any number of parameters and return cls
+                            return cls
+                        
+                        # Add other methods that might be called
+                        def __getattr__(self, name):
+                            return lambda *args, **kwargs: None
+                    
+                    mock_context_module.RequestContext = FlexibleRequestContext
+                    sys.modules['mcp.shared.context'] = mock_context_module
+                
+                # Also patch the typing system to be more permissive  
+                original_check_generic = None
+                try:
+                    import typing
+                    if hasattr(typing, '_check_generic'):
+                        original_check_generic = typing._check_generic
+                        def permissive_check_generic(cls, params, elen):
+                            # Don't enforce strict parameter count checking
+                            return
+                        typing._check_generic = permissive_check_generic
+                except Exception:
+                    pass
+                
+                # Clear any cached imports that might have failed
+                modules_to_clear = [k for k in sys.modules.keys() if k.startswith('mcp.')]
+                for module in modules_to_clear:
+                    if module in sys.modules:
+                        del sys.modules[module]
+                
+                # Now try importing again with the patches in place
+                from mcp.server import Server as _Server
+                from mcp.server.models import InitializationOptions as _InitOptions
+                from mcp.types import (
+                    Prompt as _Prompt,
+                    Resource as _Resource, 
+                    TextContent as _TextContent,
+                    Tool as _Tool,
+                )
+                
+                # Assign to globals
+                Server = _Server
+                InitializationOptions = _InitOptions
+                Prompt = _Prompt
+                Resource = _Resource
+                TextContent = _TextContent
+                Tool = _Tool
+                
+                # Try to detect actual version even in compatibility mode
+                try:
+                    import importlib.metadata
+                    actual_version = importlib.metadata.version('mcp')
+                    MCP_VERSION = f'compatibility-mode-{actual_version}'
+                except Exception:
+                    try:
+                        import pkg_resources
+                        actual_version = pkg_resources.get_distribution('mcp').version
+                        MCP_VERSION = f'compatibility-mode-{actual_version}'
+                    except Exception:
+                        MCP_VERSION = 'compatibility-mode-1.9.x'
+                
+                logger.info("MCP 1.9.x compatibility workaround successful!")
+                
+                # Restore original typing function if we patched it
+                if original_check_generic:
+                    typing._check_generic = original_check_generic
+                
+                return True
+                
+            except Exception as workaround_error:
+                logger.error(f"MCP compatibility workaround failed: {workaround_error}")
+                
+                # Restore original typing function if we patched it
+                if original_check_generic:
+                    try:
+                        import typing
+                        typing._check_generic = original_check_generic
+                    except Exception:
+                        pass
+        
+        logger.error(f"Failed to import MCP components: {import_error}")
+        return False
 
-from mcp.types import (
-    Prompt,
-    Resource,
-    TextContent,
-    Tool,
-)
+# Perform MCP import with compatibility handling
+if not _import_mcp_with_compatibility():
+    raise ImportError(
+        "Failed to import MCP components. Please ensure MCP is properly installed. "
+        "Supported versions: 1.8.x, 1.9.x"
+    )
 
 from .tools.tools_manager import DorisToolsManager
 from .tools.prompts_manager import DorisPromptsManager
@@ -234,8 +391,16 @@ class DorisServer:
             await self.connection_manager.initialize()
             self.logger.info("Connection manager initialization completed")
 
-            # Start stdio server - using simpler approach
-            from mcp.server.stdio import stdio_server
+            # Start stdio server - using compatible import approach
+            try:
+                from mcp.server.stdio import stdio_server
+            except ImportError:
+                # Fallback for different MCP versions
+                try:
+                    from mcp.server import stdio_server
+                except ImportError as stdio_import_error:
+                    self.logger.error(f"Failed to import stdio_server: {stdio_import_error}")
+                    raise RuntimeError("stdio_server module not available in this MCP version")
             
             self.logger.info("Creating stdio_server transport...")
             

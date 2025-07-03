@@ -585,63 +585,57 @@ class DorisQueryExecutor:
                     timeout=timeout,
                     cache_enabled=False  # Disable cache for MCP calls to ensure fresh data
                 )
-
+                
                 # Execute query with retry logic
-                try:
-                    result = await self.execute_query(query_request, auth_context)
-                    
-                    # Serialize data for JSON response
-                    serialized_data = []
-                    for row in result.data:
-                        serialized_data.append(self._serialize_row_data(row))
+                result = await self.execute_query(query_request, auth_context)
+                
+                # Serialize data for JSON response
+                serialized_data = []
+                for row in result.data:
+                    serialized_data.append(self._serialize_row_data(row))
 
-                    return {
-                        "success": True,
-                        "data": serialized_data,
-                        "row_count": result.row_count,
-                        "execution_time": result.execution_time,
-                        "metadata": {
-                            "columns": result.metadata.get("columns", []),
-                            "query": sql
-                        }
+                return {
+                    "success": True,
+                    "data": serialized_data,
+                    "row_count": result.row_count,
+                    "execution_time": result.execution_time,
+                    "metadata": {
+                        "columns": result.metadata.get("columns", []),
+                        "query": sql
                     }
-                    
-                except Exception as query_error:
-                    # Check if it's a connection-related error that we should retry
-                    error_str = str(query_error).lower()
-                    connection_errors = [
-                        "at_eof", "connection", "closed", "nonetype", 
-                        "transport", "reader", "broken pipe", "connection reset"
-                    ]
-                    
-                    is_connection_error = any(err in error_str for err in connection_errors)
-                    
-                    if is_connection_error and retry_count < max_retries:
-                        retry_count += 1
-                        self.logger.warning(f"Connection error detected, retrying ({retry_count}/{max_retries}): {query_error}")
-                        
-                        # Release the problematic connection
-                        try:
-                            await self.connection_manager.release_connection(session_id)
-                        except Exception:
-                            pass  # Ignore cleanup errors
-                        
-                        # Wait a bit before retry
-                        await asyncio.sleep(0.5 * retry_count)
-                        continue
-                    else:
-                        # Re-raise if not a connection error or max retries exceeded
-                        raise query_error
-
+                }
+                
             except Exception as e:
                 error_msg = str(e)
+                error_str = error_msg.lower()
                 
-                # If we've exhausted retries or it's not a connection error, return error
-                if retry_count >= max_retries or "at_eof" not in error_msg.lower():
+                # Check if it's a connection-related error that we should retry
+                connection_errors = [
+                    "at_eof", "connection", "closed", "nonetype", 
+                    "transport", "reader", "broken pipe", "connection reset"
+                ]
+                
+                is_connection_error = any(err in error_str for err in connection_errors)
+                
+                if is_connection_error and retry_count < max_retries:
+                    retry_count += 1
+                    self.logger.warning(f"Connection error detected, retrying ({retry_count}/{max_retries}): {e}")
+                    
+                    # Release the problematic connection
+                    try:
+                        await self.connection_manager.release_connection(session_id)
+                    except Exception:
+                        pass  # Ignore cleanup errors
+                    
+                    # Wait a bit before retry
+                    await asyncio.sleep(0.5 * retry_count)
+                    continue
+                else:
+                    # If we've exhausted retries or it's not a connection error, return error
                     error_analysis = self._analyze_error(error_msg)
                     
                     return {
-                        "success": False, 
+                        "success": False,
                         "error": error_analysis.get("user_message", error_msg),
                         "error_type": error_analysis.get("error_type", "general_error"),
                         "data": None,
@@ -651,24 +645,17 @@ class DorisQueryExecutor:
                             "retry_count": retry_count
                         }
                     }
-                else:
-                    # Try one more time for connection errors
-                    retry_count += 1
-                    if retry_count <= max_retries:
-                        self.logger.warning(f"Retrying query due to connection error ({retry_count}/{max_retries}): {e}")
-                        await asyncio.sleep(0.5 * retry_count)
-                        continue
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"Query failed after {max_retries} retries: {error_msg}",
-                            "data": None,
-                            "metadata": {
-                                "query": sql,
-                                "error_details": error_msg,
-                                "retry_count": retry_count
-                            }
-                        }
+        
+        # This should never be reached, but just in case
+        return {
+            "success": False,
+            "error": "Maximum retries exceeded",
+            "data": None,
+            "metadata": {
+                "query": sql,
+                "retry_count": retry_count
+            }
+        }
 
     def _serialize_row_data(self, row_data: Dict[str, Any]) -> Dict[str, Any]:
         """Serialize row data for JSON response"""
