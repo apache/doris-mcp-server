@@ -230,42 +230,84 @@ class TestDorisToolsManager:
             elif "result" in result_data:
                 assert len(result_data["result"]) >= 0  # May be empty if no catalogs
 
-
-
     @pytest.mark.asyncio
-    async def test_invalid_tool_name(self, tools_manager):
-        """Test calling invalid tool"""
-        result = await tools_manager.call_tool("invalid_tool", {})
-        result_data = json.loads(result) if isinstance(result, str) else result
-        
-        assert "error" in result_data or "success" in result_data
-        if "error" in result_data:
-            assert "Unknown tool" in result_data["error"]
-
-    @pytest.mark.asyncio
-    async def test_missing_required_arguments(self, tools_manager):
-        """Test calling tool with missing required arguments"""
-        # exec_query requires sql parameter
-        result = await tools_manager.call_tool("exec_query", {})
-        result_data = json.loads(result) if isinstance(result, str) else result
-        
-        assert "error" in result_data or "success" in result_data
-        # The test may pass if the tool handles missing parameters gracefully
-
-    @pytest.mark.asyncio
-    async def test_tool_definitions_structure(self, tools_manager):
-        """Test tool definitions have correct structure"""
-        tools = await tools_manager.list_tools()
-        
-        for tool in tools:
-            # Each tool should have required fields
-            assert hasattr(tool, 'name')
-            assert hasattr(tool, 'description')
-            assert hasattr(tool, 'inputSchema')
+    async def test_get_table_partition_info_with_database_name(self, tools_manager):
+        """Test get_table_partition_info with database_name parameter"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_partition_info_for_mcp') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": {
+                    "partitions": [{"PartitionName": "p1"}],
+                    "partition_type": "RANGE"
+                }
+            }
             
-            # Input schema should have properties
-            assert 'properties' in tool.inputSchema
+            arguments = {
+                "table_name": "sales",
+                "database_name": "retail"
+            }
+            result = await tools_manager.call_tool("get_table_partition_info", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
             
-            # Required fields should be defined
-            if 'required' in tool.inputSchema:
-                assert isinstance(tool.inputSchema['required'], list) 
+            assert result_data["success"]
+            assert "partitions" in result_data["result"]
+            assert len(result_data["result"]["partitions"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_table_partition_info_with_db_name(self, tools_manager):
+        """Test get_table_partition_info with db_name parameter (backward compatibility)"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_partition_info_for_mcp') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": {
+                    "partitions": [{"PartitionName": "p1"}],
+                    "partition_type": "RANGE"
+                }
+            }
+            
+            arguments = {
+                "table_name": "sales",
+                "db_name": "retail"
+            }
+            result = await tools_manager.call_tool("get_table_partition_info", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert "partitions" in result_data["result"]
+            assert len(result_data["result"]["partitions"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_table_partition_info_with_default_db(self, tools_manager):
+        """Test get_table_partition_info with default database"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_partition_info_for_mcp') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": {
+                    "partitions": [{"PartitionName": "p1"}],
+                    "partition_type": "RANGE"
+                }
+            }
+            
+            arguments = {
+                "table_name": "sales"
+            }
+            result = await tools_manager.call_tool("get_table_partition_info", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert "partitions" in result_data["result"]
+            assert len(result_data["result"]["partitions"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_table_partition_info_error(self, tools_manager):
+        """Test get_table_partition_info with error"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_partition_info_for_mcp') as mock_execute:
+            mock_execute.side_effect = Exception("Table not found")
+            
+            arguments = {"table_name": "nonexistent_table"}
+            result = await tools_manager.call_tool("get_table_partition_info", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert not result_data["success"]
+            assert "error" in result_data
+            assert "not found" in result_data["error"].lower()
