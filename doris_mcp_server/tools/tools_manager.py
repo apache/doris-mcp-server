@@ -502,7 +502,46 @@ class DorisToolsManager:
                 "catalog_name": catalog_name
             })
 
-        logger.info("Successfully registered 17 tools to MCP server")
+            # Table sample data tool
+            @mcp.tool(
+                "table_sample_data",
+                description="""[Function Description]: Sample data from specified table with various sampling methods.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to sample
+- db_name (string) [Optional] - Target database name, defaults to current database
+- catalog_name (string) [Optional] - Target catalog name for federation queries
+- sample_method (string) [Optional] - Sampling method (SYSTEM|BERNOULLI|RANDOM), default SYSTEM
+- sample_size (number) [Required] - Sample size or ratio (e.g. 100 or 0.1 for 10%)
+- columns (string) [Optional] - Columns to return, comma separated
+- where_condition (string) [Optional] - Filter condition before sampling
+- cache_ttl (integer) [Optional] - Result cache TTL in seconds, default 300
+""",
+            )
+            async def table_sample_data_tool(
+                table_name: str,
+                sample_size: float,
+                db_name: str = None,
+                catalog_name: str = None,
+                sample_method: str = "SYSTEM",
+                columns: str = None,
+                where_condition: str = None,
+                cache_ttl: int = 300
+            ) -> str:
+                """Table data sampling tool"""
+                return await self.call_tool("table_sample_data", {
+                    "table_name": table_name,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                    "sample_method": sample_method,
+                    "sample_size": sample_size,
+                    "columns": columns,
+                    "where_condition": where_condition,
+                    "cache_ttl": cache_ttl
+                })
+
+            logger.info("Successfully registered 18 tools to MCP server")
 
     async def list_tools(self) -> List[Tool]:
         """List all available query tools (for stdio mode)"""
@@ -894,6 +933,36 @@ class DorisToolsManager:
                     "required": ["table_name"],
                 },
             ),
+            Tool(
+                name="table_sample_data",
+                description="""[Function Description]: Sample data from specified table with various sampling methods.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to sample
+- db_name (string) [Optional] - Target database name, defaults to current database
+- catalog_name (string) [Optional] - Target catalog name for federation queries
+- sample_method (string) [Optional] - Sampling method (SYSTEM|BERNOULLI|RANDOM), default SYSTEM
+- sample_size (number) [Required] - Sample size or ratio (e.g. 100 or 0.1 for 10%)
+- columns (string) [Optional] - Columns to return, comma separated
+- where_condition (string) [Optional] - Filter condition before sampling
+- cache_ttl (integer) [Optional] - Result cache TTL in seconds, default 300
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Table name to sample"},
+                        "db_name": {"type": "string", "description": "Database name"},
+                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "sample_method": {"type": "string", "enum": ["SYSTEM", "BERNOULLI", "RANDOM"], "default": "SYSTEM"},
+                        "sample_size": {"type": "number", "description": "Sample size or ratio"},
+                        "columns": {"type": "string", "description": "Columns to return, comma separated"},
+                        "where_condition": {"type": "string", "description": "Filter condition before sampling"},
+                        "cache_ttl": {"type": "integer", "description": "Result cache TTL in seconds", "default": 300}
+                    },
+                    "required": ["table_name", "sample_size"],
+                },
+            ),
         ]
         
         return tools
@@ -940,6 +1009,8 @@ class DorisToolsManager:
                 result = await self._get_historical_memory_stats_tool(arguments)
             elif name == "get_table_partition_info":
                 result = await self._get_table_partition_info_tool(arguments)
+            elif name == "table_sample_data":
+                result = await self._table_sample_data_tool(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
             
@@ -1144,3 +1215,26 @@ class DorisToolsManager:
         )
         
         return result
+
+    async def _table_sample_data_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Table sample data tool routing"""
+        table_name = arguments.get("table_name")
+        db_name = arguments.get("db_name")
+        catalog_name = arguments.get("catalog_name")
+        sample_method = arguments.get("sample_method", "SYSTEM")
+        sample_size = arguments.get("sample_size")
+        columns = arguments.get("columns")
+        where_condition = arguments.get("where_condition")
+        cache_ttl = arguments.get("cache_ttl", 300)
+        
+        # Delegate to metadata extractor for processing
+        return await self.metadata_extractor.get_table_sample_data_for_mcp(
+            table_name=table_name,
+            db_name=db_name,
+            catalog_name=catalog_name,
+            sample_method=sample_method,
+            sample_size=sample_size,
+            columns=columns,
+            where_condition=where_condition,
+            cache_ttl=cache_ttl
+        )

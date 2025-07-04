@@ -1631,6 +1631,87 @@ class MetadataExtractor:
             logger.error(f"Failed to get catalog list: {str(e)}", exc_info=True)
             return self._format_response(success=False, error=str(e), message="Error occurred while getting catalog list")
 
+    async def get_table_sample_data_for_mcp(
+        self,
+        table_name: str,
+        db_name: str = None,
+        catalog_name: str = None,
+        sample_method: str = "SYSTEM",
+        sample_size: float = None,
+        columns: str = None,
+        where_condition: str = None,
+        cache_ttl: int = 300
+    ) -> Dict[str, Any]:
+        """Get sample data from specified table - MCP interface"""
+        logger.info(f"Getting table sample data: Table: {table_name}, DB: {db_name}, Catalog: {catalog_name}, "
+                   f"Method: {sample_method}, Size: {sample_size}, Columns: {columns}, Where: {where_condition}")
+        
+        if not table_name:
+            return self._format_response(success=False, error="Missing table_name parameter")
+        
+        if not sample_size:
+            return self._format_response(success=False, error="Missing sample_size parameter")
+        
+        try:
+            # Build base query
+            effective_db = db_name or self.db_name
+            effective_catalog = catalog_name or self.catalog_name
+            
+            # Handle columns selection
+            columns_clause = columns if columns else "*"
+            
+            # Handle where condition
+            where_clause = f"WHERE {where_condition}" if where_condition else ""
+            
+            # Build sampling clause based on method
+            if sample_method.upper() == "SYSTEM":
+                sample_clause = f"TABLESAMPLE SYSTEM({sample_size})"
+            elif sample_method.upper() == "BERNOULLI":
+                sample_clause = f"TABLESAMPLE BERNOULLI({sample_size})"
+            elif sample_method.upper() == "RANDOM":
+                sample_clause = f"ORDER BY RAND() LIMIT {int(sample_size)}"
+            else:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid sample method: {sample_method}",
+                    message="Supported methods: SYSTEM, BERNOULLI, RANDOM"
+                )
+            
+            # Build full query
+            if effective_catalog and effective_catalog != "internal":
+                query = f"SELECT {columns_clause} FROM `{effective_catalog}`.`{effective_db}`.`{table_name}` {sample_clause} {where_clause}"
+            else:
+                query = f"SELECT {columns_clause} FROM `{effective_db}`.`{table_name}` {sample_clause} {where_clause}"
+            
+            logger.info(f"Executing sample query: {query}")
+            
+            # Execute query with caching
+            cache_key = f"sample_data_{effective_catalog or 'default'}_{effective_db}_{table_name}_{sample_method}_{sample_size}_{columns or 'all'}_{where_condition or 'none'}"
+            
+            if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < cache_ttl:
+                logger.info("Returning cached sample data")
+                return self._format_response(success=True, result=self.metadata_cache[cache_key])
+            
+            # Execute query
+            result = await self._execute_query_async(query, effective_db)
+            
+            if not result:
+                return self._format_response(
+                    success=False,
+                    error="No data returned",
+                    message=f"No sample data found for table {effective_catalog or 'default'}.{effective_db}.{table_name}"
+                )
+            
+            # Update cache
+            self.metadata_cache[cache_key] = result
+            self.metadata_cache_time[cache_key] = datetime.now()
+            
+            return self._format_response(success=True, result=result)
+            
+        except Exception as e:
+            logger.error(f"Failed to get table sample data: {str(e)}", exc_info=True)
+            return self._format_response(success=False, error=str(e), message="Error occurred while getting table sample data")
+
 
 # ==================== Compatibility aliases ====================
 

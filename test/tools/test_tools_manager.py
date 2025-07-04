@@ -311,3 +311,97 @@ class TestDorisToolsManager:
             assert not result_data["success"]
             assert "error" in result_data
             assert "not found" in result_data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_table_sample_data_system(self, tools_manager):
+        """Test table_sample_data with SYSTEM sampling"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_sample_data_for_mcp') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": [
+                    {"id": 1, "name": "Sample 1"},
+                    {"id": 2, "name": "Sample 2"}
+                ]
+            }
+            
+            arguments = {
+                "table_name": "users",
+                "sample_method": "SYSTEM",
+                "sample_size": 10
+            }
+            result = await tools_manager.call_tool("table_sample_data", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert len(result_data["result"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_table_sample_data_bernoulli(self, tools_manager):
+        """Test table_sample_data with BERNOULLI sampling"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_sample_data_for_mcp') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": [
+                    {"id": 3, "name": "Sample 3"}
+                ]
+            }
+            
+            arguments = {
+                "table_name": "users",
+                "sample_method": "BERNOULLI",
+                "sample_size": 5
+            }
+            result = await tools_manager.call_tool("table_sample_data", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert len(result_data["result"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_table_sample_data_random(self, tools_manager):
+        """Test table_sample_data with RANDOM sampling"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_sample_data_for_mcp') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": [
+                    {"id": 4, "name": "Sample 4"},
+                    {"id": 5, "name": "Sample 5"},
+                    {"id": 6, "name": "Sample 6"}
+                ]
+            }
+            
+            arguments = {
+                "table_name": "users",
+                "sample_method": "RANDOM",
+                "sample_size": 3
+            }
+            result = await tools_manager.call_tool("table_sample_data", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert len(result_data["result"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_table_sample_data_with_columns(self, tools_manager):
+        """Test table_sample_data with column selection"""
+        with patch.object(tools_manager.metadata_extractor, 'get_table_sample_data_for_mcp') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": [
+                    {"id": 1},
+                    {"id": 2}
+                ]
+            }
+            
+            arguments = {
+                "table_name": "users",
+                "sample_method": "SYSTEM",
+                "sample_size": 10,
+                "columns": "id"
+            }
+            result = await tools_manager.call_tool("table_sample_data", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert len(result_data["result"]) == 2
+            assert "name" not in result_data["result"][0]
