@@ -1554,8 +1554,8 @@ class MetadataExtractor:
 
     async def get_table_partition_info_for_mcp(
         self,
-        table_name: str,
         database_name: str = None,
+        table_name: str = None,
         db_name: str = None  # For backward compatibility
     ) -> Dict[str, Any]:
         """Get partition information for specified table - MCP interface"""
