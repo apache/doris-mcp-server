@@ -1024,8 +1024,9 @@ class DorisToolsManager:
                     "timestamp": datetime.now().isoformat(),
                 }
             
-            return json.dumps(result, ensure_ascii=False, indent=2)
-            
+            # Serialize datetime objects before JSON conversion
+            serialized_result = self._serialize_datetime_objects(result)
+            return json.dumps(serialized_result, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"Tool call failed {name}: {str(e)}")
             error_result = {
@@ -1035,6 +1036,19 @@ class DorisToolsManager:
                 "timestamp": datetime.now().isoformat(),
             }
             return json.dumps(error_result, ensure_ascii=False, indent=2)
+
+    def _serialize_datetime_objects(self, data):
+        """Serialize datetime objects to JSON compatible format"""
+        if isinstance(data, list):
+            return [self._serialize_datetime_objects(item) for item in data]
+        elif isinstance(data, dict):
+            return {key: self._serialize_datetime_objects(value) for key, value in data.items()}
+        elif hasattr(data, 'isoformat'):  # datetime, date, time objects
+            return data.isoformat()
+        elif hasattr(data, 'strftime'):  # pandas Timestamp objects
+            return data.strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            return data
     
     
     async def _exec_query_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
