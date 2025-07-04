@@ -1075,9 +1075,9 @@ class MetadataExtractor:
     
     
     
-    def get_table_partition_info(self, db_name: str, table_name: str) -> Dict[str, Any]:
+    async def get_table_partition_info_async(self, db_name: str, table_name: str) -> Dict[str, Any]:
         """
-        Get partition information for a table
+        Get partition information for a table (async version)
         
         Args:
             db_name: Database name
@@ -1101,7 +1101,7 @@ class MetadataExtractor:
                 AND TABLE_NAME = '{table_name}'
             """
             
-            partitions = self._execute_query(query)
+            partitions = await self._execute_query_async(query)
             
             if not partitions:
                 return {}
@@ -1123,6 +1123,18 @@ class MetadataExtractor:
         except Exception as e:
             logger.error(f"Error getting partition information for table {db_name}.{table_name}: {str(e)}")
             return {}
+
+    def get_table_partition_info(self, db_name: str, table_name: str) -> Dict[str, Any]:
+        """
+        Get partition information for a table (sync version)
+        """
+        import asyncio
+        try:
+            return asyncio.run(self.get_table_partition_info_async(db_name, table_name))
+        except RuntimeError:
+            # If there's already a running event loop
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(self.get_table_partition_info_async(db_name, table_name))
 
     def _execute_query_with_catalog(self, query: str, db_name: str = None, catalog_name: str = None):
         """
@@ -1550,6 +1562,24 @@ class MetadataExtractor:
         except Exception as e:
             logger.error(f"Failed to get table indexes: {str(e)}", exc_info=True)
             return self._format_response(success=False, error=str(e), message="Error occurred while getting table indexes")
+
+    async def get_table_partition_info_for_mcp(
+        self,
+        db_name: str,
+        table_name: str
+    ) -> Dict[str, Any]:
+        """Get partition information for specified table - MCP interface"""
+        logger.info(f"Getting table partition info: Table: {table_name}, DB: {db_name}")
+        
+        if not table_name:
+            return self._format_response(success=False, error="Missing table_name parameter")
+        
+        try:
+            partition_info = await self.get_table_partition_info_async(db_name=db_name, table_name=table_name)
+            return self._format_response(success=True, result=partition_info)
+        except Exception as e:
+            logger.error(f"Failed to get table partition info: {str(e)}", exc_info=True)
+            return self._format_response(success=False, error=str(e), message="Error occurred while getting table partition info")
 
     def _serialize_datetime_objects(self, data):
         """Serialize datetime objects to JSON compatible format"""
