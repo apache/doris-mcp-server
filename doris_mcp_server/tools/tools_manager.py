@@ -1140,7 +1140,7 @@ class DorisToolsManager:
         
         # Delegate to metadata extractor for processing
         result = await self.metadata_extractor.get_table_partition_info_for_mcp(
-            table_name, db_name
+            db_name, table_name
         )
         
         return result
