@@ -502,10 +502,10 @@ class DorisToolsManager:
                 "catalog_name": catalog_name
             })
 
-            # Table sample data tool
-            @mcp.tool(
-                "table_sample_data",
-                description="""[Function Description]: Sample data from specified table with various sampling methods.
+        # Table sample data tool
+        @mcp.tool(
+            "table_sample_data",
+            description="""[Function Description]: Sample data from specified table with various sampling methods.
 
 [Parameter Content]:
 
@@ -518,30 +518,60 @@ class DorisToolsManager:
 - where_condition (string) [Optional] - Filter condition before sampling
 - cache_ttl (integer) [Optional] - Result cache TTL in seconds, default 300
 """,
-            )
-            async def table_sample_data_tool(
-                table_name: str,
-                sample_size: float,
-                db_name: str = None,
-                catalog_name: str = None,
-                sample_method: str = "SYSTEM",
-                columns: str = None,
-                where_condition: str = None,
-                cache_ttl: int = 300
-            ) -> str:
-                """Table data sampling tool"""
-                return await self.call_tool("table_sample_data", {
-                    "table_name": table_name,
-                    "db_name": db_name,
-                    "catalog_name": catalog_name,
-                    "sample_method": sample_method,
-                    "sample_size": sample_size,
-                    "columns": columns,
-                    "where_condition": where_condition,
-                    "cache_ttl": cache_ttl
-                })
+        )
+        async def table_sample_data_tool(
+            table_name: str,
+            sample_size: float,
+            db_name: str = None,
+            catalog_name: str = None,
+            sample_method: str = "SYSTEM",
+            columns: str = None,
+            where_condition: str = None,
+            cache_ttl: int = 300
+        ) -> str:
+            """Table data sampling tool"""
+            return await self.call_tool("table_sample_data", {
+                "table_name": table_name,
+                "db_name": db_name,
+                "catalog_name": catalog_name,
+                "sample_method": sample_method,
+                "sample_size": sample_size,
+                "columns": columns,
+                "where_condition": where_condition,
+                "cache_ttl": cache_ttl
+            })
 
-            logger.info("Successfully registered 18 tools to MCP server")
+        # Data lineage analysis tool
+        @mcp.tool(
+            "analyze_data_lineage",
+            description="""[Function Description]: Analyze data lineage relationships between tables.
+
+[Parameter Content]:
+
+- table_name (string) [Optional] - Target table name (if not provided analyzes all tables)
+- db_name (string) [Optional] - Target database name, defaults to current database
+- catalog_name (string) [Optional] - Target catalog name for federation queries
+- depth (integer) [Optional] - Analysis depth (default 1)
+- direction (string) [Optional] - Analysis direction - "upstream", "downstream" or "both" (default)
+""",
+        )
+        async def analyze_data_lineage_tool(
+            table_name: str = None,
+            db_name: str = None,
+            catalog_name: str = None,
+            depth: int = 1,
+            direction: str = "both"
+        ) -> str:
+            """Data lineage analysis tool"""
+            return await self.call_tool("analyze_data_lineage", {
+                "table_name": table_name,
+                "db_name": db_name,
+                "catalog_name": catalog_name,
+                "depth": depth,
+                "direction": direction
+            })
+
+            logger.info("Successfully registered 19 tools to MCP server")
 
     async def list_tools(self) -> List[Tool]:
         """List all available query tools (for stdio mode)"""
@@ -963,6 +993,29 @@ class DorisToolsManager:
                     "required": ["table_name", "sample_size"],
                 },
             ),
+            Tool(
+                name="analyze_data_lineage",
+                description="""[Function Description]: Analyze data lineage relationships between tables.
+
+[Parameter Content]:
+
+- table_name (string) [Optional] - Target table name (if not provided analyzes all tables)
+- db_name (string) [Optional] - Target database name, defaults to current database
+- catalog_name (string) [Optional] - Target catalog name for federation queries
+- depth (integer) [Optional] - Analysis depth (default 1)
+- direction (string) [Optional] - Analysis direction - "upstream", "downstream" or "both" (default)
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Table name to analyze"},
+                        "db_name": {"type": "string", "description": "Database name"},
+                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "depth": {"type": "integer", "description": "Analysis depth", "default": 1},
+                        "direction": {"type": "string", "enum": ["upstream", "downstream", "both"], "description": "Analysis direction", "default": "both"}
+                    }
+                },
+            ),
         ]
         
         return tools
@@ -1011,6 +1064,8 @@ class DorisToolsManager:
                 result = await self._get_table_partition_info_tool(arguments)
             elif name == "table_sample_data":
                 result = await self._table_sample_data_tool(arguments)
+            elif name == "analyze_data_lineage":
+                result = await self._analyze_data_lineage_tool(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
             
@@ -1229,6 +1284,23 @@ class DorisToolsManager:
         )
         
         return result
+
+    async def _analyze_data_lineage_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Data lineage analysis tool routing"""
+        table_name = arguments.get("table_name")
+        db_name = arguments.get("db_name")
+        catalog_name = arguments.get("catalog_name")
+        depth = arguments.get("depth", 1)
+        direction = arguments.get("direction", "both")
+        
+        # Delegate to metadata extractor for processing
+        return await self.metadata_extractor.analyze_data_lineage(
+            table_name=table_name,
+            db_name=db_name,
+            catalog_name=catalog_name,
+            depth=depth,
+            direction=direction
+        )
 
     async def _table_sample_data_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Table sample data tool routing"""

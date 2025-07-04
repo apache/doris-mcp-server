@@ -405,3 +405,136 @@ class TestDorisToolsManager:
             assert result_data["success"]
             assert len(result_data["result"]) == 2
             assert "name" not in result_data["result"][0]
+
+    @pytest.mark.asyncio
+    async def test_analyze_data_lineage_basic(self, tools_manager):
+        """Test basic data lineage analysis"""
+        with patch.object(tools_manager.metadata_extractor, 'analyze_data_lineage') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": {
+                    "table": "orders",
+                    "database": "test_db",
+                    "upstream": [
+                        {
+                            "type": "foreign_key",
+                            "source_table": "customers",
+                            "source_column": "id",
+                            "target_table": "orders",
+                            "target_column": "customer_id",
+                            "confidence": "medium"
+                        }
+                    ],
+                    "downstream": []
+                }
+            }
+            
+            arguments = {
+                "table_name": "orders"
+            }
+            result = await tools_manager.call_tool("analyze_data_lineage", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert result_data["result"]["table"] == "orders"
+            assert len(result_data["result"]["upstream"]) == 1
+            assert result_data["result"]["upstream"][0]["source_table"] == "customers"
+
+    @pytest.mark.asyncio
+    async def test_analyze_data_lineage_with_params(self, tools_manager):
+        """Test data lineage analysis with parameters"""
+        with patch.object(tools_manager.metadata_extractor, 'analyze_data_lineage') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": {
+                    "table": "orders",
+                    "database": "test_db",
+                    "upstream": [],
+                    "downstream": [
+                        {
+                            "type": "sql_dependency",
+                            "source_table": "orders",
+                            "target_table": "order_items",
+                            "sql": "SELECT * FROM order_items WHERE order_id IN (SELECT id FROM orders)",
+                            "confidence": "low"
+                        }
+                    ]
+                }
+            }
+            
+            arguments = {
+                "table_name": "orders",
+                "depth": 2,
+                "direction": "downstream"
+            }
+            result = await tools_manager.call_tool("analyze_data_lineage", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert len(result_data["result"]["downstream"]) == 1
+            assert result_data["result"]["downstream"][0]["target_table"] == "order_items"
+
+    @pytest.mark.asyncio
+    async def test_analyze_data_lineage_error(self, tools_manager):
+        """Test data lineage analysis with error"""
+        with patch.object(tools_manager.metadata_extractor, 'analyze_data_lineage') as mock_execute:
+            mock_execute.side_effect = Exception("Table not found")
+            
+            arguments = {
+                "table_name": "nonexistent_table"
+            }
+            result = await tools_manager.call_tool("analyze_data_lineage", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert not result_data["success"]
+            assert "error" in result_data
+            assert "not found" in result_data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_analyze_data_lineage_all_tables(self, tools_manager):
+        """Test data lineage analysis for all tables"""
+        with patch.object(tools_manager.metadata_extractor, 'analyze_data_lineage') as mock_execute:
+            mock_execute.return_value = {
+                "success": True,
+                "result": {
+                    "customers": {
+                        "upstream": [],
+                        "downstream": [
+                            {
+                                "type": "foreign_key",
+                                "source_table": "customers",
+                                "target_table": "orders",
+                                "source_column": "id",
+                                "target_column": "customer_id",
+                                "confidence": "medium"
+                            }
+                        ]
+                    },
+                    "orders": {
+                        "upstream": [
+                            {
+                                "type": "foreign_key",
+                                "source_table": "customers",
+                                "target_table": "orders",
+                                "source_column": "id",
+                                "target_column": "customer_id",
+                                "confidence": "medium"
+                            }
+                        ],
+                        "downstream": []
+                    }
+                }
+            }
+            
+            arguments = {
+                "depth": 1,
+                "direction": "both"
+            }
+            result = await tools_manager.call_tool("analyze_data_lineage", arguments)
+            result_data = json.loads(result) if isinstance(result, str) else result
+            
+            assert result_data["success"]
+            assert "customers" in result_data["result"]
+            assert "orders" in result_data["result"]
+            assert len(result_data["result"]["customers"]["downstream"]) == 1
+            assert len(result_data["result"]["orders"]["upstream"]) == 1

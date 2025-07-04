@@ -1631,6 +1631,177 @@ class MetadataExtractor:
             logger.error(f"Failed to get catalog list: {str(e)}", exc_info=True)
             return self._format_response(success=False, error=str(e), message="Error occurred while getting catalog list")
 
+    async def analyze_data_lineage(
+        self,
+        table_name: str = None,
+        db_name: str = None,
+        catalog_name: str = None,
+        depth: int = 1,
+        direction: str = "both"
+    ) -> Dict[str, Any]:
+        """
+        Analyze data lineage relationships for specified table
+        
+        Args:
+            table_name: Target table name (optional, if not provided analyzes all tables)
+            db_name: Database name (optional)
+            catalog_name: Catalog name (optional)
+            depth: Analysis depth (default 1)
+            direction: Analysis direction - "upstream", "downstream" or "both" (default)
+            
+        Returns:
+            Dict containing lineage relationships
+        """
+        try:
+            effective_db = db_name or self.db_name
+            effective_catalog = catalog_name or self.catalog_name
+            
+            # Get all tables if no specific table provided
+            if not table_name:
+                tables = await self.get_database_tables_async(db_name=effective_db, catalog_name=effective_catalog)
+                result = {}
+                for tbl in tables:
+                    lineage = await self._analyze_table_lineage(tbl, effective_db, effective_catalog, depth, direction)
+                    if lineage:
+                        result[tbl] = lineage
+                return self._format_response(success=True, result=result)
+            else:
+                lineage = await self._analyze_table_lineage(table_name, effective_db, effective_catalog, depth, direction)
+                return self._format_response(success=True, result=lineage)
+                
+        except Exception as e:
+            logger.error(f"Failed to analyze data lineage: {str(e)}", exc_info=True)
+            return self._format_response(success=False, error=str(e))
+            
+    async def _analyze_table_lineage(
+        self,
+        table_name: str,
+        db_name: str,
+        catalog_name: str,
+        depth: int,
+        direction: str
+    ) -> Dict[str, Any]:
+        """
+        Analyze lineage for a single table
+        """
+        lineage = {
+            "table": table_name,
+            "database": db_name,
+            "catalog": catalog_name,
+            "upstream": [],
+            "downstream": []
+        }
+        
+        # Get foreign key relationships
+        fk_relations = await self._get_foreign_key_relations(table_name, db_name, catalog_name)
+        lineage["upstream"].extend(fk_relations)
+        
+        # Get SQL dependencies from audit logs
+        sql_deps = await self._get_sql_dependencies(table_name, db_name, catalog_name, depth)
+        if direction in ["both", "upstream"]:
+            lineage["upstream"].extend(sql_deps.get("upstream", []))
+        if direction in ["both", "downstream"]:
+            lineage["downstream"].extend(sql_deps.get("downstream", []))
+            
+        return lineage
+        
+    async def _get_foreign_key_relations(
+        self,
+        table_name: str,
+        db_name: str,
+        catalog_name: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get foreign key relationships for a table
+        """
+        try:
+            # Get table schema to find potential foreign keys
+            schema = await self.get_table_schema_async(table_name, db_name, catalog_name)
+            if not schema:
+                return []
+                
+            relations = []
+            
+            # Check for columns ending with _id (common foreign key pattern)
+            for col in schema:
+                col_name = col.get("column_name", "")
+                if col_name.endswith("_id"):
+                    ref_table = col_name[:-3]  # Remove _id suffix
+                    
+                    # Check if referenced table exists
+                    ref_schema = await self.get_table_schema_async(ref_table, db_name, catalog_name)
+                    if ref_schema:
+                        relations.append({
+                            "type": "foreign_key",
+                            "source_table": ref_table,
+                            "source_column": "id",
+                            "target_table": table_name,
+                            "target_column": col_name,
+                            "confidence": "medium"
+                        })
+            
+            return relations
+            
+        except Exception as e:
+            logger.error(f"Error getting foreign key relations: {str(e)}")
+            return []
+            
+    async def _get_sql_dependencies(
+        self,
+        table_name: str,
+        db_name: str,
+        catalog_name: str,
+        depth: int
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get SQL dependencies from audit logs
+        """
+        try:
+            # Get recent SQL queries involving this table
+            logs = await self.get_recent_audit_logs_for_mcp(days=7, limit=100)
+            if not logs.get("success"):
+                return {"upstream": [], "downstream": []}
+                
+            dependencies = {"upstream": [], "downstream": []}
+            
+            for log in logs.get("result", []):
+                sql = log.get("stmt", "")
+                if not sql or table_name.lower() not in sql.lower():
+                    continue
+                    
+                # Parse SQL to find dependencies
+                tables = self._extract_tables_from_sql(sql)
+                if table_name in tables:
+                    # This table is referenced in the SQL
+                    if "insert" in sql.lower() or "update" in sql.lower():
+                        # Upstream dependencies (tables this table depends on)
+                        for tbl in tables:
+                            if tbl != table_name:
+                                dependencies["upstream"].append({
+                                    "type": "sql_dependency",
+                                    "source_table": tbl,
+                                    "target_table": table_name,
+                                    "sql": sql[:200] + "..." if len(sql) > 200 else sql,
+                                    "confidence": "low"
+                                })
+                    elif "select" in sql.lower():
+                        # Downstream dependencies (tables depending on this table)
+                        for tbl in tables:
+                            if tbl != table_name:
+                                dependencies["downstream"].append({
+                                    "type": "sql_dependency",
+                                    "source_table": table_name,
+                                    "target_table": tbl,
+                                    "sql": sql[:200] + "..." if len(sql) > 200 else sql,
+                                    "confidence": "low"
+                                })
+            
+            return dependencies
+            
+        except Exception as e:
+            logger.error(f"Error getting SQL dependencies: {str(e)}")
+            return {"upstream": [], "downstream": []}
+
     async def get_table_sample_data_for_mcp(
         self,
         table_name: str,
