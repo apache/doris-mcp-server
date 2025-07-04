@@ -1554,17 +1554,26 @@ class MetadataExtractor:
 
     async def get_table_partition_info_for_mcp(
         self,
-        db_name: str,
-        table_name: str
+        table_name: str,
+        database_name: str = None,
+        db_name: str = None  # For backward compatibility
     ) -> Dict[str, Any]:
         """Get partition information for specified table - MCP interface"""
-        logger.info(f"Getting table partition info: Table: {table_name}, DB: {db_name}")
+        effective_db = database_name or db_name or self.db_name
+        logger.info(f"Getting table partition info: Table: {table_name}, DB: {effective_db}")
         
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
         
+        if not effective_db:
+            return self._format_response(
+                success=False, 
+                error="Database name not specified",
+                message="Please specify database name or set default database"
+            )
+        
         try:
-            partition_info = await self.get_table_partition_info_async(db_name=db_name, table_name=table_name)
+            partition_info = await self.get_table_partition_info_async(db_name=effective_db, table_name=table_name)
             return self._format_response(success=True, result=partition_info)
         except Exception as e:
             logger.error(f"Failed to get table partition info: {str(e)}", exc_info=True)
