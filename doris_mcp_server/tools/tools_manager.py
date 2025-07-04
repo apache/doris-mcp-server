@@ -1139,6 +1139,8 @@ class DorisToolsManager:
         catalog_name = arguments.get("catalog_name")
         
         # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_table_partition_info_for_mcp(
+        result = await self.metadata_extractor.get_table_partition_info_for_mcp(
             db_name, table_name
         )
+        
+        return result
