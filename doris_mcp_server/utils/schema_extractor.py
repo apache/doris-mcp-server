@@ -1077,7 +1077,7 @@ class MetadataExtractor:
     
     async def get_table_partition_info_async(self, db_name: str, table_name: str) -> Dict[str, Any]:
         """
-        Get partition information for a table (async version)
+        Get partition information for a table (async version) using SHOW PARTITION syntax
         
         Args:
             db_name: Database name
@@ -1087,19 +1087,8 @@ class MetadataExtractor:
             Dict: Partition information
         """
         try:
-            # Get partition information
-            query = f"""
-            SELECT 
-                PARTITION_NAME,
-                PARTITION_EXPRESSION,
-                PARTITION_DESCRIPTION,
-                TABLE_ROWS
-            FROM 
-                information_schema.partitions
-            WHERE 
-                TABLE_SCHEMA = '{db_name}'
-                AND TABLE_NAME = '{table_name}'
-            """
+            # Get partition information using SHOW PARTITION syntax
+            query = f"SHOW PARTITIONS FROM `{db_name}`.`{table_name}`"
             
             partitions = await self._execute_query_async(query)
             
@@ -1113,10 +1102,10 @@ class MetadataExtractor:
             
             for part in partitions:
                 partition_info["partitions"].append({
-                    "name": part.get("PARTITION_NAME", ""),
-                    "expression": part.get("PARTITION_EXPRESSION", ""),
-                    "description": part.get("PARTITION_DESCRIPTION", ""),
-                    "rows": part.get("TABLE_ROWS", 0)
+                    "name": part.get("PartitionName", ""),
+                    "expression": part.get("PartitionExpr", ""),
+                    "description": part.get("PartitionDesc", ""),
+                    "rows": part.get("PartitionRows", 0)
                 })
                 
             return partition_info
