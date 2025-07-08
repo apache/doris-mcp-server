@@ -1215,33 +1215,39 @@ class MetadataExtractor:
         try:
             if self.connection_manager:
                 import asyncio
+                import concurrent.futures
+                import threading
                 
-                # Try to run the async query
-                try:
-                    # Check if there's a running event loop
-                    loop = asyncio.get_running_loop()
-                    # If we're in an async context, we need to run in a separate thread
-                    import concurrent.futures
-                    
-                    def run_in_new_loop():
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
+                # Always run in a separate thread with new event loop to avoid conflicts
+                def run_in_new_loop():
+                    # Create new event loop for this thread
+                    new_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(new_loop)
+                    try:
+                        return new_loop.run_until_complete(
+                            self._execute_query_async(query, db_name, return_dataframe)
+                        )
+                    finally:
                         try:
-                            return new_loop.run_until_complete(
-                                self._execute_query_async(query, db_name, return_dataframe)
-                            )
+                            # Properly close the loop
+                            pending = asyncio.all_tasks(new_loop)
+                            if pending:
+                                new_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                         finally:
                             new_loop.close()
-                    
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(run_in_new_loop)
+                
+                # Use ThreadPoolExecutor to run in separate thread
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(run_in_new_loop)
+                    try:
                         return future.result(timeout=30)
-                        
-                except RuntimeError:
-                    # No running loop, we can safely create one
-                    return asyncio.run(
-                        self._execute_query_async(query, db_name, return_dataframe)
-                    )
+                    except concurrent.futures.TimeoutError:
+                        logger.error("Query execution timed out after 30 seconds")
+                        if return_dataframe:
+                            import pandas as pd
+                            return pd.DataFrame()
+                        else:
+                            return []
             else:
                 # Fallback: Return empty result
                 logger.warning("No connection manager provided, returning empty result")
