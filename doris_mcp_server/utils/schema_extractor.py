@@ -1807,7 +1807,7 @@ class MetadataExtractor:
         table_name: str,
         db_name: str = None,
         catalog_name: str = None,
-        sample_method: str = "SYSTEM",
+        sample_method: str = "RANDOM",
         sample_size: float = None,
         columns: str = None,
         where_condition: str = None,
@@ -1835,17 +1835,13 @@ class MetadataExtractor:
             where_clause = f"WHERE {where_condition}" if where_condition else ""
             
             # Build sampling clause based on method
-            if sample_method.upper() == "SYSTEM":
-                sample_clause = f"TABLESAMPLE SYSTEM({sample_size})"
-            elif sample_method.upper() == "BERNOULLI":
-                sample_clause = f"TABLESAMPLE BERNOULLI({sample_size})"
-            elif sample_method.upper() == "RANDOM":
+            if sample_method.upper() == "RANDOM":
                 sample_clause = f"ORDER BY RAND() LIMIT {int(sample_size)}"
             else:
                 return self._format_response(
                     success=False,
                     error=f"Invalid sample method: {sample_method}",
-                    message="Supported methods: SYSTEM, BERNOULLI, RANDOM"
+                    message="Supported methods: RANDOM"
                 )
             
             # Build full query

@@ -512,8 +512,8 @@ class DorisToolsManager:
 - table_name (string) [Required] - Name of the table to sample
 - db_name (string) [Optional] - Target database name, defaults to current database
 - catalog_name (string) [Optional] - Target catalog name for federation queries
-- sample_method (string) [Optional] - Sampling method (SYSTEM|BERNOULLI|RANDOM), default SYSTEM
-- sample_size (number) [Required] - Sample size or ratio (e.g. 100 or 0.1 for 10%)
+- sample_method (string) [Optional] - Sampling method (RANDOM), default RANDOM
+- sample_size (number) [Required] - Sample size or ratio (e.g. 100)
 - columns (string) [Optional] - Columns to return, comma separated
 - where_condition (string) [Optional] - Filter condition before sampling
 - cache_ttl (integer) [Optional] - Result cache TTL in seconds, default 300
@@ -972,8 +972,8 @@ class DorisToolsManager:
 - table_name (string) [Required] - Name of the table to sample
 - db_name (string) [Optional] - Target database name, defaults to current database
 - catalog_name (string) [Optional] - Target catalog name for federation queries
-- sample_method (string) [Optional] - Sampling method (SYSTEM|BERNOULLI|RANDOM), default SYSTEM
-- sample_size (number) [Required] - Sample size or ratio (e.g. 100 or 0.1 for 10%)
+- sample_method (string) [Optional] - Sampling method (RANDOM), default RANDOM
+- sample_size (number) [Required] - Sample size or ratio (e.g. 100 )
 - columns (string) [Optional] - Columns to return, comma separated
 - where_condition (string) [Optional] - Filter condition before sampling
 - cache_ttl (integer) [Optional] - Result cache TTL in seconds, default 300
