@@ -524,7 +524,7 @@ class DorisToolsManager:
             sample_size: float,
             db_name: str = None,
             catalog_name: str = None,
-            sample_method: str = "SYSTEM",
+            sample_method: str = "RANDOM",
             columns: str = None,
             where_condition: str = None,
             cache_ttl: int = 300
@@ -984,7 +984,7 @@ class DorisToolsManager:
                         "table_name": {"type": "string", "description": "Table name to sample"},
                         "db_name": {"type": "string", "description": "Database name"},
                         "catalog_name": {"type": "string", "description": "Catalog name"},
-                        "sample_method": {"type": "string", "enum": ["SYSTEM", "BERNOULLI", "RANDOM"], "default": "SYSTEM"},
+                        "sample_method": {"type": "string", "enum": [ "RANDOM"], "default": "RANDOM"},
                         "sample_size": {"type": "number", "description": "Sample size or ratio"},
                         "columns": {"type": "string", "description": "Columns to return, comma separated"},
                         "where_condition": {"type": "string", "description": "Filter condition before sampling"},
