@@ -1093,7 +1093,7 @@ class DorisToolsManager:
             return json.dumps(error_result, ensure_ascii=False, indent=2)
 
     def _serialize_datetime_objects(self, data):
-        """Serialize datetime objects to JSON compatible format"""
+        """Serialize datetime objects and Decimal numbers to JSON compatible format"""
         if isinstance(data, list):
             return [self._serialize_datetime_objects(item) for item in data]
         elif isinstance(data, dict):
@@ -1102,6 +1102,8 @@ class DorisToolsManager:
             return data.isoformat()
         elif hasattr(data, 'strftime'):  # pandas Timestamp objects
             return data.strftime('%Y-%m-%d %H:%M:%S')
+        elif hasattr(data, 'as_tuple'):  # Decimal objects
+            return float(data)
         else:
             return data
     
