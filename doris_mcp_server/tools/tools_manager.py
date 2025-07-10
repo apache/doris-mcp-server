@@ -31,6 +31,12 @@ from ..utils.query_executor import DorisQueryExecutor
 from ..utils.analysis_tools import TableAnalyzer, SQLAnalyzer, MemoryTracker
 from ..utils.monitoring_tools import DorisMonitoringTools
 from ..utils.schema_extractor import MetadataExtractor
+from ..utils.data_governance_tools import DataGovernanceTools
+from ..utils.data_exploration_tools import DataExplorationTools
+from ..utils.data_quality_tools import DataQualityTools
+from ..utils.security_analytics_tools import SecurityAnalyticsTools
+from ..utils.dependency_analysis_tools import DependencyAnalysisTools
+from ..utils.performance_analytics_tools import PerformanceAnalyticsTools
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,7 +57,15 @@ class DorisToolsManager:
         self.monitoring_tools = DorisMonitoringTools(connection_manager)
         self.memory_tracker = MemoryTracker(connection_manager)
         
-        logger.info("DorisToolsManager initialized with business logic processors")
+        # Initialize v0.5.0 advanced analytics tools
+        self.data_governance_tools = DataGovernanceTools(connection_manager)
+        self.data_exploration_tools = DataExplorationTools(connection_manager)
+        self.data_quality_tools = DataQualityTools(connection_manager)
+        self.security_analytics_tools = SecurityAnalyticsTools(connection_manager)
+        self.dependency_analysis_tools = DependencyAnalysisTools(connection_manager)
+        self.performance_analytics_tools = PerformanceAnalyticsTools(connection_manager)
+        
+        logger.info("DorisToolsManager initialized with business logic processors and v0.5.0 analytics tools")
     
     async def register_tools_with_mcp(self, mcp):
         """Register all tools to MCP server"""
@@ -348,53 +362,22 @@ class DorisToolsManager:
                 "single_replica": single_replica
             })
 
-        # Monitoring metrics definition tool
+        # Unified Monitoring Metrics Tool (combines definitions and data)
         @mcp.tool(
-            "get_monitoring_metrics_info",
-            description="""[Function Description]: Get Doris monitoring metrics definitions and descriptions without executing queries.
+            "get_monitoring_metrics",
+            description="""[Function Description]: Get comprehensive Doris monitoring metrics including definitions and/or actual data from FE and BE nodes.
 
 [Parameter Content]:
 
-- role (string) [Optional] - Node role to get metric definitions for, default is "all"
-  * "fe": Only FE metrics definitions
-  * "be": Only BE metrics definitions  
-  * "all": Both FE and BE metrics definitions
-
-- monitor_type (string) [Optional] - Type of monitoring metrics, default is "all"
-  * "process": Process monitoring metrics
-  * "jvm": JVM monitoring metrics (FE only)
-  * "machine": Machine monitoring metrics
-  * "all": All monitoring types
-
-- priority (string) [Optional] - Metric priority level, default is "core"
-  * "core": Only core essential metrics (10-12 items for production use)
-  * "p0": Only P0 (highest priority) metrics definitions
-  * "all": All metrics definitions (P0 and non-P0)
-""",
-        )
-        async def get_monitoring_metrics_info_tool(
-            role: str = "all",
-            monitor_type: str = "all",
-            priority: str = "core"
-        ) -> str:
-            """Get Doris monitoring metrics definitions"""
-            return await self.call_tool("get_monitoring_metrics_info", {
-                "role": role,
-                "monitor_type": monitor_type,
-                "priority": priority
-            })
-
-        # Monitoring metrics data tool
-        @mcp.tool(
-            "get_monitoring_metrics_data",
-            description="""[Function Description]: Get actual Doris monitoring metrics data from FE and BE nodes via HTTP API.
-
-[Parameter Content]:
+- content_type (string) [Optional] - Type of monitoring content to retrieve, default is "data"
+  * "definitions": Only metric definitions and descriptions
+  * "data": Only actual metric data from nodes
+  * "both": Both definitions and data
 
 - role (string) [Optional] - Node role to monitor, default is "all"
-  * "fe": Only FE nodes
-  * "be": Only BE nodes  
-  * "all": Both FE and BE nodes
+  * "fe": Only FE nodes/metrics
+  * "be": Only BE nodes/metrics
+  * "all": Both FE and BE nodes/metrics
 
 - monitor_type (string) [Optional] - Type of monitoring metrics, default is "all"
   * "process": Process monitoring metrics
@@ -407,31 +390,38 @@ class DorisToolsManager:
   * "p0": Only P0 (highest priority) metrics
   * "all": All metrics (P0 and non-P0)
 
-- include_raw_metrics (boolean) [Optional] - Whether to include raw detailed metrics data (can be very large)
+- include_raw_metrics (boolean) [Optional] - Whether to include raw detailed metrics data (can be very large), default is false
 """,
         )
-        async def get_monitoring_metrics_data_tool(
+        async def get_monitoring_metrics_tool(
+            content_type: str = "data",
             role: str = "all",
             monitor_type: str = "all",
             priority: str = "core",
             include_raw_metrics: bool = False
         ) -> str:
-            """Get Doris monitoring metrics data"""
-            return await self.call_tool("get_monitoring_metrics_data", {
+            """Get comprehensive monitoring metrics (definitions and/or data)"""
+            return await self.call_tool("get_monitoring_metrics", {
+                "content_type": content_type,
                 "role": role,
                 "monitor_type": monitor_type,
                 "priority": priority,
                 "include_raw_metrics": include_raw_metrics
             })
 
-        # Real-time memory tracker tool
+        # Unified Memory Statistics Tool (combines real-time and historical)
         @mcp.tool(
-            "get_realtime_memory_stats",
-            description="""[Function Description]: Get real-time memory statistics via Doris BE Memory Tracker web interface.
+            "get_memory_stats",
+            description="""[Function Description]: Get comprehensive memory statistics from Doris BE nodes, supporting both real-time and historical data.
 
 [Parameter Content]:
 
-- tracker_type (string) [Optional] - Type of memory trackers to retrieve, default is "overview"
+- data_type (string) [Optional] - Type of memory data to retrieve, default is "realtime"
+  * "realtime": Real-time memory statistics via Memory Tracker web interface
+  * "historical": Historical memory statistics via Bvar interface
+  * "both": Both real-time and historical data
+
+- tracker_type (string) [Optional] - Type of memory trackers to retrieve (for real-time), default is "overview"
   * "overview": Overview type trackers (process memory, tracked memory summary)
   * "global": Global shared memory trackers (cache, metadata)
   * "query": Query-related memory trackers
@@ -439,46 +429,243 @@ class DorisToolsManager:
   * "compaction": Compaction-related memory trackers
   * "all": All memory tracker types
 
-- include_details (boolean) [Optional] - Whether to include detailed tracker information and definitions, default is true
-""",
-        )
-        async def get_realtime_memory_stats_tool(
-            tracker_type: str = "overview",
-            include_details: bool = True
-        ) -> str:
-            """Get real-time memory statistics tool"""
-            return await self.call_tool("get_realtime_memory_stats", {
-                "tracker_type": tracker_type,
-                "include_details": include_details
-            })
-
-        # Historical memory tracker tool
-        @mcp.tool(
-            "get_historical_memory_stats",
-            description="""[Function Description]: Get historical memory statistics via Doris BE Bvar interface.
-
-[Parameter Content]:
-
-- tracker_names (array) [Optional] - List of specific tracker names to query, if not specified will get common trackers
+- tracker_names (array) [Optional] - List of specific tracker names for historical data
   * Example: ["process_resident_memory", "global", "query", "load", "compaction"]
 
 - time_range (string) [Optional] - Time range for historical data, default is "1h"
   * "1h": Last 1 hour
   * "6h": Last 6 hours
   * "24h": Last 24 hours
+
+- include_details (boolean) [Optional] - Whether to include detailed tracker information and definitions, default is true
 """,
         )
-        async def get_historical_memory_stats_tool(
+        async def get_memory_stats_tool(
+            data_type: str = "realtime",
+            tracker_type: str = "overview",
             tracker_names: List[str] = None,
-            time_range: str = "1h"
+            time_range: str = "1h",
+            include_details: bool = True
         ) -> str:
-            """Get historical memory statistics tool"""
-            return await self.call_tool("get_historical_memory_stats", {
+            """Get comprehensive memory statistics (real-time and/or historical)"""
+            return await self.call_tool("get_memory_stats", {
+                "data_type": data_type,
+                "tracker_type": tracker_type,
                 "tracker_names": tracker_names,
-                "time_range": time_range
+                "time_range": time_range,
+                "include_details": include_details
             })
 
-        logger.info("Successfully registered 16 tools to MCP server")
+        # ==================== v0.5.0 Advanced Analytics Tools ====================
+        
+        # 🔄 Unified Data Quality Analysis Tool (New in v0.5.0)
+        @mcp.tool(
+            "analyze_data_quality",
+            description="""[Function Description]: Comprehensive data quality analysis combining completeness and distribution analysis.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to analyze
+- analysis_scope (string) [Optional] - Analysis scope, default is "comprehensive"
+  * "completeness": Only completeness analysis (null rates, business rules)
+  * "distribution": Only distribution analysis (statistical patterns)
+  * "comprehensive": Full analysis including both completeness and distribution
+- sample_size (integer) [Optional] - Maximum number of rows to sample, default is 100000
+- include_all_columns (boolean) [Optional] - Whether to analyze all columns, default is false
+- business_rules (array) [Optional] - Business rule validations in format [{"rule_name": "email_format", "sql_condition": "email REGEXP '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'"}]
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+- detailed_response (boolean) [Optional] - Whether to return detailed response including raw data, default is false
+""",
+        )
+        async def analyze_data_quality_tool(
+            table_name: str,
+            analysis_scope: str = "comprehensive",
+            sample_size: int = 100000,
+            include_all_columns: bool = False,
+            business_rules: List[dict] = None,
+            catalog_name: str = None,
+            db_name: str = None,
+            detailed_response: bool = False
+        ) -> str:
+            """Unified data quality analysis tool"""
+            return await self.call_tool("analyze_data_quality", {
+                "table_name": table_name,
+                "analysis_scope": analysis_scope,
+                "sample_size": sample_size,
+                "include_all_columns": include_all_columns,
+                "business_rules": business_rules,
+                "catalog_name": catalog_name,
+                "db_name": db_name,
+                "detailed_response": detailed_response
+            })
+
+
+
+        @mcp.tool(
+            "trace_column_lineage",
+            description="""[Function Description]: Trace data lineage for specified columns through SQL analysis and dependency mapping.
+
+[Parameter Content]:
+
+- target_columns (array) [Required] - List of column specifications in format "table.column" or "db.table.column"
+- analysis_depth (integer) [Optional] - Maximum depth for lineage tracing, default is 3
+- include_transformations (boolean) [Optional] - Whether to include transformation details, default is true
+- catalog_name (string) [Optional] - Target catalog name
+""",
+        )
+        async def trace_column_lineage_tool(
+            target_columns: List[str],
+            analysis_depth: int = 3,
+            include_transformations: bool = True,
+            catalog_name: str = None
+        ) -> str:
+            """Trace column data lineage"""
+            return await self.call_tool("trace_column_lineage", {
+                "target_columns": target_columns,
+                "analysis_depth": analysis_depth,
+                "include_transformations": include_transformations,
+                "catalog_name": catalog_name
+            })
+
+        @mcp.tool(
+            "monitor_data_freshness",
+            description="""[Function Description]: Monitor data freshness and staleness patterns for specified tables.
+
+[Parameter Content]:
+
+- table_names (array) [Optional] - List of table names to monitor, if not specified monitors all tables
+- freshness_threshold_hours (integer) [Optional] - Freshness threshold in hours, default is 24
+- include_update_patterns (boolean) [Optional] - Whether to include update pattern analysis, default is true
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+""",
+        )
+        async def monitor_data_freshness_tool(
+            table_names: List[str] = None,
+            freshness_threshold_hours: int = 24,
+            include_update_patterns: bool = True,
+            catalog_name: str = None,
+            db_name: str = None
+        ) -> str:
+            """Monitor data freshness and staleness"""
+            return await self.call_tool("monitor_data_freshness", {
+                "table_names": table_names,
+                "freshness_threshold_hours": freshness_threshold_hours,
+                "include_update_patterns": include_update_patterns,
+                "catalog_name": catalog_name,
+                "db_name": db_name
+            })
+
+
+
+        # Security Analytics Tools
+        @mcp.tool(
+            "analyze_data_access_patterns",
+            description="""[Function Description]: Analyze user data access patterns, security anomalies, and access behavior.
+
+[Parameter Content]:
+
+- days (integer) [Optional] - Number of days to analyze, default is 7
+- include_system_users (boolean) [Optional] - Whether to include system users in analysis, default is false
+- min_query_threshold (integer) [Optional] - Minimum queries for user inclusion, default is 5
+""",
+        )
+        async def analyze_data_access_patterns_tool(
+            days: int = 7,
+            include_system_users: bool = False,
+            min_query_threshold: int = 5
+        ) -> str:
+            """Analyze data access patterns and security insights"""
+            return await self.call_tool("analyze_data_access_patterns", {
+                "days": days,
+                "include_system_users": include_system_users,
+                "min_query_threshold": min_query_threshold
+            })
+
+        # Dependency Analysis Tools
+        @mcp.tool(
+            "analyze_data_flow_dependencies",
+            description="""[Function Description]: Analyze data flow dependencies and impact relationships between tables.
+
+[Parameter Content]:
+
+- target_table (string) [Optional] - Specific table to analyze, if not specified analyzes all tables
+- analysis_depth (integer) [Optional] - Maximum depth for dependency traversal, default is 3
+- include_views (boolean) [Optional] - Whether to include views in analysis, default is true
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+""",
+        )
+        async def analyze_data_flow_dependencies_tool(
+            target_table: str = None,
+            analysis_depth: int = 3,
+            include_views: bool = True,
+            catalog_name: str = None,
+            db_name: str = None
+        ) -> str:
+            """Analyze data flow dependencies and impact"""
+            return await self.call_tool("analyze_data_flow_dependencies", {
+                "target_table": target_table,
+                "analysis_depth": analysis_depth,
+                "include_views": include_views,
+                "catalog_name": catalog_name,
+                "db_name": db_name
+            })
+
+        # Performance Analytics Tools
+        @mcp.tool(
+            "analyze_slow_queries_topn",
+            description="""[Function Description]: Analyze top N slowest queries and identify performance patterns and issues.
+
+[Parameter Content]:
+
+- days (integer) [Optional] - Number of days to analyze, default is 7
+- top_n (integer) [Optional] - Number of top slow queries to return, default is 20
+- min_execution_time_ms (integer) [Optional] - Minimum execution time threshold in milliseconds, default is 1000
+- include_patterns (boolean) [Optional] - Whether to include query pattern analysis, default is true
+""",
+        )
+        async def analyze_slow_queries_topn_tool(
+            days: int = 7,
+            top_n: int = 20,
+            min_execution_time_ms: int = 1000,
+            include_patterns: bool = True
+        ) -> str:
+            """Analyze top N slow queries and performance patterns"""
+            return await self.call_tool("analyze_slow_queries_topn", {
+                "days": days,
+                "top_n": top_n,
+                "min_execution_time_ms": min_execution_time_ms,
+                "include_patterns": include_patterns
+            })
+
+        @mcp.tool(
+            "analyze_resource_growth_curves",
+            description="""[Function Description]: Analyze resource growth patterns and trends for capacity planning.
+
+[Parameter Content]:
+
+- days (integer) [Optional] - Number of days to analyze, default is 30
+- resource_types (array) [Optional] - Types of resources to analyze, default is ["storage", "query_volume", "user_activity"]
+- include_predictions (boolean) [Optional] - Whether to include growth predictions, default is false
+- detailed_response (boolean) [Optional] - Whether to return detailed data including daily breakdowns, default is false
+""",
+        )
+        async def analyze_resource_growth_curves_tool(
+            days: int = 30,
+            resource_types: List[str] = None,
+            include_predictions: bool = False,
+            detailed_response: bool = False
+        ) -> str:
+            """Analyze resource growth patterns and capacity planning"""
+            return await self.call_tool("analyze_resource_growth_curves", {
+                "days": days,
+                "resource_types": resource_types or ["storage", "query_volume", "user_activity"],
+                "include_predictions": include_predictions
+            })
+
+        logger.info("Successfully registered 24 tools to MCP server (16 basic + 8 advanced analytics)")
 
     async def list_tools(self) -> List[Tool]:
         """List all available query tools (for stdio mode)"""
@@ -738,46 +925,20 @@ class DorisToolsManager:
                 },
             ),
             Tool(
-                name="get_monitoring_metrics_info",
-                description="""[Function Description]: Get Doris monitoring metrics definitions and descriptions without executing queries.
+                name="get_monitoring_metrics",
+                description="""[Function Description]: Get comprehensive Doris monitoring metrics including definitions and/or actual data from FE and BE nodes.
 
 [Parameter Content]:
 
-- role (string) [Optional] - Node role to get metric definitions for, default is "all"
-  * "fe": Only FE metrics definitions
-  * "be": Only BE metrics definitions  
-  * "all": Both FE and BE metrics definitions
-
-- monitor_type (string) [Optional] - Type of monitoring metrics, default is "all"
-  * "process": Process monitoring metrics
-  * "jvm": JVM monitoring metrics (FE only)
-  * "machine": Machine monitoring metrics
-  * "all": All monitoring types
-
-- priority (string) [Optional] - Metric priority level, default is "core"
-  * "core": Only core essential metrics (10-12 items for production use)
-  * "p0": Only P0 (highest priority) metrics definitions
-  * "all": All metrics definitions (P0 and non-P0)
-""",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "role": {"type": "string", "enum": ["fe", "be", "all"], "description": "Node role to get metric definitions for", "default": "all"},
-                        "monitor_type": {"type": "string", "enum": ["process", "jvm", "machine", "all"], "description": "Type of monitoring metrics", "default": "all"},
-                        "priority": {"type": "string", "enum": ["core", "p0", "all"], "description": "Metric priority level", "default": "core"},
-                    },
-                },
-            ),
-            Tool(
-                name="get_monitoring_metrics_data",
-                description="""[Function Description]: Get actual Doris monitoring metrics data from FE and BE nodes via HTTP API.
-
-[Parameter Content]:
+- content_type (string) [Optional] - Type of monitoring content to retrieve, default is "data"
+  * "definitions": Only metric definitions and descriptions
+  * "data": Only actual metric data from nodes
+  * "both": Both definitions and data
 
 - role (string) [Optional] - Node role to monitor, default is "all"
-  * "fe": Only FE nodes
-  * "be": Only BE nodes  
-  * "all": Both FE and BE nodes
+  * "fe": Only FE nodes/metrics
+  * "be": Only BE nodes/metrics
+  * "all": Both FE and BE nodes/metrics
 
 - monitor_type (string) [Optional] - Type of monitoring metrics, default is "all"
   * "process": Process monitoring metrics
@@ -790,11 +951,12 @@ class DorisToolsManager:
   * "p0": Only P0 (highest priority) metrics
   * "all": All metrics (P0 and non-P0)
 
-- include_raw_metrics (boolean) [Optional] - Whether to include raw detailed metrics data (can be very large)
+- include_raw_metrics (boolean) [Optional] - Whether to include raw detailed metrics data (can be very large), default is false
 """,
                 inputSchema={
                     "type": "object",
                     "properties": {
+                        "content_type": {"type": "string", "enum": ["definitions", "data", "both"], "description": "Type of monitoring content to retrieve", "default": "data"},
                         "role": {"type": "string", "enum": ["fe", "be", "all"], "description": "Node role to monitor", "default": "all"},
                         "monitor_type": {"type": "string", "enum": ["process", "jvm", "machine", "all"], "description": "Type of monitoring metrics", "default": "all"},
                         "priority": {"type": "string", "enum": ["core", "p0", "all"], "description": "Metric priority level", "default": "core"},
@@ -803,12 +965,17 @@ class DorisToolsManager:
                 },
             ),
             Tool(
-                name="get_realtime_memory_stats",
-                description="""[Function Description]: Get real-time memory statistics via Doris BE Memory Tracker web interface.
+                name="get_memory_stats",
+                description="""[Function Description]: Get comprehensive memory statistics from Doris BE nodes, supporting both real-time and historical data.
 
 [Parameter Content]:
 
-- tracker_type (string) [Optional] - Type of memory trackers to retrieve, default is "overview"
+- data_type (string) [Optional] - Type of memory data to retrieve, default is "realtime"
+  * "realtime": Real-time memory statistics via Memory Tracker web interface
+  * "historical": Historical memory statistics via Bvar interface
+  * "both": Both real-time and historical data
+
+- tracker_type (string) [Optional] - Type of memory trackers to retrieve (for real-time), default is "overview"
   * "overview": Overview type trackers (process memory, tracked memory summary)
   * "global": Global shared memory trackers (cache, metadata)
   * "query": Query-related memory trackers
@@ -816,35 +983,187 @@ class DorisToolsManager:
   * "compaction": Compaction-related memory trackers
   * "all": All memory tracker types
 
+- tracker_names (array) [Optional] - List of specific tracker names for historical data
+  * Example: ["process_resident_memory", "global", "query", "load", "compaction"]
+
+- time_range (string) [Optional] - Time range for historical data, default is "1h"
+  * "1h": Last 1 hour
+  * "6h": Last 6 hours
+  * "24h": Last 24 hours
+
 - include_details (boolean) [Optional] - Whether to include detailed tracker information and definitions, default is true
 """,
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "tracker_type": {"type": "string", "enum": ["overview", "global", "query", "load", "compaction", "all"], "description": "Type of memory trackers to retrieve", "default": "overview"},
+                        "data_type": {"type": "string", "enum": ["realtime", "historical", "both"], "description": "Type of memory data to retrieve", "default": "realtime"},
+                        "tracker_type": {"type": "string", "enum": ["overview", "global", "query", "load", "compaction", "all"], "description": "Type of memory trackers to retrieve (for real-time)", "default": "overview"},
+                        "tracker_names": {"type": "array", "items": {"type": "string"}, "description": "List of specific tracker names for historical data"},
+                        "time_range": {"type": "string", "enum": ["1h", "6h", "24h"], "description": "Time range for historical data", "default": "1h"},
                         "include_details": {"type": "boolean", "description": "Whether to include detailed tracker information and definitions", "default": True},
                     },
                 },
             ),
+            # ==================== v0.5.0 Advanced Analytics Tools ====================
             Tool(
-                name="get_historical_memory_stats",
-                description="""[Function Description]: Get historical memory statistics via Doris BE Bvar interface.
+                name="analyze_data_quality",
+                description="""[Function Description]: Comprehensive data quality analysis combining completeness and distribution analysis.
 
 [Parameter Content]:
 
-- tracker_names (array) [Optional] - List of specific tracker names to query, if not specified will get common trackers
-  * Example: ["process_resident_memory", "global", "query", "load", "compaction"]
-
-- time_range (string) [Optional] - Time range for historical data, default is "1h"
-  * "1h": Last 1 hour
-  * "6h": Last 6 hours  
-  * "24h": Last 24 hours
+- table_name (string) [Required] - Name of the table to analyze
+- analysis_scope (string) [Optional] - Analysis scope, default is "comprehensive"
+  * "completeness": Only completeness analysis (null rates, business rules)
+  * "distribution": Only distribution analysis (statistical patterns)
+  * "comprehensive": Full analysis including both completeness and distribution
+- sample_size (integer) [Optional] - Maximum number of rows to sample, default is 100000
+- include_all_columns (boolean) [Optional] - Whether to analyze all columns, default is false
+- business_rules (array) [Optional] - Business rule validations in format [{"rule_name": "email_format", "sql_condition": "email REGEXP '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'"}]
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
 """,
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "tracker_names": {"type": "array", "items": {"type": "string"}, "description": "List of specific tracker names to query"},
-                        "time_range": {"type": "string", "enum": ["1h", "6h", "24h"], "description": "Time range for historical data", "default": "1h"},
+                        "table_name": {"type": "string", "description": "Name of the table to analyze"},
+                        "analysis_scope": {"type": "string", "enum": ["completeness", "distribution", "comprehensive"], "description": "Analysis scope", "default": "comprehensive"},
+                        "sample_size": {"type": "integer", "description": "Maximum number of rows to sample", "default": 100000},
+                        "include_all_columns": {"type": "boolean", "description": "Whether to analyze all columns", "default": False},
+                        "business_rules": {"type": "array", "items": {"type": "object"}, "description": "Business rule validations"},
+                        "catalog_name": {"type": "string", "description": "Target catalog name"},
+                        "db_name": {"type": "string", "description": "Target database name"},
+                        "detailed_response": {"type": "boolean", "description": "Whether to return detailed response including raw data", "default": False},
+                    },
+                    "required": ["table_name"],
+                },
+            ),
+
+            Tool(
+                name="trace_column_lineage",
+                description="""[Function Description]: Trace data lineage for specified columns through SQL analysis and dependency mapping.
+
+[Parameter Content]:
+
+- target_columns (array) [Required] - List of column specifications in format "table.column" or "db.table.column"
+- analysis_depth (integer) [Optional] - Maximum depth for lineage tracing, default is 3
+- include_transformations (boolean) [Optional] - Whether to include transformation details, default is true
+- catalog_name (string) [Optional] - Target catalog name
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "target_columns": {"type": "array", "items": {"type": "string"}, "description": "List of column specifications"},
+                        "analysis_depth": {"type": "integer", "description": "Maximum depth for lineage tracing", "default": 3},
+                        "include_transformations": {"type": "boolean", "description": "Whether to include transformation details", "default": True},
+                        "catalog_name": {"type": "string", "description": "Target catalog name"},
+                    },
+                    "required": ["target_columns"],
+                },
+            ),
+            Tool(
+                name="monitor_data_freshness",
+                description="""[Function Description]: Monitor data freshness and staleness patterns for specified tables.
+
+[Parameter Content]:
+
+- table_names (array) [Optional] - List of table names to monitor, if not specified monitors all tables
+- freshness_threshold_hours (integer) [Optional] - Freshness threshold in hours, default is 24
+- include_update_patterns (boolean) [Optional] - Whether to include update pattern analysis, default is true
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "table_names": {"type": "array", "items": {"type": "string"}, "description": "List of table names to monitor"},
+                        "freshness_threshold_hours": {"type": "integer", "description": "Freshness threshold in hours", "default": 24},
+                        "include_update_patterns": {"type": "boolean", "description": "Whether to include update pattern analysis", "default": True},
+                        "catalog_name": {"type": "string", "description": "Target catalog name"},
+                        "db_name": {"type": "string", "description": "Target database name"},
+                    },
+                },
+            ),
+
+            Tool(
+                name="analyze_data_access_patterns",
+                description="""[Function Description]: Analyze user data access patterns, security anomalies, and access behavior.
+
+[Parameter Content]:
+
+- days (integer) [Optional] - Number of days to analyze, default is 7
+- include_system_users (boolean) [Optional] - Whether to include system users in analysis, default is false
+- min_query_threshold (integer) [Optional] - Minimum queries for user inclusion, default is 5
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "days": {"type": "integer", "description": "Number of days to analyze", "default": 7},
+                        "include_system_users": {"type": "boolean", "description": "Whether to include system users", "default": False},
+                        "min_query_threshold": {"type": "integer", "description": "Minimum queries for user inclusion", "default": 5},
+                    },
+                },
+            ),
+            Tool(
+                name="analyze_data_flow_dependencies",
+                description="""[Function Description]: Analyze data flow dependencies and impact relationships between tables.
+
+[Parameter Content]:
+
+- target_table (string) [Optional] - Specific table to analyze, if not specified analyzes all tables
+- analysis_depth (integer) [Optional] - Maximum depth for dependency traversal, default is 3
+- include_views (boolean) [Optional] - Whether to include views in analysis, default is true
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "target_table": {"type": "string", "description": "Specific table to analyze"},
+                        "analysis_depth": {"type": "integer", "description": "Maximum depth for dependency traversal", "default": 3},
+                        "include_views": {"type": "boolean", "description": "Whether to include views in analysis", "default": True},
+                        "catalog_name": {"type": "string", "description": "Target catalog name"},
+                        "db_name": {"type": "string", "description": "Target database name"},
+                    },
+                },
+            ),
+            Tool(
+                name="analyze_slow_queries_topn",
+                description="""[Function Description]: Analyze top N slowest queries and identify performance patterns and issues.
+
+[Parameter Content]:
+
+- days (integer) [Optional] - Number of days to analyze, default is 7
+- top_n (integer) [Optional] - Number of top slow queries to return, default is 20
+- min_execution_time_ms (integer) [Optional] - Minimum execution time threshold in milliseconds, default is 1000
+- include_patterns (boolean) [Optional] - Whether to include query pattern analysis, default is true
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "days": {"type": "integer", "description": "Number of days to analyze", "default": 7},
+                        "top_n": {"type": "integer", "description": "Number of top slow queries to return", "default": 20},
+                        "min_execution_time_ms": {"type": "integer", "description": "Minimum execution time threshold in milliseconds", "default": 1000},
+                        "include_patterns": {"type": "boolean", "description": "Whether to include query pattern analysis", "default": True},
+                    },
+                },
+            ),
+            Tool(
+                name="analyze_resource_growth_curves",
+                description="""[Function Description]: Analyze resource growth patterns and trends for capacity planning.
+
+[Parameter Content]:
+
+- days (integer) [Optional] - Number of days to analyze, default is 30
+- resource_types (array) [Optional] - Types of resources to analyze, default is ["storage", "query_volume", "user_activity"]
+- include_predictions (boolean) [Optional] - Whether to include growth predictions, default is false
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "days": {"type": "integer", "description": "Number of days to analyze", "default": 30},
+                        "resource_types": {"type": "array", "items": {"type": "string"}, "description": "Types of resources to analyze"},
+                        "include_predictions": {"type": "boolean", "description": "Whether to include growth predictions", "default": False},
+                        "detailed_response": {"type": "boolean", "description": "Whether to return detailed data including daily breakdowns", "default": False},
                     },
                 },
             ),
@@ -884,14 +1203,38 @@ class DorisToolsManager:
                 result = await self._get_sql_profile_tool(arguments)
             elif name == "get_table_data_size":
                 result = await self._get_table_data_size_tool(arguments)
+            elif name == "get_monitoring_metrics":
+                result = await self._get_monitoring_metrics_tool(arguments)
+            elif name == "get_memory_stats":
+                result = await self._get_memory_stats_tool(arguments)
+            # Legacy support for old tool names (deprecated)
             elif name == "get_monitoring_metrics_info":
-                result = await self._get_monitoring_metrics_info_tool(arguments)
+                arguments["content_type"] = "definitions"
+                result = await self._get_monitoring_metrics_tool(arguments)
             elif name == "get_monitoring_metrics_data":
-                result = await self._get_monitoring_metrics_data_tool(arguments)
+                arguments["content_type"] = "data"
+                result = await self._get_monitoring_metrics_tool(arguments)
             elif name == "get_realtime_memory_stats":
-                result = await self._get_realtime_memory_stats_tool(arguments)
+                arguments["data_type"] = "realtime"
+                result = await self._get_memory_stats_tool(arguments)
             elif name == "get_historical_memory_stats":
-                result = await self._get_historical_memory_stats_tool(arguments)
+                arguments["data_type"] = "historical"
+                result = await self._get_memory_stats_tool(arguments)
+            # v0.5.0 Advanced Analytics Tools
+            elif name == "analyze_data_quality":
+                result = await self._analyze_data_quality_tool(arguments)
+            elif name == "trace_column_lineage":
+                result = await self._trace_column_lineage_tool(arguments)
+            elif name == "monitor_data_freshness":
+                result = await self._monitor_data_freshness_tool(arguments)
+            elif name == "analyze_data_access_patterns":
+                result = await self._analyze_data_access_patterns_tool(arguments)
+            elif name == "analyze_data_flow_dependencies":
+                result = await self._analyze_data_flow_dependencies_tool(arguments)
+            elif name == "analyze_slow_queries_topn":
+                result = await self._analyze_slow_queries_topn_tool(arguments)
+            elif name == "analyze_resource_growth_curves":
+                result = await self._analyze_resource_growth_curves_tool(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
             
@@ -1041,45 +1384,271 @@ class DorisToolsManager:
             db_name, table_name, single_replica
         )
 
-    async def _get_monitoring_metrics_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Monitoring metrics info tool routing"""
+    async def _get_monitoring_metrics_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Unified monitoring metrics tool routing"""
+        content_type = arguments.get("content_type", "data")
         role = arguments.get("role", "all")
         monitor_type = arguments.get("monitor_type", "all")
-        priority = arguments.get("priority", "p0")
-        
-        # Delegate to monitoring tools for processing (info_only=True)
-        return await self.monitoring_tools.get_monitoring_metrics(
-            role, monitor_type, priority, info_only=True, format_type="prometheus"
-        )
-
-    async def _get_monitoring_metrics_data_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Monitoring metrics data tool routing"""
-        role = arguments.get("role", "all")
-        monitor_type = arguments.get("monitor_type", "all")
-        priority = arguments.get("priority", "p0")
+        priority = arguments.get("priority", "core")
         include_raw_metrics = arguments.get("include_raw_metrics", False)
         
-        # Delegate to monitoring tools for processing (info_only=False)
-        return await self.monitoring_tools.get_monitoring_metrics(
-            role, monitor_type, priority, info_only=False, format_type="prometheus", include_raw_metrics=include_raw_metrics
-        )
+        if content_type == "definitions":
+            # Only get definitions
+            return await self.monitoring_tools.get_monitoring_metrics(
+                role, monitor_type, priority, info_only=True, format_type="prometheus"
+            )
+        elif content_type == "data":
+            # Only get data
+            return await self.monitoring_tools.get_monitoring_metrics(
+                role, monitor_type, priority, info_only=False, format_type="prometheus", include_raw_metrics=include_raw_metrics
+            )
+        elif content_type == "both":
+            # Get both definitions and data
+            definitions = await self.monitoring_tools.get_monitoring_metrics(
+                role, monitor_type, priority, info_only=True, format_type="prometheus"
+            )
+            data = await self.monitoring_tools.get_monitoring_metrics(
+                role, monitor_type, priority, info_only=False, format_type="prometheus", include_raw_metrics=include_raw_metrics
+            )
+            return {
+                "content_type": "both",
+                "definitions": definitions,
+                "data": data,
+                "timestamp": data.get("timestamp"),
+                "_execution_info": {
+                    "combined_response": True,
+                    "definitions_available": definitions.get("success", False),
+                    "data_available": data.get("success", False)
+                }
+            }
+        else:
+            return {"error": f"Invalid content_type: {content_type}. Must be 'definitions', 'data', or 'both'"}
 
-    async def _get_realtime_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Real-time memory statistics tool routing"""
+    async def _get_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Unified memory statistics tool routing"""
+        data_type = arguments.get("data_type", "realtime")
         tracker_type = arguments.get("tracker_type", "overview")
-        include_details = arguments.get("include_details", True)
-        
-        # Delegate to memory tracker for processing
-        return await self.memory_tracker.get_realtime_memory_stats(
-            tracker_type, include_details
-        )
-
-    async def _get_historical_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Historical memory statistics tool routing"""
         tracker_names = arguments.get("tracker_names")
         time_range = arguments.get("time_range", "1h")
+        include_details = arguments.get("include_details", True)
         
-        # Delegate to memory tracker for processing
-        return await self.memory_tracker.get_historical_memory_stats(
-            tracker_names, time_range
+        if data_type == "realtime":
+                # Only get real-time data
+                return await self.memory_tracker.get_realtime_memory_stats(
+                tracker_type, include_details
+            )
+        elif data_type == "historical":
+            # Only get historical data
+            return await self.memory_tracker.get_historical_memory_stats(
+                tracker_names, time_range
+            )
+        elif data_type == "both":
+            # Get both real-time and historical data
+            realtime = await self.memory_tracker.get_realtime_memory_stats(
+                tracker_type, include_details
+            )
+            historical = await self.memory_tracker.get_historical_memory_stats(
+                tracker_names, time_range
+            )
+            return {
+                "data_type": "both",
+                "realtime": realtime,
+                "historical": historical,
+                "timestamp": realtime.get("timestamp"),
+                "_execution_info": {
+                    "combined_response": True,
+                    "realtime_available": realtime.get("success", False),
+                    "historical_available": historical.get("success", False)
+                }
+            }
+        else:
+            return {"error": f"Invalid data_type: {data_type}. Must be 'realtime', 'historical', or 'both'"}
+
+    # Legacy tool methods (for backward compatibility)
+    async def _get_monitoring_metrics_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """[DEPRECATED] Use get_monitoring_metrics with content_type='definitions'"""
+        arguments["content_type"] = "definitions"
+        return await self._get_monitoring_metrics_tool(arguments)
+
+    async def _get_monitoring_metrics_data_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """[DEPRECATED] Use get_monitoring_metrics with content_type='data'"""
+        arguments["content_type"] = "data"
+        return await self._get_monitoring_metrics_tool(arguments)
+
+    async def _get_realtime_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """[DEPRECATED] Use get_memory_stats with data_type='realtime'"""
+        arguments["data_type"] = "realtime"
+        return await self._get_memory_stats_tool(arguments)
+
+    async def _get_historical_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """[DEPRECATED] Use get_memory_stats with data_type='historical'"""
+        arguments["data_type"] = "historical"
+        return await self._get_memory_stats_tool(arguments)
+    
+    # ==================== v0.5.0 Advanced Analytics Tools Private Methods ====================
+    
+    async def _analyze_data_quality_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Unified data quality analysis tool routing"""
+        try:
+            # Extract parameters
+            table_name = arguments.get("table_name")
+            analysis_scope = arguments.get("analysis_scope", "comprehensive")
+            sample_size = arguments.get("sample_size", 100000)
+            include_all_columns = arguments.get("include_all_columns", False)
+            business_rules = arguments.get("business_rules", [])
+            catalog_name = arguments.get("catalog_name")
+            db_name = arguments.get("db_name")
+            detailed_response = arguments.get("detailed_response", False)
+            
+            # Delegate to the unified data quality tools
+            result = await self.data_quality_tools.analyze_data_quality(
+                table_name=table_name,
+                analysis_scope=analysis_scope,
+                sample_size=sample_size,
+                include_all_columns=include_all_columns,
+                business_rules=business_rules,
+                catalog_name=catalog_name,
+                db_name=db_name,
+                detailed_response=detailed_response
+            )
+            
+            return result
+            
+        except Exception as e:
+            return {
+                "error": str(e),
+                "analysis_type": "unified_data_quality",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+
+    
+    async def _trace_column_lineage_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Column lineage tracing tool routing"""
+        target_columns = arguments.get("target_columns")
+        analysis_depth = arguments.get("analysis_depth", 3)
+        include_transformations = arguments.get("include_transformations", True)
+        catalog_name = arguments.get("catalog_name")
+        
+        if not target_columns:
+            return {"error": "target_columns parameter is required"}
+        
+        # Handle multi-column lineage tracing
+        if isinstance(target_columns, list):
+            results = {}
+            for column_spec in target_columns:
+                try:
+                    # Parse column specification: "table.column" or "db.table.column"
+                    parts = column_spec.split(".")
+                    if len(parts) == 2:
+                        table_name, column_name = parts
+                        db_name = None
+                    elif len(parts) == 3:
+                        db_name, table_name, column_name = parts
+                    else:
+                        results[column_spec] = {"error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"}
+                        continue
+                    
+                    result = await self.data_governance_tools.trace_column_lineage(
+                        table_name=table_name,
+                        column_name=column_name,
+                        depth=analysis_depth,
+                        catalog_name=catalog_name,
+                        db_name=db_name
+                    )
+                    results[column_spec] = result
+                    
+                except Exception as e:
+                    results[column_spec] = {"error": f"Failed to trace lineage for {column_spec}: {str(e)}"}
+            
+            return {
+                "multi_column_lineage": True,
+                "column_count": len(target_columns),
+                "analysis_timestamp": list(results.values())[0].get("analysis_timestamp") if results else None,
+                "results": results
+            }
+        else:
+            # Single column analysis
+            column_spec = target_columns
+            parts = column_spec.split(".")
+            if len(parts) == 2:
+                table_name, column_name = parts
+                db_name = None
+            elif len(parts) == 3:
+                db_name, table_name, column_name = parts
+            else:
+                return {"error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"}
+            
+            return await self.data_governance_tools.trace_column_lineage(
+                table_name=table_name,
+                column_name=column_name,
+                depth=analysis_depth,
+                catalog_name=catalog_name,
+                db_name=db_name
+            )
+    
+    async def _monitor_data_freshness_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Data freshness monitoring tool routing"""
+        table_names = arguments.get("table_names")
+        freshness_threshold_hours = arguments.get("freshness_threshold_hours", 24)
+        include_update_patterns = arguments.get("include_update_patterns", True)
+        catalog_name = arguments.get("catalog_name")
+        db_name = arguments.get("db_name")
+        
+        # Delegate to data governance tools for processing
+        return await self.data_governance_tools.monitor_data_freshness(
+            tables=table_names, 
+            time_threshold_hours=freshness_threshold_hours, 
+            catalog_name=catalog_name, 
+            db_name=db_name
+        )
+    
+
+    
+    async def _analyze_data_access_patterns_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Data access patterns analysis tool routing"""
+        days = arguments.get("days", 7)
+        include_system_users = arguments.get("include_system_users", False)
+        min_query_threshold = arguments.get("min_query_threshold", 5)
+        
+        # Delegate to security analytics tools for processing
+        return await self.security_analytics_tools.analyze_data_access_patterns(
+            days, include_system_users, min_query_threshold
+        )
+    
+    async def _analyze_data_flow_dependencies_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Data flow dependencies analysis tool routing"""
+        target_table = arguments.get("target_table")
+        analysis_depth = arguments.get("analysis_depth", 3)
+        include_views = arguments.get("include_views", True)
+        catalog_name = arguments.get("catalog_name")
+        db_name = arguments.get("db_name")
+        
+        # Delegate to dependency analysis tools for processing
+        return await self.dependency_analysis_tools.analyze_data_flow_dependencies(
+            target_table, analysis_depth, include_views, catalog_name, db_name
+        )
+    
+    async def _analyze_slow_queries_topn_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Slow queries Top-N analysis tool routing"""
+        days = arguments.get("days", 7)
+        top_n = arguments.get("top_n", 20)
+        min_execution_time_ms = arguments.get("min_execution_time_ms", 1000)
+        include_patterns = arguments.get("include_patterns", True)
+        
+        # Delegate to performance analytics tools for processing
+        return await self.performance_analytics_tools.analyze_slow_queries_topn(
+            days, top_n, min_execution_time_ms, include_patterns
+        )
+    
+    async def _analyze_resource_growth_curves_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Resource growth curves analysis tool routing"""
+        days = arguments.get("days", 30)
+        resource_types = arguments.get("resource_types", ["storage", "query_volume", "user_activity"])
+        include_predictions = arguments.get("include_predictions", False)
+        detailed_response = arguments.get("detailed_response", False)
+        
+        # Delegate to performance analytics tools for processing
+        return await self.performance_analytics_tools.analyze_resource_growth_curves(
+            days, resource_types, include_predictions, detailed_response
         )
