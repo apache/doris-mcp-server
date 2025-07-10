@@ -29,7 +29,7 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 - **🎯 Centralized Configuration Management**: All security keywords now managed through single configuration source with consistent enforcement across all components
 - **🔧 MCP Version Compatibility**: Resolved MCP library version conflicts with intelligent compatibility layer supporting both MCP 1.8.x and 1.9.x versions
 - **🚀 Production Reliability**: Enhanced error handling, connection diagnostics, and automatic recovery from database connection issues
-- **🙏 Community Contribution**: Special thanks to Hailin Xie for supporting the doris-mcp-server project by graciously transferring the PyPI project to the community free of charge, contributing to open source. The mcp-doris-server repository will be retained but no longer maintained, with ongoing development continuing on the doris-mcp-server repository
+- **🙏 Community Contribution**: Special thanks to Hailin Xie for supporting the doris-mcp-server project by graciously transferring the PyPI project to the community free of charge, contributing to open source. The doris-mcp-server repository will be retained but no longer maintained, with ongoing development continuing on the doris-mcp-server repository
 
 > **🔧 Key Improvements**: Resolved connection stability issues, unified security keyword management, added comprehensive environment variable configuration for security policies, and fixed MCP library version compatibility conflicts.
 
@@ -67,7 +67,7 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 pip install doris-mcp-server
 
 # Install specific version
-pip install doris-mcp-server==0.4.2
+pip install doris-mcp-server==0.4.3
 ```
 
 > **💡 Command Compatibility**: After installation, both `doris-mcp-server` commands are available for backward compatibility. You can use either command interchangeably.
@@ -189,6 +189,9 @@ cp .env.example .env
     *   `LOG_LEVEL`: Log level (DEBUG/INFO/WARNING/ERROR, default: INFO)
     *   `LOG_FILE_PATH`: Log file path
     *   `ENABLE_AUDIT`: Enable audit logging (default: true)
+    *   `ENABLE_LOG_CLEANUP`: Enable automatic log cleanup (default: true, New in v0.4.3)
+    *   `LOG_MAX_AGE_DAYS`: Maximum age of log files in days (default: 30, New in v0.4.3)
+    *   `LOG_CLEANUP_INTERVAL_HOURS`: Log cleanup check interval in hours (default: 24, New in v0.4.3)
 
 ### Available MCP Tools
 
@@ -264,7 +267,7 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 
 *   **Multi-Catalog Metadata Access**: All metadata tools (`get_db_list`, `get_db_table_list`, `get_table_schema`, etc.) support an optional `catalog_name` parameter to query specific catalogs.
 *   **Cross-Catalog SQL Queries**: Execute SQL queries that span multiple catalogs using three-part table naming.
-*   **Catalog Discovery**: Use `mcp_doris_get_catalog_list` to discover available catalogs and their types.
+*   **Catalog Discovery**: Use `get_catalog_list` to discover available catalogs and their types.
 
 #### Three-Part Naming Requirement:
 
@@ -278,7 +281,7 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 1.  **Get Available Catalogs:**
     ```json
     {
-      "tool_name": "mcp_doris_get_catalog_list",
+      "tool_name": "get_catalog_list",
       "arguments": {"random_string": "unique_id"}
     }
     ```
@@ -286,7 +289,7 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 2.  **Get Databases in Specific Catalog:**
     ```json
     {
-      "tool_name": "mcp_doris_get_db_list", 
+      "tool_name": "get_db_list", 
       "arguments": {"random_string": "unique_id", "catalog_name": "mysql"}
     }
     ```
@@ -294,7 +297,7 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 3.  **Query Internal Catalog:**
     ```json
     {
-      "tool_name": "mcp_doris_exec_query",
+      "tool_name": "exec_query",
       "arguments": {
         "random_string": "unique_id",
         "sql": "SELECT COUNT(*) FROM internal.ssb.customer"
@@ -305,7 +308,7 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 4.  **Query External Catalog:**
     ```json
     {
-      "tool_name": "mcp_doris_exec_query", 
+      "tool_name": "exec_query", 
       "arguments": {
         "random_string": "unique_id",
         "sql": "SELECT COUNT(*) FROM mysql.ssb.customer"
@@ -316,7 +319,7 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 5.  **Cross-Catalog Query:**
     ```json
     {
-      "tool_name": "mcp_doris_exec_query",
+      "tool_name": "exec_query",
       "arguments": {
         "random_string": "unique_id", 
         "sql": "SELECT i.c_name, m.external_data FROM internal.ssb.customer i JOIN mysql.test.user_info m ON i.c_custkey = m.customer_id"
@@ -589,7 +592,7 @@ Stdio mode allows Cursor to manage the server process directly. Configuration is
 Install the package from PyPI and configure Cursor to use it:
 
 ```bash
-pip install mcp-doris-server
+pip install doris-mcp-server
 ```
 
 **Configure Cursor:** Add an entry like the following to your Cursor MCP configuration:
@@ -989,16 +992,16 @@ Recommendations:
    DORIS_MAX_CONNECTIONS=20
    ```
 
-### Q: How to resolve `at_eof` connection errors? (Fixed in v0.4.2)
+### Q: How to resolve `at_eof` connection errors? (Fixed in v0.4.3)
 
-**A:** Version 0.4.2 has resolved the critical `at_eof` connection errors. The improvements include:
+**A:** Version 0.4.3 has resolved the critical `at_eof` connection errors. The improvements include:
 
 1. **Enhanced Connection Health Monitoring**: Strict connection state validation before operations
 2. **Automatic Retry Mechanism**: Failed queries are automatically retried up to 2 times
 3. **Proactive Connection Cleanup**: Automatic detection and cleanup of problematic connections
 4. **Connection Diagnostics**: Comprehensive connection health analysis and reporting
 
-If you still encounter connection issues after upgrading to v0.4.2:
+If you still encounter connection issues after upgrading to v0.4.3:
 ```bash
 # Check connection diagnostics
 # The system now automatically handles connection recovery
@@ -1040,7 +1043,7 @@ pip uninstall mcp
 pip install mcp==1.8.0
 
 # Or upgrade to latest compatible version
-pip install --upgrade mcp-doris-server==0.4.2
+pip install --upgrade doris-mcp-server==0.4.2
 ```
 
 ### Q: How to view server logs?

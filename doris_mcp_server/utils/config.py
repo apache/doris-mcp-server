@@ -32,6 +32,8 @@ try:
 except ImportError:
     load_dotenv = None
 
+from .logger import get_logger
+
 
 @dataclass
 class DatabaseConfig:
@@ -144,6 +146,11 @@ class LoggingConfig:
     # Audit log configuration
     enable_audit: bool = True
     audit_file_path: str | None = None
+    
+    # Log cleanup configuration
+    enable_cleanup: bool = True
+    max_age_days: int = 30
+    cleanup_interval_hours: int = 24
 
 
 @dataclass
@@ -327,6 +334,15 @@ class DorisConfig:
             os.getenv("ENABLE_AUDIT", str(config.logging.enable_audit).lower()).lower() == "true"
         )
         config.logging.audit_file_path = os.getenv("AUDIT_FILE_PATH", config.logging.audit_file_path)
+        config.logging.enable_cleanup = (
+            os.getenv("ENABLE_LOG_CLEANUP", str(config.logging.enable_cleanup).lower()).lower() == "true"
+        )
+        config.logging.max_age_days = int(
+            os.getenv("LOG_MAX_AGE_DAYS", str(config.logging.max_age_days))
+        )
+        config.logging.cleanup_interval_hours = int(
+            os.getenv("LOG_CLEANUP_INTERVAL_HOURS", str(config.logging.cleanup_interval_hours))
+        )
 
         # Monitoring configuration
         config.monitoring.enable_metrics = (
@@ -454,6 +470,9 @@ class DorisConfig:
                 "backup_count": self.logging.backup_count,
                 "enable_audit": self.logging.enable_audit,
                 "audit_file_path": self.logging.audit_file_path,
+                "enable_cleanup": self.logging.enable_cleanup,
+                "max_age_days": self.logging.max_age_days,
+                "cleanup_interval_hours": self.logging.cleanup_interval_hours,
             },
             "monitoring": {
                 "enable_metrics": self.monitoring.enable_metrics,
@@ -531,6 +550,12 @@ class DorisConfig:
 
         if self.logging.backup_count < 0:
             errors.append("Log backup count cannot be negative")
+        
+        if self.logging.max_age_days <= 0:
+            errors.append("Log max age days must be greater than 0")
+        
+        if self.logging.cleanup_interval_hours <= 0:
+            errors.append("Log cleanup interval hours must be greater than 0")
 
         # Validate monitoring configuration
         if not (1 <= self.monitoring.metrics_port <= 65535):
@@ -576,56 +601,41 @@ class ConfigManager:
         self.logger = logging.getLogger(__name__)
 
     def setup_logging(self):
-        """Setup logging configuration"""
-        # Configure root logger
-        root_logger = logging.getLogger()
-        root_logger.setLevel(getattr(logging, self.config.logging.level.upper()))
-
-        # Clear existing handlers
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
-
-        # Create formatter
-        formatter = logging.Formatter(self.config.logging.format)
-
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        root_logger.addHandler(console_handler)
-
-        # File handler (if configured)
+        """Setup logging configuration using enhanced logger"""
+        from .logger import setup_logging, get_logger
+        
+        # Determine log directory
+        log_dir = "logs"
         if self.config.logging.file_path:
-            try:
-                from logging.handlers import RotatingFileHandler
-
-                file_handler = RotatingFileHandler(
-                    self.config.logging.file_path,
-                    maxBytes=self.config.logging.max_file_size,
-                    backupCount=self.config.logging.backup_count,
-                    encoding="utf-8",
-                )
-                file_handler.setFormatter(formatter)
-                root_logger.addHandler(file_handler)
-            except Exception as e:
-                self.logger.warning(f"Failed to setup file logging: {e}")
-
-        # Audit log handler (if configured)
-        if self.config.logging.enable_audit and self.config.logging.audit_file_path:
-            try:
-                from logging.handlers import RotatingFileHandler
-
-                audit_logger = logging.getLogger("audit")
-                audit_handler = RotatingFileHandler(
-                    self.config.logging.audit_file_path,
-                    maxBytes=self.config.logging.max_file_size,
-                    backupCount=self.config.logging.backup_count,
-                    encoding="utf-8",
-                )
-                audit_handler.setFormatter(formatter)
-                audit_logger.addHandler(audit_handler)
-                audit_logger.setLevel(logging.INFO)
-            except Exception as e:
-                self.logger.warning(f"Failed to setup audit logging: {e}")
+            # Extract directory from file path if provided
+            from pathlib import Path
+            log_dir = str(Path(self.config.logging.file_path).parent)
+        
+        # Setup enhanced logging with cleanup functionality
+        setup_logging(
+            level=self.config.logging.level,
+            log_dir=log_dir,
+            enable_console=True,
+            enable_file=True,
+            enable_audit=self.config.logging.enable_audit,
+            audit_file=self.config.logging.audit_file_path,
+            max_file_size=self.config.logging.max_file_size,
+            backup_count=self.config.logging.backup_count,
+            enable_cleanup=self.config.logging.enable_cleanup,
+            max_age_days=self.config.logging.max_age_days,
+            cleanup_interval_hours=self.config.logging.cleanup_interval_hours
+        )
+        
+        # Update logger to use new system
+        self.logger = get_logger(__name__)
+        
+        self.logger.info("Enhanced logging system with cleanup initialized successfully")
+        self.logger.info(f"Log directory: {log_dir}")
+        self.logger.info(f"Log level: {self.config.logging.level}")
+        self.logger.info(f"Audit logging: {'Enabled' if self.config.logging.enable_audit else 'Disabled'}")
+        self.logger.info(f"Log cleanup: {'Enabled' if self.config.logging.enable_cleanup else 'Disabled'}")
+        if self.config.logging.enable_cleanup:
+            self.logger.info(f"Cleanup config: Max age {self.config.logging.max_age_days} days, interval {self.config.logging.cleanup_interval_hours}h")
 
     def validate_config(self) -> bool:
         """Validate configuration"""

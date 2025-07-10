@@ -31,6 +31,8 @@ import sqlparse
 from sqlparse.sql import Statement
 from sqlparse.tokens import Keyword, Name
 
+from .logger import get_logger
+
 
 class SecurityLevel(Enum):
     """Security level enumeration"""
@@ -86,7 +88,7 @@ class DorisSecurityManager:
 
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # Initialize security components
         self.auth_provider = AuthenticationProvider(config)
@@ -211,7 +213,7 @@ class AuthenticationProvider:
 
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.session_cache = {}
 
     async def authenticate(self, auth_info: dict[str, Any]) -> AuthContext:
@@ -321,7 +323,7 @@ class AuthorizationProvider:
 
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.permission_cache = {}
         
         # Load sensitive tables configuration
@@ -464,7 +466,7 @@ class SQLSecurityValidator:
 
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         
         # Handle DorisConfig object or dictionary configuration
         if hasattr(config, 'get'):
@@ -686,7 +688,7 @@ class DataMaskingProcessor:
 
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.masking_algorithms = self._init_masking_algorithms()
         self.masking_rules = self._load_masking_rules()
     

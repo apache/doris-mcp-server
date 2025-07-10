@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
 # Import unified logging configuration
-from doris_mcp_server.utils.logger import get_logger
+from .logger import get_logger
 
 # Configure logging
 logger = get_logger(__name__)
