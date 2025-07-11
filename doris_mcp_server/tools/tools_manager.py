@@ -37,6 +37,7 @@ from ..utils.data_quality_tools import DataQualityTools
 from ..utils.security_analytics_tools import SecurityAnalyticsTools
 from ..utils.dependency_analysis_tools import DependencyAnalysisTools
 from ..utils.performance_analytics_tools import PerformanceAnalyticsTools
+from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -65,7 +66,10 @@ class DorisToolsManager:
         self.dependency_analysis_tools = DependencyAnalysisTools(connection_manager)
         self.performance_analytics_tools = PerformanceAnalyticsTools(connection_manager)
         
-        logger.info("DorisToolsManager initialized with business logic processors and v0.5.0 analytics tools")
+        # Initialize ADBC query tools
+        self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
+        
+        logger.info("DorisToolsManager initialized with business logic processors, v0.5.0 analytics tools, and ADBC query tools")
     
     async def register_tools_with_mcp(self, mcp):
         """Register all tools to MCP server"""
@@ -662,13 +666,68 @@ class DorisToolsManager:
             return await self.call_tool("analyze_resource_growth_curves", {
                 "days": days,
                 "resource_types": resource_types or ["storage", "query_volume", "user_activity"],
-                "include_predictions": include_predictions
+                "include_predictions": include_predictions,
+                "detailed_response": detailed_response
             })
 
-        logger.info("Successfully registered 24 tools to MCP server (16 basic + 8 advanced analytics)")
+        # ==================== ADBC Query Tools ====================
+        
+        # ADBC Query Execution Tool
+        @mcp.tool(
+            "exec_adbc_query",
+            description=f"""[Function Description]: Execute SQL query using ADBC (Arrow Flight SQL) protocol for high-performance data transfer.
+
+[Parameter Content]:
+
+- sql (string) [Required] - SQL statement to execute
+- max_rows (integer) [Optional] - Maximum number of rows to return, default is {self.connection_manager.config.adbc.default_max_rows}
+- timeout (integer) [Optional] - Query timeout in seconds, default is {self.connection_manager.config.adbc.default_timeout}
+- return_format (string) [Optional] - Format for returned data, default is "{self.connection_manager.config.adbc.default_return_format}"
+  * "arrow": Return Arrow format with metadata
+  * "pandas": Return Pandas DataFrame format 
+  * "dict": Return dictionary format
+
+[Prerequisites]:
+- Environment variables FE_ARROW_FLIGHT_SQL_PORT and BE_ARROW_FLIGHT_SQL_PORT must be configured
+- Required Python packages: adbc_driver_manager, adbc_driver_flightsql
+- Arrow Flight SQL services must be running on FE and BE nodes
+""",
+        )
+        async def exec_adbc_query_tool(
+            sql: str,
+            max_rows: int = None,
+            timeout: int = None,
+            return_format: str = None
+        ) -> str:
+            """Execute SQL query using ADBC (Arrow Flight SQL) protocol"""
+            return await self.call_tool("exec_adbc_query", {
+                "sql": sql,
+                "max_rows": max_rows,
+                "timeout": timeout,
+                "return_format": return_format
+            })
+
+        # ADBC Connection Information Tool
+        @mcp.tool(
+            "get_adbc_connection_info",
+            description="""[Function Description]: Get ADBC (Arrow Flight SQL) connection information and status.
+
+[Parameter Content]:
+
+No parameters required. Returns connection status, configuration, and diagnostic information.
+""",
+        )
+        async def get_adbc_connection_info_tool() -> str:
+            """Get ADBC connection information and status"""
+            return await self.call_tool("get_adbc_connection_info", {})
+
+        logger.info("Successfully registered 23 tools to MCP server (14 basic + 7 advanced analytics + 2 ADBC tools)")
 
     async def list_tools(self) -> List[Tool]:
         """List all available query tools (for stdio mode)"""
+        # Get ADBC configuration defaults
+        adbc_config = self.connection_manager.config.adbc
+        
         tools = [
             Tool(
                 name="exec_query",
@@ -1167,6 +1226,50 @@ class DorisToolsManager:
                     },
                 },
             ),
+            # ==================== ADBC Query Tools ====================
+            Tool(
+                name="exec_adbc_query",
+                description=f"""[Function Description]: Execute SQL query using ADBC (Arrow Flight SQL) protocol for high-performance data transfer.
+
+[Parameter Content]:
+
+- sql (string) [Required] - SQL statement to execute
+- max_rows (integer) [Optional] - Maximum number of rows to return, default is {adbc_config.default_max_rows}
+- timeout (integer) [Optional] - Query timeout in seconds, default is {adbc_config.default_timeout}
+- return_format (string) [Optional] - Format for returned data, default is "{adbc_config.default_return_format}"
+  * "arrow": Return Arrow format with metadata
+  * "pandas": Return Pandas DataFrame format 
+  * "dict": Return dictionary format
+
+[Prerequisites]:
+- Environment variables FE_ARROW_FLIGHT_SQL_PORT and BE_ARROW_FLIGHT_SQL_PORT must be configured
+- Required Python packages: adbc_driver_manager, adbc_driver_flightsql
+- Arrow Flight SQL services must be running on FE and BE nodes
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string", "description": "SQL statement to execute"},
+                        "max_rows": {"type": "integer", "description": "Maximum number of rows to return", "default": adbc_config.default_max_rows},
+                        "timeout": {"type": "integer", "description": "Query timeout in seconds", "default": adbc_config.default_timeout},
+                        "return_format": {"type": "string", "enum": ["arrow", "pandas", "dict"], "description": "Format for returned data", "default": adbc_config.default_return_format},
+                    },
+                    "required": ["sql"],
+                },
+            ),
+            Tool(
+                name="get_adbc_connection_info",
+                description="""[Function Description]: Get ADBC (Arrow Flight SQL) connection information and status.
+
+[Parameter Content]:
+
+No parameters required. Returns connection status, configuration, and diagnostic information.
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
         ]
         
         return tools
@@ -1235,6 +1338,11 @@ class DorisToolsManager:
                 result = await self._analyze_slow_queries_topn_tool(arguments)
             elif name == "analyze_resource_growth_curves":
                 result = await self._analyze_resource_growth_curves_tool(arguments)
+            # ADBC Query Tools
+            elif name == "exec_adbc_query":
+                result = await self._exec_adbc_query_tool(arguments)
+            elif name == "get_adbc_connection_info":
+                result = await self._get_adbc_connection_info_tool(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
             
@@ -1433,8 +1541,8 @@ class DorisToolsManager:
         include_details = arguments.get("include_details", True)
         
         if data_type == "realtime":
-                # Only get real-time data
-                return await self.memory_tracker.get_realtime_memory_stats(
+            # Only get real-time data
+            return await self.memory_tracker.get_realtime_memory_stats(
                 tracker_type, include_details
             )
         elif data_type == "historical":
@@ -1652,3 +1760,22 @@ class DorisToolsManager:
         return await self.performance_analytics_tools.analyze_resource_growth_curves(
             days, resource_types, include_predictions, detailed_response
         )
+    
+    # ==================== ADBC Query Tools Private Methods ====================
+    
+    async def _exec_adbc_query_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """ADBC query execution tool routing"""
+        sql = arguments.get("sql")
+        max_rows = arguments.get("max_rows", 100000)
+        timeout = arguments.get("timeout", 60)
+        return_format = arguments.get("return_format", "arrow")
+        
+        # Delegate to ADBC query tools for processing
+        return await self.adbc_query_tools.exec_adbc_query(
+            sql, max_rows, timeout, return_format
+        )
+    
+    async def _get_adbc_connection_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """ADBC connection information tool routing"""
+        # Delegate to ADBC query tools for processing
+        return await self.adbc_query_tools.get_adbc_connection_info()
