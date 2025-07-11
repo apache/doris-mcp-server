@@ -34,6 +34,8 @@ import random
 import aiomysql
 from aiomysql import Connection, Pool
 
+from .logger import get_logger
+
 
 
 
@@ -71,7 +73,7 @@ class DorisConnection:
         self.query_count = 0
         self.is_healthy = True
         self.security_manager = security_manager
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     async def execute(self, sql: str, params: tuple | None = None, auth_context=None) -> QueryResult:
         """Execute SQL query"""
@@ -200,7 +202,7 @@ class DorisConnectionManager:
         self.config = config
         self.security_manager = security_manager
         self.pool: Pool | None = None
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.metrics = ConnectionMetrics()
         
         # Remove session-level connection management
@@ -712,7 +714,7 @@ class ConnectionPoolMonitor:
 
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     async def get_pool_status(self) -> dict[str, Any]:
         """Get connection pool status"""

@@ -34,6 +34,7 @@ from typing import Any, Dict
 from decimal import Decimal
 
 from .db import DorisConnectionManager, QueryResult
+from .logger import get_logger
 
 
 @dataclass
@@ -92,7 +93,7 @@ class QueryCache:
         self.max_size = max_size
         self.default_ttl = default_ttl
         self.cache: dict[str, CachedQuery] = {}
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def _generate_cache_key(
         self, sql: str, parameters: dict[str, Any] | None = None
@@ -194,7 +195,7 @@ class QueryOptimizer:
 
     def __init__(self, config):
         self.config = config
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.optimization_rules = self._load_optimization_rules()
 
     def _load_optimization_rules(self) -> list[dict[str, Any]]:
@@ -318,7 +319,7 @@ class DorisQueryExecutor:
     def __init__(self, connection_manager: DorisConnectionManager, config=None):
         self.connection_manager = connection_manager
         self.config = config or self._create_default_config()
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
         # Initialize components
         cache_config = getattr(self.config, 'performance', None)
@@ -746,7 +747,7 @@ class QueryPerformanceMonitor:
 
     def __init__(self, query_executor: DorisQueryExecutor):
         self.query_executor = query_executor
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
         self.performance_records = []
 
     async def record_query_performance(

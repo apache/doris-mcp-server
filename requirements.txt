@@ -5,6 +5,9 @@
 mcp>=1.8.0,<2.0.0
 aiomysql>=0.2.0
 PyMySQL>=1.1.0
+adbc-driver-manager>=0.8.0
+adbc-driver-flightsql>=0.8.0
+pyarrow>=14.0.0
 asyncio-mqtt>=0.16.0
 aiofiles>=23.0.0
 aiohttp>=3.9.0

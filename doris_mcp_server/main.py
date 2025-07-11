@@ -214,8 +214,7 @@ from .utils.db import DorisConnectionManager
 from .utils.security import DorisSecurityManager
 import os
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging - will be properly initialized later
 logger = logging.getLogger(__name__)
 
 # Create a default config instance for getting default values
@@ -240,7 +239,9 @@ class DorisServer:
         self.tools_manager = DorisToolsManager(self.connection_manager)
         self.prompts_manager = DorisPromptsManager(self.connection_manager)
 
-        self.logger = logging.getLogger(f"{__name__}.DorisServer")
+        # Import here to avoid circular imports
+        from .utils.logger import get_logger
+        self.logger = get_logger(f"{__name__}.DorisServer")
         self._setup_handlers()
 
     def _get_mcp_capabilities(self):
@@ -679,9 +680,6 @@ async def main():
     parser = create_arg_parser()
     args = parser.parse_args()
 
-    # Set log level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
-
     # Create configuration - priority: command line arguments > .env file > default values
     config = DorisConfig.from_env()  # First load from .env file and environment variables
     
@@ -698,6 +696,22 @@ async def main():
         config.database.database = args.db_database
     if args.log_level != _default_config.logging.level:
         config.logging.level = args.log_level
+
+    # Initialize enhanced logging system
+    from .utils.config import ConfigManager
+    config_manager = ConfigManager(config)
+    config_manager.setup_logging()
+    
+    # Get logger with proper configuration
+    from .utils.logger import get_logger, log_system_info
+    logger = get_logger(__name__)
+    
+    # Log system information for debugging
+    log_system_info()
+    
+    logger.info("Starting Doris MCP Server...")
+    logger.info(f"Transport: {args.transport}")
+    logger.info(f"Log Level: {config.logging.level}")
 
     # Create server instance
     server = DorisServer(config)
@@ -728,6 +742,10 @@ async def main():
             await server.shutdown()
         except Exception as shutdown_error:
             logger.error(f"Error occurred while shutting down server: {shutdown_error}")
+        
+        # Shutdown logging system
+        from .utils.logger import shutdown_logging
+        shutdown_logging()
 
     return 0
 

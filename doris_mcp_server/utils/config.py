@@ -32,6 +32,8 @@ try:
 except ImportError:
     load_dotenv = None
 
+from .logger import get_logger
+
 
 @dataclass
 class DatabaseConfig:
@@ -51,6 +53,10 @@ class DatabaseConfig:
     # If be_hosts is empty, will use "show backends" to get BE nodes
     be_hosts: list[str] = field(default_factory=list)
     be_webserver_port: int = 8040
+
+    # Arrow Flight SQL Configuration (Required for ADBC tools)
+    fe_arrow_flight_sql_port: int | None = None
+    be_arrow_flight_sql_port: int | None = None
 
     # Connection pool configuration
     # Note: min_connections is fixed at 0 to avoid at_eof connection issues
@@ -132,6 +138,22 @@ class PerformanceConfig:
 
 
 @dataclass
+class ADBCConfig:
+    """ADBC (Arrow Flight SQL) configuration"""
+
+    # Default query parameters
+    default_max_rows: int = 100000
+    default_timeout: int = 60
+    default_return_format: str = "arrow"  # "arrow", "pandas", "dict"
+    
+    # Connection timeout for ADBC
+    connection_timeout: int = 30
+    
+    # Whether to enable ADBC tools
+    enabled: bool = True
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration"""
 
@@ -144,6 +166,11 @@ class LoggingConfig:
     # Audit log configuration
     enable_audit: bool = True
     audit_file_path: str | None = None
+    
+    # Log cleanup configuration
+    enable_cleanup: bool = True
+    max_age_days: int = 30
+    cleanup_interval_hours: int = 24
 
 
 @dataclass
@@ -183,6 +210,7 @@ class DorisConfig:
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
+    adbc: ADBCConfig = field(default_factory=ADBCConfig)
 
     # Custom configuration
     custom_config: dict[str, Any] = field(default_factory=dict)
@@ -253,6 +281,15 @@ class DorisConfig:
         if be_hosts_env:
             config.database.be_hosts = [host.strip() for host in be_hosts_env.split(",") if host.strip()]
         config.database.be_webserver_port = int(os.getenv("DORIS_BE_WEBSERVER_PORT", str(config.database.be_webserver_port)))
+        
+        # Arrow Flight SQL Configuration
+        fe_arrow_port_env = os.getenv("FE_ARROW_FLIGHT_SQL_PORT")
+        if fe_arrow_port_env:
+            config.database.fe_arrow_flight_sql_port = int(fe_arrow_port_env)
+        
+        be_arrow_port_env = os.getenv("BE_ARROW_FLIGHT_SQL_PORT")
+        if be_arrow_port_env:
+            config.database.be_arrow_flight_sql_port = int(be_arrow_port_env)
 
         # Connection pool configuration
         config.database.max_connections = int(
@@ -327,6 +364,15 @@ class DorisConfig:
             os.getenv("ENABLE_AUDIT", str(config.logging.enable_audit).lower()).lower() == "true"
         )
         config.logging.audit_file_path = os.getenv("AUDIT_FILE_PATH", config.logging.audit_file_path)
+        config.logging.enable_cleanup = (
+            os.getenv("ENABLE_LOG_CLEANUP", str(config.logging.enable_cleanup).lower()).lower() == "true"
+        )
+        config.logging.max_age_days = int(
+            os.getenv("LOG_MAX_AGE_DAYS", str(config.logging.max_age_days))
+        )
+        config.logging.cleanup_interval_hours = int(
+            os.getenv("LOG_CLEANUP_INTERVAL_HOURS", str(config.logging.cleanup_interval_hours))
+        )
 
         # Monitoring configuration
         config.monitoring.enable_metrics = (
@@ -342,6 +388,21 @@ class DorisConfig:
             os.getenv("ENABLE_ALERTS", str(config.monitoring.enable_alerts).lower()).lower() == "true"
         )
         config.monitoring.alert_webhook_url = os.getenv("ALERT_WEBHOOK_URL", config.monitoring.alert_webhook_url)
+
+        # ADBC configuration
+        config.adbc.default_max_rows = int(
+            os.getenv("ADBC_DEFAULT_MAX_ROWS", str(config.adbc.default_max_rows))
+        )
+        config.adbc.default_timeout = int(
+            os.getenv("ADBC_DEFAULT_TIMEOUT", str(config.adbc.default_timeout))
+        )
+        config.adbc.default_return_format = os.getenv("ADBC_DEFAULT_RETURN_FORMAT", config.adbc.default_return_format)
+        config.adbc.connection_timeout = int(
+            os.getenv("ADBC_CONNECTION_TIMEOUT", str(config.adbc.connection_timeout))
+        )
+        config.adbc.enabled = (
+            os.getenv("ADBC_ENABLED", str(config.adbc.enabled).lower()).lower() == "true"
+        )
 
         # Server configuration
         config.server_name = os.getenv("SERVER_NAME", config.server_name)
@@ -396,6 +457,13 @@ class DorisConfig:
                 if hasattr(config.monitoring, key):
                     setattr(config.monitoring, key, value)
 
+        # Update ADBC configuration
+        if "adbc" in config_data:
+            adbc_config = config_data["adbc"]
+            for key, value in adbc_config.items():
+                if hasattr(config.adbc, key):
+                    setattr(config.adbc, key, value)
+
         # Custom configuration
         config.custom_config = config_data.get("custom", {})
 
@@ -418,6 +486,8 @@ class DorisConfig:
                 "fe_http_port": self.database.fe_http_port,
                 "be_hosts": self.database.be_hosts,
                 "be_webserver_port": self.database.be_webserver_port,
+                "fe_arrow_flight_sql_port": self.database.fe_arrow_flight_sql_port,
+                "be_arrow_flight_sql_port": self.database.be_arrow_flight_sql_port,
                 "min_connections": self.database.min_connections,  # Always 0, shown for reference
                 "max_connections": self.database.max_connections,
                 "connection_timeout": self.database.connection_timeout,
@@ -454,6 +524,9 @@ class DorisConfig:
                 "backup_count": self.logging.backup_count,
                 "enable_audit": self.logging.enable_audit,
                 "audit_file_path": self.logging.audit_file_path,
+                "enable_cleanup": self.logging.enable_cleanup,
+                "max_age_days": self.logging.max_age_days,
+                "cleanup_interval_hours": self.logging.cleanup_interval_hours,
             },
             "monitoring": {
                 "enable_metrics": self.monitoring.enable_metrics,
@@ -463,6 +536,13 @@ class DorisConfig:
                 "health_check_path": self.monitoring.health_check_path,
                 "enable_alerts": self.monitoring.enable_alerts,
                 "alert_webhook_url": self.monitoring.alert_webhook_url,
+            },
+            "adbc": {
+                "default_max_rows": self.adbc.default_max_rows,
+                "default_timeout": self.adbc.default_timeout,
+                "default_return_format": self.adbc.default_return_format,
+                "connection_timeout": self.adbc.connection_timeout,
+                "enabled": self.adbc.enabled,
             },
             "custom": self.custom_config,
         }
@@ -531,6 +611,12 @@ class DorisConfig:
 
         if self.logging.backup_count < 0:
             errors.append("Log backup count cannot be negative")
+        
+        if self.logging.max_age_days <= 0:
+            errors.append("Log max age days must be greater than 0")
+        
+        if self.logging.cleanup_interval_hours <= 0:
+            errors.append("Log cleanup interval hours must be greater than 0")
 
         # Validate monitoring configuration
         if not (1 <= self.monitoring.metrics_port <= 65535):
@@ -538,6 +624,19 @@ class DorisConfig:
 
         if not (1 <= self.monitoring.health_check_port <= 65535):
             errors.append("Health check port must be in the range 1-65535")
+
+        # Validate ADBC configuration
+        if self.adbc.default_max_rows <= 0:
+            errors.append("ADBC default max rows must be greater than 0")
+
+        if self.adbc.default_timeout <= 0:
+            errors.append("ADBC default timeout must be greater than 0")
+
+        if self.adbc.default_return_format not in ["arrow", "pandas", "dict"]:
+            errors.append("ADBC default return format must be one of arrow, pandas, or dict")
+
+        if self.adbc.connection_timeout <= 0:
+            errors.append("ADBC connection timeout must be greater than 0")
 
         return errors
 
@@ -576,56 +675,50 @@ class ConfigManager:
         self.logger = logging.getLogger(__name__)
 
     def setup_logging(self):
-        """Setup logging configuration"""
-        # Configure root logger
-        root_logger = logging.getLogger()
-        root_logger.setLevel(getattr(logging, self.config.logging.level.upper()))
-
-        # Clear existing handlers
-        for handler in root_logger.handlers[:]:
-            root_logger.removeHandler(handler)
-
-        # Create formatter
-        formatter = logging.Formatter(self.config.logging.format)
-
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setFormatter(formatter)
-        root_logger.addHandler(console_handler)
-
-        # File handler (if configured)
+        """Setup logging configuration using enhanced logger"""
+        from .logger import setup_logging, get_logger
+        import sys
+        
+        # Determine log directory
+        log_dir = "logs"
         if self.config.logging.file_path:
-            try:
-                from logging.handlers import RotatingFileHandler
-
-                file_handler = RotatingFileHandler(
-                    self.config.logging.file_path,
-                    maxBytes=self.config.logging.max_file_size,
-                    backupCount=self.config.logging.backup_count,
-                    encoding="utf-8",
-                )
-                file_handler.setFormatter(formatter)
-                root_logger.addHandler(file_handler)
-            except Exception as e:
-                self.logger.warning(f"Failed to setup file logging: {e}")
-
-        # Audit log handler (if configured)
-        if self.config.logging.enable_audit and self.config.logging.audit_file_path:
-            try:
-                from logging.handlers import RotatingFileHandler
-
-                audit_logger = logging.getLogger("audit")
-                audit_handler = RotatingFileHandler(
-                    self.config.logging.audit_file_path,
-                    maxBytes=self.config.logging.max_file_size,
-                    backupCount=self.config.logging.backup_count,
-                    encoding="utf-8",
-                )
-                audit_handler.setFormatter(formatter)
-                audit_logger.addHandler(audit_handler)
-                audit_logger.setLevel(logging.INFO)
-            except Exception as e:
-                self.logger.warning(f"Failed to setup audit logging: {e}")
+            # Extract directory from file path if provided
+            from pathlib import Path
+            log_dir = str(Path(self.config.logging.file_path).parent)
+        
+        # Detect if we're in stdio mode by checking if this is likely MCP stdio communication
+        # In stdio mode, we shouldn't output to console as it interferes with JSON protocol
+        is_stdio_mode = (
+            self.config.transport == "stdio" or 
+            "--transport" in sys.argv and "stdio" in sys.argv or
+            not sys.stdout.isatty()  # Not a terminal (likely piped/redirected)
+        )
+        
+        # Setup enhanced logging with cleanup functionality
+        setup_logging(
+            level=self.config.logging.level,
+            log_dir=log_dir,
+            enable_console=not is_stdio_mode,  # Disable console logging in stdio mode
+            enable_file=True,
+            enable_audit=self.config.logging.enable_audit,
+            audit_file=self.config.logging.audit_file_path,
+            max_file_size=self.config.logging.max_file_size,
+            backup_count=self.config.logging.backup_count,
+            enable_cleanup=self.config.logging.enable_cleanup,
+            max_age_days=self.config.logging.max_age_days,
+            cleanup_interval_hours=self.config.logging.cleanup_interval_hours
+        )
+        
+        # Update logger to use new system
+        self.logger = get_logger(__name__)
+        
+        self.logger.info("Enhanced logging system with cleanup initialized successfully")
+        self.logger.info(f"Log directory: {log_dir}")
+        self.logger.info(f"Log level: {self.config.logging.level}")
+        self.logger.info(f"Audit logging: {'Enabled' if self.config.logging.enable_audit else 'Disabled'}")
+        self.logger.info(f"Log cleanup: {'Enabled' if self.config.logging.enable_cleanup else 'Disabled'}")
+        if self.config.logging.enable_cleanup:
+            self.logger.info(f"Cleanup config: Max age {self.config.logging.max_age_days} days, interval {self.config.logging.cleanup_interval_hours}h")
 
     def validate_config(self) -> bool:
         """Validate configuration"""
