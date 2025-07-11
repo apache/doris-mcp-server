@@ -677,6 +677,7 @@ class ConfigManager:
     def setup_logging(self):
         """Setup logging configuration using enhanced logger"""
         from .logger import setup_logging, get_logger
+        import sys
         
         # Determine log directory
         log_dir = "logs"
@@ -685,11 +686,19 @@ class ConfigManager:
             from pathlib import Path
             log_dir = str(Path(self.config.logging.file_path).parent)
         
+        # Detect if we're in stdio mode by checking if this is likely MCP stdio communication
+        # In stdio mode, we shouldn't output to console as it interferes with JSON protocol
+        is_stdio_mode = (
+            self.config.transport == "stdio" or 
+            "--transport" in sys.argv and "stdio" in sys.argv or
+            not sys.stdout.isatty()  # Not a terminal (likely piped/redirected)
+        )
+        
         # Setup enhanced logging with cleanup functionality
         setup_logging(
             level=self.config.logging.level,
             log_dir=log_dir,
-            enable_console=True,
+            enable_console=not is_stdio_mode,  # Disable console logging in stdio mode
             enable_file=True,
             enable_audit=self.config.logging.enable_audit,
             audit_file=self.config.logging.audit_file_path,
