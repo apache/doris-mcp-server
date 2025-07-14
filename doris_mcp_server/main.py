@@ -618,6 +618,11 @@ Transport Modes:
 Examples:
   python -m doris_mcp_server --transport stdio
   python -m doris_mcp_server --transport http --host 0.0.0.0 --port 3000
+  python -m doris_mcp_server --transport stdio --doris-host localhost --doris-port 9030
+  python -m doris_mcp_server --transport http --doris-user admin --doris-database test_db
+  
+  # Backward compatibility: --db-* parameters are also supported
+  python -m doris_mcp_server --transport stdio --db-host localhost --db-port 9030
         """
     )
 
@@ -641,26 +646,26 @@ Examples:
     )
 
     parser.add_argument(
-        "--db-host",
+        "--doris-host", "--db-host",
         type=str,
-        default=os.getenv("DB_HOST", _default_config.database.host),
+        default=os.getenv("DORIS_HOST", _default_config.database.host),
         help=f"Doris database host address (default: {_default_config.database.host})",
     )
 
     parser.add_argument(
-        "--db-port", type=int, default=os.getenv("DB_PORT", _default_config.database.port), help=f"Doris database port number (default: {_default_config.database.port})"
+        "--doris-port", "--db-port", type=int, default=os.getenv("DORIS_PORT", _default_config.database.port), help=f"Doris database port number (default: {_default_config.database.port})"
     )
 
     parser.add_argument(
-        "--db-user", type=str, default=os.getenv("DB_USER", _default_config.database.user), help=f"Doris database username (default: {_default_config.database.user})"
+        "--doris-user", "--db-user", type=str, default=os.getenv("DORIS_USER", _default_config.database.user), help=f"Doris database username (default: {_default_config.database.user})"
     )
 
-    parser.add_argument("--db-password", type=str, default="", help="Doris database password")
+    parser.add_argument("--doris-password", "--db-password", type=str, default=os.getenv("DORIS_PASSWORD", ""), help="Doris database password")
 
     parser.add_argument(
-        "--db-database",
+        "--doris-database", "--db-database",
         type=str,
-        default=os.getenv("DB_DATABASE", _default_config.database.database),
+        default=os.getenv("DORIS_DATABASE", _default_config.database.database),
         help=f"Doris database name (default: {_default_config.database.database})",
     )
 
@@ -684,16 +689,19 @@ async def main():
     config = DorisConfig.from_env()  # First load from .env file and environment variables
     
     # Command line arguments override configuration (if provided)
-    if args.db_host != _default_config.database.host:  # If not default value, use command line argument
-        config.database.host = args.db_host
-    if args.db_port != _default_config.database.port:
-        config.database.port = args.db_port
-    if args.db_user != _default_config.database.user:
-        config.database.user = args.db_user
-    if args.db_password:  # Use password if provided
-        config.database.password = args.db_password
-    if args.db_database != _default_config.database.database:
-        config.database.database = args.db_database
+    # 🔧 FIX: Set transport from command line arguments
+    config.transport = args.transport
+    
+    if args.doris_host != _default_config.database.host:  # If not default value, use command line argument
+        config.database.host = args.doris_host
+    if args.doris_port != _default_config.database.port:
+        config.database.port = args.doris_port
+    if args.doris_user != _default_config.database.user:
+        config.database.user = args.doris_user
+    if args.doris_password:  # Use password if provided
+        config.database.password = args.doris_password
+    if args.doris_database != _default_config.database.database:
+        config.database.database = args.doris_database
     if args.log_level != _default_config.logging.level:
         config.logging.level = args.log_level
 

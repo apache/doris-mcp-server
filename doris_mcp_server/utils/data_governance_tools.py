@@ -59,29 +59,57 @@ class DataGovernanceTools:
         """
         try:
             start_time = time.time()
+            
+            # 🚀 PROGRESS: Initialize column lineage tracing
+            logger.info("=" * 60)
+            logger.info(f"🔍 Starting Column Lineage Tracing")
+            logger.info(f"📊 Target: {table_name}.{column_name}")
+            logger.info(f"🎯 Trace depth: {depth}")
+            logger.info("=" * 60)
+            
             connection = await self.connection_manager.get_connection("query")
             
             full_table_name = self._build_full_table_name(table_name, catalog_name, db_name)
             target_column = f"{full_table_name}.{column_name}"
             
-            # 1. Verify target column exists
+            logger.info(f"📝 Full target: {target_column}")
+            
+            # 🚀 PROGRESS: Step 1 - Verify target column exists
+            logger.info("🔍 Step 1/4: Verifying target column exists...")
+            verify_start = time.time()
             if not await self._verify_column_exists(connection, full_table_name, column_name):
+                logger.error(f"❌ Column {column_name} not found in table {full_table_name}")
                 return {"error": f"Column {column_name} not found in table {full_table_name}"}
             
-            # 2. Analyze SQL logs to get lineage relationships
+            verify_time = time.time() - verify_start
+            logger.info(f"✅ Column verified in {verify_time:.2f}s")
+            
+            # 🚀 PROGRESS: Step 2 - Analyze SQL logs for lineage relationships
+            logger.info(f"📊 Step 2/4: Analyzing SQL logs for lineage (depth={depth})...")
+            lineage_start = time.time()
             source_chain = await self._analyze_sql_logs_for_lineage(
                 connection, full_table_name, column_name, depth
             )
+            lineage_time = time.time() - lineage_start
+            logger.info(f"✅ Found {len(source_chain)} lineage relationships in {lineage_time:.2f}s")
             
-            # 3. Analyze downstream usage
+            # 🚀 PROGRESS: Step 3 - Analyze downstream usage
+            logger.info("⬇️ Step 3/4: Analyzing downstream column usage...")
+            downstream_start = time.time()
             downstream_usage = await self._analyze_downstream_column_usage(
                 connection, full_table_name, column_name
             )
+            downstream_time = time.time() - downstream_start
+            logger.info(f"✅ Found {len(downstream_usage)} downstream usages in {downstream_time:.2f}s")
             
-            # 4. Analyze field transformation rules
+            # 🚀 PROGRESS: Step 4 - Extract transformation rules
+            logger.info("🔄 Step 4/4: Extracting transformation rules...")
+            transform_start = time.time()
             transformation_rules = await self._extract_transformation_rules(
                 connection, full_table_name, column_name
             )
+            transform_time = time.time() - transform_start
+            logger.info(f"✅ Found {len(transformation_rules)} transformation rules in {transform_time:.2f}s")
             
             execution_time = time.time() - start_time
             

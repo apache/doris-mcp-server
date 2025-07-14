@@ -138,6 +138,33 @@ class PerformanceConfig:
 
 
 @dataclass
+class DataQualityConfig:
+    """Data quality analysis configuration"""
+
+    # Column analysis configuration
+    max_columns_per_batch: int = 20  # Maximum columns to analyze in a single batch
+    default_sample_size: int = 100000  # Default sample size for analysis
+    
+    # Sampling strategy configuration
+    small_table_threshold: int = 100000  # Tables smaller than this use full table analysis
+    medium_table_threshold: int = 1000000  # Tables smaller than this use simple LIMIT sampling
+    # Tables larger than medium_table_threshold use systematic sampling
+    
+    # Performance optimization
+    enable_batch_analysis: bool = True  # Enable batch analysis for multiple columns
+    batch_timeout: int = 300  # Timeout for batch analysis in seconds
+    
+    # Accuracy vs Performance trade-off
+    enable_fast_mode: bool = False  # Use approximate algorithms for faster results
+    fast_mode_sample_size: int = 10000  # Sample size for fast mode
+    
+    # Statistical analysis configuration
+    enable_distribution_analysis: bool = True  # Enable distribution analysis
+    histogram_bins: int = 20  # Number of bins for histogram analysis
+    percentile_levels: list[float] = field(default_factory=lambda: [0.25, 0.5, 0.75, 0.95, 0.99])  # Percentile levels to calculate
+
+
+@dataclass
 class ADBCConfig:
     """ADBC (Arrow Flight SQL) configuration"""
 
@@ -208,6 +235,7 @@ class DorisConfig:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
+    data_quality: DataQualityConfig = field(default_factory=DataQualityConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     adbc: ADBCConfig = field(default_factory=ADBCConfig)
@@ -404,6 +432,38 @@ class DorisConfig:
             os.getenv("ADBC_ENABLED", str(config.adbc.enabled).lower()).lower() == "true"
         )
 
+        # Data quality configuration
+        config.data_quality.max_columns_per_batch = int(
+            os.getenv("DATA_QUALITY_MAX_COLUMNS_PER_BATCH", str(config.data_quality.max_columns_per_batch))
+        )
+        config.data_quality.default_sample_size = int(
+            os.getenv("DATA_QUALITY_DEFAULT_SAMPLE_SIZE", str(config.data_quality.default_sample_size))
+        )
+        config.data_quality.small_table_threshold = int(
+            os.getenv("DATA_QUALITY_SMALL_TABLE_THRESHOLD", str(config.data_quality.small_table_threshold))
+        )
+        config.data_quality.medium_table_threshold = int(
+            os.getenv("DATA_QUALITY_MEDIUM_TABLE_THRESHOLD", str(config.data_quality.medium_table_threshold))
+        )
+        config.data_quality.enable_batch_analysis = (
+            os.getenv("DATA_QUALITY_ENABLE_BATCH_ANALYSIS", str(config.data_quality.enable_batch_analysis).lower()).lower() == "true"
+        )
+        config.data_quality.batch_timeout = int(
+            os.getenv("DATA_QUALITY_BATCH_TIMEOUT", str(config.data_quality.batch_timeout))
+        )
+        config.data_quality.enable_fast_mode = (
+            os.getenv("DATA_QUALITY_ENABLE_FAST_MODE", str(config.data_quality.enable_fast_mode).lower()).lower() == "true"
+        )
+        config.data_quality.fast_mode_sample_size = int(
+            os.getenv("DATA_QUALITY_FAST_MODE_SAMPLE_SIZE", str(config.data_quality.fast_mode_sample_size))
+        )
+        config.data_quality.enable_distribution_analysis = (
+            os.getenv("DATA_QUALITY_ENABLE_DISTRIBUTION_ANALYSIS", str(config.data_quality.enable_distribution_analysis).lower()).lower() == "true"
+        )
+        config.data_quality.histogram_bins = int(
+            os.getenv("DATA_QUALITY_HISTOGRAM_BINS", str(config.data_quality.histogram_bins))
+        )
+
         # Server configuration
         config.server_name = os.getenv("SERVER_NAME", config.server_name)
         config.server_version = os.getenv("SERVER_VERSION", config.server_version)
@@ -442,6 +502,13 @@ class DorisConfig:
             for key, value in perf_config.items():
                 if hasattr(config.performance, key):
                     setattr(config.performance, key, value)
+
+        # Update data quality configuration
+        if "data_quality" in config_data:
+            dq_config = config_data["data_quality"]
+            for key, value in dq_config.items():
+                if hasattr(config.data_quality, key):
+                    setattr(config.data_quality, key, value)
 
         # Update logging configuration
         if "logging" in config_data:
@@ -515,6 +582,19 @@ class DorisConfig:
                 "connection_pool_size": self.performance.connection_pool_size,
                 "idle_timeout": self.performance.idle_timeout,
                 "max_response_content_size": self.performance.max_response_content_size,
+            },
+            "data_quality": {
+                "max_columns_per_batch": self.data_quality.max_columns_per_batch,
+                "default_sample_size": self.data_quality.default_sample_size,
+                "small_table_threshold": self.data_quality.small_table_threshold,
+                "medium_table_threshold": self.data_quality.medium_table_threshold,
+                "enable_batch_analysis": self.data_quality.enable_batch_analysis,
+                "batch_timeout": self.data_quality.batch_timeout,
+                "enable_fast_mode": self.data_quality.enable_fast_mode,
+                "fast_mode_sample_size": self.data_quality.fast_mode_sample_size,
+                "enable_distribution_analysis": self.data_quality.enable_distribution_analysis,
+                "histogram_bins": self.data_quality.histogram_bins,
+                "percentile_levels": self.data_quality.percentile_levels,
             },
             "logging": {
                 "level": self.logging.level,
@@ -601,6 +681,31 @@ class DorisConfig:
 
         if self.performance.query_timeout <= 0:
             errors.append("Query timeout must be greater than 0")
+
+        # Validate data quality configuration
+        if self.data_quality.max_columns_per_batch <= 0:
+            errors.append("Max columns per batch must be greater than 0")
+
+        if self.data_quality.default_sample_size <= 0:
+            errors.append("Default sample size must be greater than 0")
+
+        if self.data_quality.small_table_threshold <= 0:
+            errors.append("Small table threshold must be greater than 0")
+
+        if self.data_quality.medium_table_threshold <= 0:
+            errors.append("Medium table threshold must be greater than 0")
+
+        if self.data_quality.small_table_threshold >= self.data_quality.medium_table_threshold:
+            errors.append("Small table threshold must be less than medium table threshold")
+
+        if self.data_quality.batch_timeout <= 0:
+            errors.append("Batch timeout must be greater than 0")
+
+        if self.data_quality.fast_mode_sample_size <= 0:
+            errors.append("Fast mode sample size must be greater than 0")
+
+        if self.data_quality.histogram_bins <= 0:
+            errors.append("Histogram bins must be greater than 0")
 
         # Validate logging configuration
         if self.logging.level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
