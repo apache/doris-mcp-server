@@ -175,7 +175,7 @@ class DorisConnection:
                     self.logger.debug(f"Connection {self.session_id} ping failed: {query_error}")
                 self.is_healthy = False
                 return False
-                
+            
         except Exception as e:
             # Catch any other unexpected errors
             self.logger.debug(f"Connection {self.session_id} ping failed with unexpected error: {e}")
@@ -192,33 +192,35 @@ class DorisConnection:
 
 
 class DorisConnectionManager:
-    """Doris database connection manager - Simplified Strategy
+    """Doris database connection manager - Enhanced Strategy
 
-    Uses direct connection pool management without session-level caching
+    Uses direct connection pool management with proper synchronization
     Implements connection pool health monitoring and proactive cleanup
     """
 
     def __init__(self, config, security_manager=None):
         self.config = config
-        self.security_manager = security_manager
         self.pool: Pool | None = None
         self.logger = get_logger(__name__)
-        self.metrics = ConnectionMetrics()
-        
-        # Remove session-level connection management
-        # self.session_connections = {}  # REMOVED
-        
-        # Pool health monitoring
-        self.health_check_interval = 30  # seconds
-        self.pool_warmup_size = 3  # connections to maintain
+        self.security_manager = security_manager
+
+        # Connection pool state management
+        self.pool_recovering = False
         self.pool_health_check_task = None
         self.pool_cleanup_task = None
         
-        # Pool recovery lock to prevent race conditions
-        self.pool_recovery_lock = asyncio.Lock()
-        self.pool_recovering = False
+        # Metrics tracking
+        self.metrics = ConnectionMetrics()
+        
+        # 🔧 FIX: Add connection acquisition lock to prevent race conditions
+        self._connection_lock = asyncio.Lock()
+        self._recovery_lock = asyncio.Lock()
+        
+        # 🔧 FIX: Add connection acquisition queue to serialize requests
+        self._connection_semaphore = asyncio.Semaphore(value=20)  # Max concurrent acquisitions
         
         # Database connection parameters from config.database
+        self.pool_recovery_lock = self._recovery_lock  # Compatibility alias
         self.host = config.database.host
         self.port = config.database.port
         self.user = config.database.user
@@ -231,8 +233,12 @@ class DorisConnectionManager:
         
         # Connection pool parameters - more conservative settings
         self.minsize = config.database.min_connections  # This is always 0
-        self.maxsize = config.database.max_connections or 10
+        self.maxsize = config.database.max_connections or 20
         self.pool_recycle = config.database.max_connection_age or 3600  # 1 hour, more conservative
+        
+        # 🔧 FIX: Add missing monitoring parameters that were removed during refactoring
+        self.health_check_interval = 30  # seconds
+        self.pool_warmup_size = 3  # connections to maintain
 
     async def initialize(self):
         """Initialize connection pool with health monitoring"""
@@ -257,7 +263,7 @@ class DorisConnectionManager:
             # Test initial connection
             if not await self._test_pool_health():
                 raise RuntimeError("Connection pool health check failed")
-            
+
             # Start background monitoring tasks
             self.pool_health_check_task = asyncio.create_task(self._pool_health_monitor())
             self.pool_cleanup_task = asyncio.create_task(self._pool_cleanup_monitor())
@@ -307,7 +313,7 @@ class DorisConnectionManager:
                     self.logger.warning(f"Failed to release warmup connection: {e}")
             
             self.logger.info(f"✅ Pool warmup completed, {len(warmup_connections)} connections created")
-            
+
         except Exception as e:
             self.logger.error(f"Pool warmup failed: {e}")
             # Clean up any remaining connections
@@ -505,78 +511,119 @@ class DorisConnectionManager:
                 
             finally:
                 self.pool_recovering = False
+    
+    async def _recover_pool_with_lock(self):
+        """🔧 FIX: Recovery method that uses the new recovery lock to prevent races"""
+        async with self._recovery_lock:
+            if not self.pool_recovering:  # Only recover if not already in progress
+                await self._recover_pool()
 
     async def get_connection(self, session_id: str) -> DorisConnection:
-        """Get database connection - Simplified Strategy with pool validation
+        """🔧 FIX: Simplified connection acquisition without double locking
         
-        Always acquire fresh connection from pool, no session caching
+        Uses only semaphore to prevent too many concurrent acquisitions
         """
-        try:
-            # Wait for any ongoing recovery to complete
-            if self.pool_recovering:
-                self.logger.debug(f"Pool recovery in progress, waiting for completion...")
-                # Wait for recovery to complete (max 10 seconds)
-                for _ in range(10):
-                    if not self.pool_recovering:
-                        break
-                    await asyncio.sleep(0.5)
-                
+        # 🔧 FIX: Use only semaphore to limit concurrent acquisitions (remove double locking)
+        async with self._connection_semaphore:
+            try:
+                # Wait for any ongoing recovery to complete
                 if self.pool_recovering:
-                    self.logger.error("Pool recovery is taking too long, proceeding anyway")
-                    # Don't raise error, try to continue
-            
-            # Check if pool is available
-            if not self.pool:
-                self.logger.warning("Connection pool is not available, attempting recovery...")
-                await self._recover_pool()
+                    self.logger.debug(f"Pool recovery in progress, waiting for completion...")
+                    # Wait for recovery to complete (max 10 seconds)
+                    start_wait = time.time()
+                    while self.pool_recovering and (time.time() - start_wait) < 10:
+                        await asyncio.sleep(0.1)  # More frequent checks
+                    
+                    if self.pool_recovering:
+                        self.logger.error("Pool recovery is taking too long, proceeding anyway")
+                        # Continue but log the issue
                 
+                # Check if pool is available
                 if not self.pool:
-                    raise RuntimeError("Connection pool is not available and recovery failed")
-            
-            # Check if pool is closed
-            if self.pool.closed:
-                self.logger.warning("Connection pool is closed, attempting recovery...")
-                await self._recover_pool()
+                    self.logger.warning("Connection pool is not available, attempting recovery...")
+                    await self._recover_pool_with_lock()
+                    
+                    if not self.pool:
+                        raise RuntimeError("Connection pool is not available and recovery failed")
                 
-                if not self.pool or self.pool.closed:
-                    raise RuntimeError("Connection pool is closed and recovery failed")
-            
-            # Simple strategy: always get fresh connection from pool
-            raw_conn = await self.pool.acquire()
-            
-            # Wrap in DorisConnection
-            doris_conn = DorisConnection(raw_conn, session_id, self.security_manager)
-            
-            # Simple validation - just check if connection is open
-            if raw_conn.closed:
-                raise RuntimeError("Acquired connection is already closed")
-            
-            self.logger.debug(f"✅ Acquired fresh connection for session {session_id}")
-            return doris_conn
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get connection for session {session_id}: {e}")
-            raise
+                # Check if pool is closed
+                if self.pool.closed:
+                    self.logger.warning("Connection pool is closed, attempting recovery...")
+                    await self._recover_pool_with_lock()
+                    
+                    if not self.pool or self.pool.closed:
+                        raise RuntimeError("Connection pool is closed and recovery failed")
+                
+                # 🔧 FIX: Increased timeout to prevent hanging
+                try:
+                    raw_conn = await asyncio.wait_for(self.pool.acquire(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self.logger.error(f"Connection acquisition timed out for session {session_id}")
+                    # Try one recovery attempt
+                    await self._recover_pool_with_lock()
+                    if self.pool and not self.pool.closed:
+                        try:
+                            raw_conn = await asyncio.wait_for(self.pool.acquire(), timeout=5.0)
+                        except asyncio.TimeoutError:
+                            raise RuntimeError("Connection acquisition timed out after recovery")
+                    else:
+                        raise RuntimeError("Connection acquisition timed out")
+                
+                # Wrap in DorisConnection
+                doris_conn = DorisConnection(raw_conn, session_id, self.security_manager)
+                
+                # Basic validation - check if connection is open
+                if raw_conn.closed:
+                    # Return connection and raise error
+                    try:
+                        self.pool.release(raw_conn)
+                    except Exception:
+                        pass
+                    raise RuntimeError("Acquired connection is already closed")
+                
+                self.logger.debug(f"✅ Acquired fresh connection for session {session_id}")
+                return doris_conn
+                
+            except Exception as e:
+                self.logger.error(f"Failed to get connection for session {session_id}: {e}")
+                raise
 
     async def release_connection(self, session_id: str, connection: DorisConnection):
-        """Release connection back to pool - Simplified Strategy"""
-        try:
-            if connection and connection.connection:
-                # Simple strategy: always return to pool
-                if not connection.connection.closed:
-                    self.pool.release(connection.connection)
-                    self.logger.debug(f"✅ Released connection for session {session_id}")
-                else:
-                    self.logger.debug(f"Connection already closed for session {session_id}")
+        """🔧 FIX: Release connection back to pool with proper error handling"""
+        if not connection or not connection.connection:
+            self.logger.debug(f"No connection to release for session {session_id}")
+            return
             
+        try:
+            # Check pool availability before attempting release
+            if not self.pool or self.pool.closed:
+                self.logger.warning(f"Pool unavailable during release for session {session_id}, force closing connection")
+                try:
+                    await connection.connection.ensure_closed()
+                except Exception:
+                    pass
+                return
+            
+            # Check connection state before release
+            if connection.connection.closed:
+                self.logger.debug(f"Connection already closed for session {session_id}")
+                return
+            
+            # 🔧 FIX: Simplified release operation without thread wrapper
+            try:
+                self.pool.release(connection.connection)
+                self.logger.debug(f"✅ Released connection for session {session_id}")
+            except Exception as release_error:
+                self.logger.warning(f"Connection release failed for session {session_id}: {release_error}, force closing")
+                await connection.connection.ensure_closed()
+
         except Exception as e:
             self.logger.error(f"Error releasing connection for session {session_id}: {e}")
             # Force close if release fails
             try:
-                if connection and connection.connection:
-                    await connection.connection.ensure_closed()
-            except Exception:
-                pass
+                await connection.connection.ensure_closed()
+            except Exception as close_error:
+                self.logger.debug(f"Error force closing connection: {close_error}")
 
     async def close(self):
         """Close connection manager"""

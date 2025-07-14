@@ -61,7 +61,7 @@ class DorisToolsManager:
         # Initialize v0.5.0 advanced analytics tools
         self.data_governance_tools = DataGovernanceTools(connection_manager)
         self.data_exploration_tools = DataExplorationTools(connection_manager)
-        self.data_quality_tools = DataQualityTools(connection_manager)
+        self.data_quality_tools = DataQualityTools(connection_manager, connection_manager.config)
         self.security_analytics_tools = SecurityAnalyticsTools(connection_manager)
         self.dependency_analysis_tools = DependencyAnalysisTools(connection_manager)
         self.performance_analytics_tools = PerformanceAnalyticsTools(connection_manager)
@@ -464,41 +464,87 @@ class DorisToolsManager:
         
         # 🔄 Unified Data Quality Analysis Tool (New in v0.5.0)
         @mcp.tool(
-            "analyze_data_quality",
-            description="""[Function Description]: Comprehensive data quality analysis combining completeness and distribution analysis.
+            "get_table_basic_info",
+            description="""[Function Description]: Get basic information about a table including row count, column count, partitions, and size.
 
 [Parameter Content]:
 
 - table_name (string) [Required] - Name of the table to analyze
-- analysis_scope (string) [Optional] - Analysis scope, default is "comprehensive"
-  * "completeness": Only completeness analysis (null rates, business rules)
-  * "distribution": Only distribution analysis (statistical patterns)
-  * "comprehensive": Full analysis including both completeness and distribution
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+""",
+        )
+        async def get_table_basic_info_tool(
+            table_name: str,
+            catalog_name: str = None,
+            db_name: str = None
+        ) -> str:
+            """Get table basic information"""
+            return await self.call_tool("get_table_basic_info", {
+                "table_name": table_name,
+                "catalog_name": catalog_name,
+                "db_name": db_name
+            })
+
+        @mcp.tool(
+            "analyze_columns",
+            description="""[Function Description]: Analyze completeness and distribution of specified columns in a table.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to analyze
+- columns (array) [Required] - List of column names to analyze
+- analysis_types (array) [Optional] - Types of analysis to perform, default is ["both"]
+  * "completeness": Only completeness analysis (null rates, non-null counts)
+  * "distribution": Only distribution analysis (statistical patterns by data type)
+  * "both": Both completeness and distribution analysis
 - sample_size (integer) [Optional] - Maximum number of rows to sample, default is 100000
-- include_all_columns (boolean) [Optional] - Whether to analyze all columns, default is false
-- business_rules (array) [Optional] - Business rule validations in format [{"rule_name": "email_format", "sql_condition": "email REGEXP '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'"}]
 - catalog_name (string) [Optional] - Target catalog name
 - db_name (string) [Optional] - Target database name
 - detailed_response (boolean) [Optional] - Whether to return detailed response including raw data, default is false
 """,
         )
-        async def analyze_data_quality_tool(
+        async def analyze_columns_tool(
             table_name: str,
-            analysis_scope: str = "comprehensive",
+            columns: List[str],
+            analysis_types: List[str] = None,
             sample_size: int = 100000,
-            include_all_columns: bool = False,
-            business_rules: List[dict] = None,
             catalog_name: str = None,
             db_name: str = None,
             detailed_response: bool = False
         ) -> str:
-            """Unified data quality analysis tool"""
-            return await self.call_tool("analyze_data_quality", {
+            """Analyze table columns"""
+            return await self.call_tool("analyze_columns", {
                 "table_name": table_name,
-                "analysis_scope": analysis_scope,
+                "columns": columns,
+                "analysis_types": analysis_types or ["both"],
                 "sample_size": sample_size,
-                "include_all_columns": include_all_columns,
-                "business_rules": business_rules,
+                "catalog_name": catalog_name,
+                "db_name": db_name,
+                "detailed_response": detailed_response
+            })
+
+        @mcp.tool(
+            "analyze_table_storage",
+            description="""[Function Description]: Analyze table's physical distribution and storage information.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to analyze
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+- detailed_response (boolean) [Optional] - Whether to return detailed response including raw data, default is false
+""",
+        )
+        async def analyze_table_storage_tool(
+            table_name: str,
+            catalog_name: str = None,
+            db_name: str = None,
+            detailed_response: bool = False
+        ) -> str:
+            """Analyze table storage"""
+            return await self.call_tool("analyze_table_storage", {
+                "table_name": table_name,
                 "catalog_name": catalog_name,
                 "db_name": db_name,
                 "detailed_response": detailed_response
@@ -721,7 +767,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
             """Get ADBC connection information and status"""
             return await self.call_tool("get_adbc_connection_info", {})
 
-        logger.info("Successfully registered 23 tools to MCP server (14 basic + 7 advanced analytics + 2 ADBC tools)")
+        logger.info("Successfully registered 25 tools to MCP server (14 basic + 9 advanced analytics + 2 ADBC tools)")
 
     async def list_tools(self) -> List[Tool]:
         """List all available query tools (for stdio mode)"""
@@ -1064,20 +1110,14 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 },
             ),
             # ==================== v0.5.0 Advanced Analytics Tools ====================
+            # Atomic Data Quality Analysis Tools
             Tool(
-                name="analyze_data_quality",
-                description="""[Function Description]: Comprehensive data quality analysis combining completeness and distribution analysis.
+                name="get_table_basic_info",
+                description="""[Function Description]: Get basic information about a table including row count, column count, partitions, and size.
 
 [Parameter Content]:
 
 - table_name (string) [Required] - Name of the table to analyze
-- analysis_scope (string) [Optional] - Analysis scope, default is "comprehensive"
-  * "completeness": Only completeness analysis (null rates, business rules)
-  * "distribution": Only distribution analysis (statistical patterns)
-  * "comprehensive": Full analysis including both completeness and distribution
-- sample_size (integer) [Optional] - Maximum number of rows to sample, default is 100000
-- include_all_columns (boolean) [Optional] - Whether to analyze all columns, default is false
-- business_rules (array) [Optional] - Business rule validations in format [{"rule_name": "email_format", "sql_condition": "email REGEXP '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'"}]
 - catalog_name (string) [Optional] - Target catalog name
 - db_name (string) [Optional] - Target database name
 """,
@@ -1085,10 +1125,58 @@ No parameters required. Returns connection status, configuration, and diagnostic
                     "type": "object",
                     "properties": {
                         "table_name": {"type": "string", "description": "Name of the table to analyze"},
-                        "analysis_scope": {"type": "string", "enum": ["completeness", "distribution", "comprehensive"], "description": "Analysis scope", "default": "comprehensive"},
+                        "catalog_name": {"type": "string", "description": "Target catalog name"},
+                        "db_name": {"type": "string", "description": "Target database name"},
+                    },
+                    "required": ["table_name"],
+                },
+            ),
+            Tool(
+                name="analyze_columns",
+                description="""[Function Description]: Analyze completeness and distribution of specified columns in a table.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to analyze
+- columns (array) [Required] - List of column names to analyze
+- analysis_types (array) [Optional] - Types of analysis to perform, default is ["both"]
+  * "completeness": Only completeness analysis (null rates, non-null counts)
+  * "distribution": Only distribution analysis (statistical patterns by data type)
+  * "both": Both completeness and distribution analysis
+- sample_size (integer) [Optional] - Maximum number of rows to sample, default is 100000
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+- detailed_response (boolean) [Optional] - Whether to return detailed response including raw data, default is false
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Name of the table to analyze"},
+                        "columns": {"type": "array", "items": {"type": "string"}, "description": "List of column names to analyze"},
+                        "analysis_types": {"type": "array", "items": {"type": "string", "enum": ["completeness", "distribution", "both"]}, "description": "Types of analysis to perform", "default": ["both"]},
                         "sample_size": {"type": "integer", "description": "Maximum number of rows to sample", "default": 100000},
-                        "include_all_columns": {"type": "boolean", "description": "Whether to analyze all columns", "default": False},
-                        "business_rules": {"type": "array", "items": {"type": "object"}, "description": "Business rule validations"},
+                        "catalog_name": {"type": "string", "description": "Target catalog name"},
+                        "db_name": {"type": "string", "description": "Target database name"},
+                        "detailed_response": {"type": "boolean", "description": "Whether to return detailed response including raw data", "default": False},
+                    },
+                    "required": ["table_name", "columns"],
+                },
+            ),
+            Tool(
+                name="analyze_table_storage",
+                description="""[Function Description]: Analyze table's physical distribution and storage information.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Name of the table to analyze
+- catalog_name (string) [Optional] - Target catalog name
+- db_name (string) [Optional] - Target database name
+- detailed_response (boolean) [Optional] - Whether to return detailed response including raw data, default is false
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Name of the table to analyze"},
                         "catalog_name": {"type": "string", "description": "Target catalog name"},
                         "db_name": {"type": "string", "description": "Target database name"},
                         "detailed_response": {"type": "boolean", "description": "Whether to return detailed response including raw data", "default": False},
@@ -1096,7 +1184,6 @@ No parameters required. Returns connection status, configuration, and diagnostic
                     "required": ["table_name"],
                 },
             ),
-
             Tool(
                 name="trace_column_lineage",
                 description="""[Function Description]: Trace data lineage for specified columns through SQL analysis and dependency mapping.
@@ -1323,9 +1410,13 @@ No parameters required. Returns connection status, configuration, and diagnostic
             elif name == "get_historical_memory_stats":
                 arguments["data_type"] = "historical"
                 result = await self._get_memory_stats_tool(arguments)
-            # v0.5.0 Advanced Analytics Tools
-            elif name == "analyze_data_quality":
-                result = await self._analyze_data_quality_tool(arguments)
+            # v0.5.0 Advanced Analytics Tools - Atomic Data Quality Tools
+            elif name == "get_table_basic_info":
+                result = await self._get_table_basic_info_tool(arguments)
+            elif name == "analyze_columns":
+                result = await self._analyze_columns_tool(arguments)
+            elif name == "analyze_table_storage":
+                result = await self._analyze_table_storage_tool(arguments)
             elif name == "trace_column_lineage":
                 result = await self._trace_column_lineage_tool(arguments)
             elif name == "monitor_data_freshness":
@@ -1595,26 +1686,46 @@ No parameters required. Returns connection status, configuration, and diagnostic
     
     # ==================== v0.5.0 Advanced Analytics Tools Private Methods ====================
     
-    async def _analyze_data_quality_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Unified data quality analysis tool routing"""
+    async def _get_table_basic_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Get table basic information tool routing"""
         try:
-            # Extract parameters
             table_name = arguments.get("table_name")
-            analysis_scope = arguments.get("analysis_scope", "comprehensive")
+            catalog_name = arguments.get("catalog_name")
+            db_name = arguments.get("db_name")
+            
+            # Delegate to atomic data quality tools
+            result = await self.data_quality_tools.get_table_basic_info(
+                table_name=table_name,
+                catalog_name=catalog_name,
+                db_name=db_name
+            )
+            
+            return result
+            
+        except Exception as e:
+            return {
+                "error": str(e),
+                "analysis_type": "table_basic_info",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    async def _analyze_columns_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze columns tool routing"""
+        try:
+            table_name = arguments.get("table_name")
+            columns = arguments.get("columns")
+            analysis_types = arguments.get("analysis_types", ["both"])
             sample_size = arguments.get("sample_size", 100000)
-            include_all_columns = arguments.get("include_all_columns", False)
-            business_rules = arguments.get("business_rules", [])
             catalog_name = arguments.get("catalog_name")
             db_name = arguments.get("db_name")
             detailed_response = arguments.get("detailed_response", False)
             
-            # Delegate to the unified data quality tools
-            result = await self.data_quality_tools.analyze_data_quality(
+            # Delegate to atomic data quality tools
+            result = await self.data_quality_tools.analyze_columns(
                 table_name=table_name,
-                analysis_scope=analysis_scope,
+                columns=columns,
+                analysis_types=analysis_types,
                 sample_size=sample_size,
-                include_all_columns=include_all_columns,
-                business_rules=business_rules,
                 catalog_name=catalog_name,
                 db_name=db_name,
                 detailed_response=detailed_response
@@ -1625,7 +1736,32 @@ No parameters required. Returns connection status, configuration, and diagnostic
         except Exception as e:
             return {
                 "error": str(e),
-                "analysis_type": "unified_data_quality",
+                "analysis_type": "columns_analysis",
+                "timestamp": datetime.now().isoformat()
+            }
+    
+    async def _analyze_table_storage_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze table storage tool routing"""
+        try:
+            table_name = arguments.get("table_name")
+            catalog_name = arguments.get("catalog_name")
+            db_name = arguments.get("db_name")
+            detailed_response = arguments.get("detailed_response", False)
+            
+            # Delegate to atomic data quality tools
+            result = await self.data_quality_tools.analyze_table_storage(
+                table_name=table_name,
+                catalog_name=catalog_name,
+                db_name=db_name,
+                detailed_response=detailed_response
+            )
+            
+            return result
+            
+        except Exception as e:
+            return {
+                "error": str(e),
+                "analysis_type": "table_storage_analysis",
                 "timestamp": datetime.now().isoformat()
             }
     

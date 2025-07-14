@@ -56,16 +56,31 @@ class SecurityAnalyticsTools:
         """
         try:
             start_time = time.time()
+            
+            # 🚀 PROGRESS: Initialize security analysis
+            logger.info("=" * 70)
+            logger.info(f"🔒 Starting Data Access Pattern Analysis")
+            logger.info(f"📅 Analysis period: {days} days")
+            logger.info(f"👥 Include system users: {include_system_users}")
+            logger.info(f"🎯 Min query threshold: {min_query_threshold}")
+            logger.info("=" * 70)
+            
             connection = await self.connection_manager.get_connection("query")
             
             # Define analysis period
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
             
-            # 1. Get audit log data
+            logger.info(f"📊 Period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+            
+            # 🚀 PROGRESS: Step 1 - Get audit log data
+            logger.info("📋 Step 1/5: Retrieving audit log data...")
+            audit_start = time.time()
             audit_data = await self._get_audit_log_data(connection, start_date, end_date, include_system_users)
+            audit_time = time.time() - audit_start
             
             if not audit_data:
+                logger.warning("⚠️ No audit data available for the specified period")
                 return {
                     "error": "No audit data available for the specified period",
                     "analysis_period": {
@@ -75,25 +90,49 @@ class SecurityAnalyticsTools:
                     }
                 }
             
-            # 2. Analyze user access patterns
+            logger.info(f"✅ Retrieved {len(audit_data)} audit records in {audit_time:.2f}s")
+            
+            # 🚀 PROGRESS: Step 2 - Analyze user access patterns
+            logger.info("👤 Step 2/5: Analyzing user access patterns...")
+            user_start = time.time()
             user_access_analysis = await self._analyze_user_access_patterns(
                 audit_data, min_query_threshold
             )
+            user_time = time.time() - user_start
+            logger.info(f"✅ Analyzed {len(user_access_analysis)} users in {user_time:.2f}s")
             
-            # 3. Analyze role-based access
+            # 🚀 PROGRESS: Step 3 - Analyze role-based access
+            logger.info("🎭 Step 3/5: Analyzing role-based access patterns...")
+            role_start = time.time()
             role_access_analysis = await self._analyze_role_access_patterns(
                 connection, user_access_analysis
             )
+            role_time = time.time() - role_start
+            logger.info(f"✅ Role analysis completed in {role_time:.2f}s")
             
-            # 4. Detect security anomalies
+            # 🚀 PROGRESS: Step 4 - Detect security anomalies
+            logger.info("🚨 Step 4/5: Detecting security anomalies...")
+            anomaly_start = time.time()
             security_alerts = await self._detect_security_anomalies(
                 audit_data, user_access_analysis
             )
+            anomaly_time = time.time() - anomaly_start
+            logger.info(f"✅ Found {len(security_alerts)} security alerts in {anomaly_time:.2f}s")
             
-            # 5. Generate access insights
+            # Log alert summary
+            if security_alerts:
+                high_alerts = sum(1 for alert in security_alerts if alert.get("severity") == "high")
+                medium_alerts = sum(1 for alert in security_alerts if alert.get("severity") == "medium")
+                logger.info(f"🚨 Alert breakdown: {high_alerts} high, {medium_alerts} medium")
+            
+            # 🚀 PROGRESS: Step 5 - Generate access insights
+            logger.info("💡 Step 5/5: Generating access insights...")
+            insights_start = time.time()
             access_insights = await self._generate_access_insights(
                 user_access_analysis, role_access_analysis
             )
+            insights_time = time.time() - insights_start
+            logger.info(f"✅ Access insights generated in {insights_time:.2f}s")
             
             execution_time = time.time() - start_time
             
