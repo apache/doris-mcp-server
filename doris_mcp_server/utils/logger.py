@@ -319,7 +319,20 @@ class DorisLoggerManager:
             return
         
         self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        log_dir_writable = True  # Initialize the variable
+        
+        # Try to create log directory, fallback to console-only if fails
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            # If we can't create log directory (e.g., read-only filesystem in stdio mode),
+            # fall back to console-only logging
+            log_dir_writable = False
+            enable_file = False
+            enable_audit = False
+            enable_cleanup = False
+            # Don't use print() in stdio mode as it interferes with MCP JSON protocol
+            # Log the warning through the logging system instead, which will be handled after setup
         
         # Clear existing handlers
         root_logger = logging.getLogger()
@@ -414,13 +427,19 @@ class DorisLoggerManager:
         logger.info("=" * 80)
         logger.info("Doris MCP Server Logging System Initialized")
         logger.info(f"Log Level: {level}")
-        logger.info(f"Log Directory: {self.log_dir.absolute()}")
+        if log_dir_writable:
+            logger.info(f"Log Directory: {self.log_dir.absolute()}")
+        else:
+            logger.info("Log Directory: Not available (console-only mode)")
         logger.info(f"Console Logging: {'Enabled' if enable_console else 'Disabled'}")
-        logger.info(f"File Logging: {'Enabled' if enable_file else 'Disabled'}")
-        logger.info(f"Audit Logging: {'Enabled' if enable_audit else 'Disabled'}")
-        logger.info(f"Log Cleanup: {'Enabled' if enable_cleanup and enable_file else 'Disabled'}")
+        logger.info(f"File Logging: {'Enabled' if enable_file else 'Disabled (fallback mode)'}")
+        logger.info(f"Audit Logging: {'Enabled' if enable_audit else 'Disabled (fallback mode)'}")
+        logger.info(f"Log Cleanup: {'Enabled' if enable_cleanup and enable_file else 'Disabled (fallback mode)'}")
         if enable_cleanup and enable_file:
             logger.info(f"Cleanup Settings: Max age {max_age_days} days, interval {cleanup_interval_hours}h")
+        if not log_dir_writable:
+            logger.warning("Running in console-only logging mode due to filesystem permissions")
+            logger.warning(f"Could not create log directory '{log_dir}' - stdio mode fallback enabled")
         logger.info("=" * 80)
     
     def _setup_package_loggers(self, level: str):
@@ -568,10 +587,10 @@ def setup_logging(level: str = "INFO",
 def get_logger(name: str) -> logging.Logger:
     """
     Get a logger instance.
-    
+
     Args:
         name: Logger name (usually __name__)
-        
+
     Returns:
         Configured logger instance
     """
