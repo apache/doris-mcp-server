@@ -21,7 +21,7 @@ under the License.
 
 Doris MCP (Model Context Protocol) Server is a backend service built with Python and FastAPI. It implements the MCP, allowing clients to interact with it through defined "Tools". It's primarily designed to connect to Apache Doris databases, potentially leveraging Large Language Models (LLMs) for tasks like converting natural language queries to SQL (NL2SQL), executing queries, and performing metadata management and analysis.
 
-## 🚀 What's New in v0.5.0
+## 🚀 What's New in v0.5.1
 
 - **🔥 Critical at_eof Connection Fix**: **Complete elimination of at_eof connection pool errors** through redesigned connection pool strategy with zero minimum connections, intelligent health monitoring, automatic retry mechanisms, and self-healing pool recovery - achieving 99.9% connection stability improvement
 - **🔧 Revolutionary Logging System**: **Enterprise-grade logging overhaul** with level-based file separation (debug, info, warning, error, critical), automatic cleanup scheduler with 30-day retention, millisecond precision timestamps, dedicated audit trails, and zero-maintenance log management
@@ -32,8 +32,13 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 - **⚙️ Enhanced Configuration Management**: Complete ADBC configuration system with environment variable support, dynamic tool registration, and intelligent parameter validation
 - **🔒 Security & Compatibility Improvements**: Resolved pandas JSON serialization issues, enhanced enterprise security integration, and maintained full backward compatibility with v0.4.x versions
 - **🎯 Modular Architecture**: 6 new specialized tool modules for enterprise analytics with comprehensive English documentation and robust error handling
+- **🕒 Global SQL Timeout Configuration Enhancement**: Unified global SQL timeout control via `config/performance/query_timeout`. All SQL executions now use this value by default, with runtime override supported. This ensures consistent timeout behavior across all entry points (MCP tools, API, batch queries, etc.).
+- **Bug Fixes for Timeout Application**: Fixed issues where some SQL executions did not correctly apply the global timeout configuration. Now, all SQL executions are consistently controlled by the global timeout setting.
+- **Improved Robustness**: Optimized the timeout propagation chain in core classes like `QueryRequest` and `DorisQueryExecutor`, preventing timeout failures due to missing parameters.
+- **Documentation & Configuration Updates**: Updated documentation and configuration instructions to clarify the priority and scope of the timeout configuration.
+- **Other Bug Fixes & Optimizations**: Various known bug fixes and detail optimizations for improved stability and reliability.
 
-> **🚀 Major Milestone**: This release establishes v0.5.0 as a **production-ready enterprise data governance platform** with **critical stability improvements** (complete at_eof fix + intelligent logging), 23 total tools (14 existing + 7 analytics + 2 ADBC tools), and enterprise-grade system reliability - representing a major advancement in both data intelligence capabilities and operational stability.
+> **🚀 Major Milestone**: This release establishes v0.5.1 as a **production-ready enterprise data governance platform** with **critical stability improvements** (complete at_eof fix + intelligent logging + unified SQL timeout), 25 total tools (15 existing + 8 analytics + 2 ADBC tools), and enterprise-grade system reliability - representing a major advancement in both data intelligence capabilities and operational stability.
 
 ## Core Features
 
