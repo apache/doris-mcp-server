@@ -72,6 +72,13 @@ class DatabaseConfig:
         """Minimum connections is always 0 to prevent at_eof issues"""
         return self._min_connections
 
+    @min_connections.setter
+    def min_connections(self, new_value):
+        """Minimum connections is always 0 to prevent at_eof issues,
+        but we still provide setter method for compatibility
+        """
+        self._min_connections = 0
+
 
 @dataclass
 class SecurityConfig:
