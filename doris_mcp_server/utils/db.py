@@ -34,6 +34,7 @@ import random
 import aiomysql
 from aiomysql import Connection, Pool
 
+from .config import DorisConfig
 from .logger import get_logger
 
 
@@ -198,7 +199,7 @@ class DorisConnectionManager:
     Implements connection pool health monitoring and proactive cleanup
     """
 
-    def __init__(self, config, security_manager=None):
+    def __init__(self, config: DorisConfig, security_manager=None):
         self.config = config
         self.pool: Pool | None = None
         self.logger = get_logger(__name__)
