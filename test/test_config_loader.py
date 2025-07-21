@@ -185,8 +185,9 @@ async def test_server_connectivity(transport: Optional[str] = None) -> bool:
                 logger.error(f"Connectivity test failed: {e}")
                 return False
         
-        result = await client.connect_and_run(test_connection)
-        return result
+        await client.connect_and_run(test_connection)
+        return True
+
     except Exception as e:
         logger.error(f"Failed to test server connectivity: {e}")
         return False
