@@ -432,21 +432,17 @@ class DorisQueryExecutor:
         )
 
         # Execute query
-        connection = await self.connection_manager.get_connection(
-            query_request.session_id
-        )
-
         # Set timeout if specified
         if query_request.timeout:
             try:
                 result = await asyncio.wait_for(
-                    connection.execute(optimized_sql, query_request.parameters, auth_context),
+                    self.connection_manager.execute_query(query_request.session_id, optimized_sql, query_request.parameters, auth_context),
                     timeout=query_request.timeout
                 )
             except asyncio.TimeoutError:
                 raise Exception(f"Query timeout after {query_request.timeout} seconds")
         else:
-            result = await connection.execute(optimized_sql, query_request.parameters, auth_context)
+            result = await self.connection_manager.execute_query(query_request.session_id, optimized_sql, query_request.parameters, auth_context)
 
         return result
 
