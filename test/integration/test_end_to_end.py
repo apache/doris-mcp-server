@@ -34,7 +34,7 @@ class TestEndToEndIntegration:
     @pytest.fixture
     def mock_config(self):
         """Create mock configuration"""
-        from doris_mcp_server.utils.config import DatabaseConfig, SecurityConfig
+        from doris_mcp_server.utils.config import ADBCConfig, DatabaseConfig, SecurityConfig
         
         config = Mock(spec=DorisConfig)
         
@@ -46,7 +46,6 @@ class TestEndToEndIntegration:
         config.database.password = "test_password"
         config.database.database = "test_db"
         config.database.health_check_interval = 60
-        config.database.min_connections = 5
         config.database.max_connections = 20
         config.database.connection_timeout = 30
         config.database.max_connection_age = 3600
@@ -57,7 +56,12 @@ class TestEndToEndIntegration:
         config.security.auth_type = "token"
         config.security.token_secret = "test_secret"
         config.security.token_expiry = 3600
+        config.security.blocked_keywords = ["DROP"]
         
+        # Add adbc config
+        config.adbc = Mock(spec=ADBCConfig)
+        config.adbc.enabled = True
+
         return config
 
     @pytest.fixture
@@ -231,7 +235,7 @@ class TestEndToEndIntegration:
     @pytest.mark.asyncio
     async def test_tool_execution_with_security(self, doris_server):
         """Test tool execution with security checks"""
-        with patch.object(doris_server.tools_manager.query_executor, 'execute_query') as mock_execute:
+        with patch.object(doris_server.tools_manager.connection_manager, 'execute_query') as mock_execute:
             mock_execute.return_value = [{"Database": "test_db"}]
             
             # Test tool execution through tools manager
@@ -258,7 +262,7 @@ class TestEndToEndIntegration:
     @pytest.mark.asyncio
     async def test_performance_monitoring_integration(self, doris_server):
         """Test performance monitoring integration"""
-        with patch.object(doris_server.tools_manager.query_executor, 'execute_query') as mock_execute:
+        with patch.object(doris_server.tools_manager.connection_manager, 'execute_query') as mock_execute:
             mock_execute.return_value = [
                 {
                     "query_count": 1500,

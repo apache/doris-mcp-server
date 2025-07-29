@@ -44,7 +44,6 @@ class TestDorisQueryExecutor:
         config.database.password = "test_password"
         config.database.database = "test_db"
         config.database.health_check_interval = 60
-        config.database.min_connections = 5
         config.database.max_connections = 20
         config.database.connection_timeout = 30
         config.database.max_connection_age = 3600

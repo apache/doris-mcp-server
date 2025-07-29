@@ -21,8 +21,6 @@ Tests the query execution functionality through actual MCP client-server communi
 Assumes the server is already running and configured properly
 """
 
-import asyncio
-import json
 import pytest
 import os
 import sys
@@ -66,14 +64,13 @@ class TestQueryExecutorClientServer:
             assert "success" in result, "Result should contain 'success' field"
             
             if result["success"]:
-                assert "result" in result, "Successful result should contain 'result' field"
+                assert "data" in result, "Successful result should contain 'data' field"
             else:
                 assert "error" in result, "Failed result should contain 'error' field"
             
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_show_databases_query_via_client(self, client, test_config):
@@ -87,8 +84,7 @@ class TestQueryExecutorClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_information_schema_query_via_client(self, client, test_config):
@@ -102,8 +98,7 @@ class TestQueryExecutorClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_query_with_max_rows_parameter_via_client(self, client, test_config):
@@ -118,8 +113,7 @@ class TestQueryExecutorClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_query_error_handling_via_client(self, client, test_config):
@@ -131,8 +125,7 @@ class TestQueryExecutorClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_query_with_auth_token_via_client(self, client, test_config):
@@ -152,5 +145,4 @@ class TestQueryExecutorClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result 
+        await client.connect_and_run(test_callback)
