@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y \
     g++ \
     pkg-config \
     default-libmysqlclient-dev \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements file
@@ -43,11 +44,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Convert line endings for shell scripts and ensure proper execution format
+RUN find . -name "*.sh" -exec dos2unix {} \; && \
+    find . -name "*.sh" -exec chmod +x {} \;
+
 # Create necessary directories
 RUN mkdir -p /app/logs /app/config /app/data
-
-# Set permissions
-RUN chmod +x /app/start_server.sh
 
 # Create non-root user
 RUN groupadd -r doris && useradd -r -g doris doris
@@ -62,4 +64,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 3000 3001 3002
 
 # Start command
-CMD ["/app/start_server.sh"] 
+CMD ["/app/start_server.sh"]
