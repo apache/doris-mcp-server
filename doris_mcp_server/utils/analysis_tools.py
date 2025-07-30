@@ -19,6 +19,7 @@ Data Analysis Tools Module
 Provides data analysis functions including table analysis, column statistics, performance monitoring, etc.
 """
 
+import os
 import time
 from datetime import datetime
 from typing import Any, Dict, List
@@ -48,6 +49,7 @@ class TableAnalyzer:
     ) -> Dict[str, Any]:
         """Get table summary information"""
         connection = await self.connection_manager.get_connection("system")
+        database = db_name or os.getenv("DB_DATABASE", "")
         
         # Get table basic information
         table_info_sql = f"""
@@ -58,7 +60,7 @@ class TableAnalyzer:
             create_time,
             engine
         FROM information_schema.tables 
-        WHERE table_schema = '{db_name}'
+        WHERE table_schema = '{database}'
         AND table_name = '{table_name}'
         """
         
@@ -76,7 +78,7 @@ class TableAnalyzer:
             is_nullable,
             column_comment
         FROM information_schema.columns 
-        WHERE table_schema = DATABASE()
+        WHERE table_schema = '{database}'
         AND table_name = '{table_name}'
         ORDER BY ordinal_position
         """
@@ -95,7 +97,7 @@ class TableAnalyzer:
         
         # Get sample data
         if include_sample and sample_size > 0:
-            sample_sql = f"SELECT * FROM {db_name}.{table_name} LIMIT {sample_size}"
+            sample_sql = f"SELECT * FROM {database}.{table_name} LIMIT {sample_size}"
             sample_result = await connection.execute(sample_sql)
             summary["sample_data"] = sample_result.data
         

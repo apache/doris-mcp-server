@@ -289,7 +289,7 @@ class DorisToolsManager:
 
 - table_name (string) [Required] - Target table name to analyze
 
-- db_name (string) [Required] - Target database name
+- db_name (string) [Optional] - Target database name, if not specified, defaults to being the same as the environment variable DB_DATABASE
 
 - include_sample (boolean) [Optional] - Whether to include sample data, default is true
 
@@ -991,7 +991,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - table_name (string) [Required] - Target table name to analyze
 
-- db_name (string) [Required] - Target database name
+- db_name (string) [Optional] - Target database name, if not specified, defaults to being the same as the environment variable DB_DATABASE
 
 - include_sample (boolean) [Optional] - Whether to include sample data, default is true
 
