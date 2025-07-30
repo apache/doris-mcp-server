@@ -280,6 +280,31 @@ class DorisToolsManager:
                 "random_string": random_string
             })
 
+        # Get table summary tool
+        @mcp.tool(
+            "get_table_summary",
+                    description="""[Function Description]: Get table summary information.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Target table name to analyze
+
+- db_name (string) [Required] - Target database name
+
+- include_sample (boolean) [Optional] - Whether to include sample data, default is true
+
+- sample_size (integer) [Optional] - sample data size, default value is 10
+""",
+        )
+        async def get_table_summary_tool(table_name: str, db_name: str, include_sample: bool = True, sample_size: int = 10) -> str:
+            """Get table summary"""
+            return await self.call_tool("get_table_summary", {
+                "table_name": table_name,
+                "db_name": db_name,
+                "include_sample": include_sample,
+                "sample_size": sample_size,
+            })
+
         # SQL Explain tool
         @mcp.tool(
             "get_sql_explain",
@@ -959,6 +984,31 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 },
             ),
             Tool(
+                name="get_table_summary",
+                description="""[Function Description]: Get table summary information.
+
+[Parameter Content]:
+
+- table_name (string) [Required] - Target table name to analyze
+
+- db_name (string) [Required] - Target database name
+
+- include_sample (boolean) [Optional] - Whether to include sample data, default is true
+
+- sample_size (integer) [Optional] - sample data size, default value is 10
+""",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string", "description": "Target table name to analyze"},
+                        "db_name": {"type": "string", "description": "Target database name"},
+                        "include_sample": {"type": "boolean", "description": "Whether to include sample data", "default": True},
+                        "sample_size": {"type": "integer", "description": "sample data size", "default": 10},
+                    },
+                    "required": ["table_name", "db_name"],
+                },
+            ),
+            Tool(
                 name="get_sql_explain",
                 description="""[Function Description]: Get SQL execution plan using EXPLAIN command based on Doris syntax.
 
@@ -1387,6 +1437,8 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 result = await self._get_recent_audit_logs_tool(arguments)
             elif name == "get_catalog_list":
                 result = await self._get_catalog_list_tool(arguments)
+            elif name == "get_table_summary":
+                result = await self._get_table_summary_tool(arguments)
             elif name == "get_sql_explain":
                 result = await self._get_sql_explain_tool(arguments)
             elif name == "get_sql_profile":
@@ -1547,6 +1599,16 @@ No parameters required. Returns connection status, configuration, and diagnostic
         
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_catalog_list_for_mcp() 
+
+    async def _get_table_summary_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Table summary tool routing"""
+        table_name = arguments.get("table_name")
+        db_name = arguments.get("db_name")
+        include_sample = arguments.get("include_sample", True)
+        sample_size = arguments.get("sample_size", 10)
+
+        # Delegate to Table analzyer for processing
+        return await self.table_analyzer.get_table_summary(table_name, db_name, include_sample, sample_size)
     
     async def _get_sql_explain_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """SQL Explain tool routing"""

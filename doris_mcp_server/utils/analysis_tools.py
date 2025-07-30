@@ -42,11 +42,12 @@ class TableAnalyzer:
     async def get_table_summary(
         self, 
         table_name: str, 
+        db_name: str,
         include_sample: bool = True, 
         sample_size: int = 10
     ) -> Dict[str, Any]:
         """Get table summary information"""
-        connection = await self.connection_manager.get_connection("query")
+        connection = await self.connection_manager.get_connection("system")
         
         # Get table basic information
         table_info_sql = f"""
@@ -57,13 +58,13 @@ class TableAnalyzer:
             create_time,
             engine
         FROM information_schema.tables 
-        WHERE table_schema = DATABASE()
+        WHERE table_schema = '{db_name}'
         AND table_name = '{table_name}'
         """
         
         table_info_result = await connection.execute(table_info_sql)
         if not table_info_result.data:
-            raise ValueError(f"Table {table_name} does not exist")
+            raise ValueError(f"Table {db_name}.{table_name} does not exist")
         
         table_info = table_info_result.data[0]
         
@@ -94,7 +95,7 @@ class TableAnalyzer:
         
         # Get sample data
         if include_sample and sample_size > 0:
-            sample_sql = f"SELECT * FROM {table_name} LIMIT {sample_size}"
+            sample_sql = f"SELECT * FROM {db_name}.{table_name} LIMIT {sample_size}"
             sample_result = await connection.execute(sample_sql)
             summary["sample_data"] = sample_result.data
         
