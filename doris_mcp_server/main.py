@@ -637,12 +637,15 @@ Examples:
     parser.add_argument(
         "--host",
         type=str,
-        default=os.getenv("SERVER_HOST", _default_config.database.host),
-        help=f"Host address for HTTP mode (default: {_default_config.database.host})",
+        default=os.getenv("SERVER_HOST", _default_config.server_host),
+        help=f"Host address for HTTP mode (default: {_default_config.server_host})",
     )
 
     parser.add_argument(
-        "--port", type=int, default=os.getenv("SERVER_PORT", _default_config.server_port), help=f"Port number for HTTP mode (default: {_default_config.server_port})"
+        "--port",
+        type=int,
+        default=os.getenv("SERVER_PORT", _default_config.server_port),
+        help=f"Port number for HTTP mode (default: {_default_config.server_port})"
     )
 
     parser.add_argument(
@@ -680,18 +683,29 @@ Examples:
     return parser
 
 
-async def main():
-    """Main function"""
+def update_configuration(config: DorisConfig):
+    """Update doris configuration object"""
+    # For some arguments, if not specified, environment variables or default configurations will be used as default values
     parser = create_arg_parser()
     args = parser.parse_args()
 
-    # Create configuration - priority: command line arguments > .env file > default values
-    config = DorisConfig.from_env()  # First load from .env file and environment variables
-    
+    # Update config values
     # Command line arguments override configuration (if provided)
-    # 🔧 FIX: Set transport from command line arguments
-    config.transport = args.transport
-    
+    # basic
+    if args.transport != _default_config.transport:
+        config.transport = args.transport
+    if args.host != _default_config.server_host:
+        config.server_host = args.host
+    if args.port != _default_config.server_port:
+        config.server_port = args.port
+    server_name = os.getenv("SERVER_NAME")
+    if server_name:
+        config.server_name = server_name
+    server_version = os.getenv("SERVER_VERSION")
+    if server_version:
+        config.server_version = server_version
+ 
+    # database
     if args.doris_host != _default_config.database.host:  # If not default value, use command line argument
         config.database.host = args.doris_host
     if args.doris_port != _default_config.database.port:
@@ -702,8 +716,20 @@ async def main():
         config.database.password = args.doris_password
     if args.doris_database != _default_config.database.database:
         config.database.database = args.doris_database
+
+    # logging
     if args.log_level != _default_config.logging.level:
         config.logging.level = args.log_level
+
+
+async def main():
+    """Main function"""
+    # Create configuration - priority: command line arguments > env variables > .env file > default values
+    # First load from .env file and environment variables
+    config = DorisConfig.from_env()
+ 
+    # Then parse the command line arguments, and update the config object.
+    update_configuration(config)
 
     # Initialize enhanced logging system
     from .utils.config import ConfigManager
@@ -718,17 +744,17 @@ async def main():
     log_system_info()
     
     logger.info("Starting Doris MCP Server...")
-    logger.info(f"Transport: {args.transport}")
+    logger.info(f"Transport: {config.transport}")
     logger.info(f"Log Level: {config.logging.level}")
 
     # Create server instance
     server = DorisServer(config)
 
     try:
-        if args.transport == "stdio":
+        if config.transport == "stdio":
             await server.start_stdio()
-        elif args.transport == "http":
-            await server.start_http(args.host, args.port)
+        elif config.transport == "http":
+            await server.start_http(config.server_host, config.server_port)
         else:
             logger.error(f"Unsupported transport protocol: {args.transport}")
             await server.shutdown()

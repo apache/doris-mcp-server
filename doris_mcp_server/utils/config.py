@@ -225,6 +225,7 @@ class DorisConfig:
     # Basic configuration
     server_name: str = "doris-mcp-server"
     server_version: str = "0.4.1"
+    server_host: str = "localhost"
     server_port: int = 3000
     transport: str = "stdio"
     
@@ -267,6 +268,9 @@ class DorisConfig:
     @classmethod
     def from_env(cls, env_file: str | None = None) -> "DorisConfig":
         """Load configuration from environment variables
+
+        The kv pairs in the. env file will be loaded as environment variables,
+        but the existing environment variables will not be overridden.
         
         Args:
             env_file: .env file path, if None, search in the following order:
@@ -286,7 +290,7 @@ class DorisConfig:
                 env_files = [".env", ".env.local", ".env.production", ".env.development"]
                 for env_path in env_files:
                     if Path(env_path).exists():
-                        load_dotenv(env_path)
+                        load_dotenv(env_path, override=False)
                         logging.getLogger(__name__).info(f"Loaded environment configuration file: {env_path}")
                         break
                 else:
