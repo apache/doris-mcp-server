@@ -79,6 +79,14 @@ class DorisConnection:
         """Execute SQL query"""
         start_time = time.time()
 
+        # In some cases, the trailing space characters will affect the execution result.
+        # For example:
+        # sql = "\n        SELECT \n            table_rows\n        FROM information_schema.tables \n        WHERE table_schema = '__internal_schema'\n        AND table_name = 'column_statistics'\n        "
+        # result1 = await connection.execute(sql) # => result1.data=[]
+        # result2 = await connection.execute(sql.strip()) # => result2.data=[{'table_rows': 5}]
+        # To solve this problem, we should remove those characters before executing any sql statements.
+        sql = sql.strip()
+
         try:
             # If security manager exists, perform SQL security check
             security_result = None
@@ -96,7 +104,7 @@ class DorisConnection:
                 await cursor.execute(sql, params)
 
                 # Check if it's a query statement (statement that returns result set)
-                sql_upper = sql.strip().upper()
+                sql_upper = sql.upper()
                 if (sql_upper.startswith("SELECT") or 
                     sql_upper.startswith("SHOW") or 
                     sql_upper.startswith("DESCRIBE") or 
