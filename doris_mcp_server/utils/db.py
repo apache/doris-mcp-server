@@ -215,16 +215,16 @@ class DorisSessionCache:
         return self.cached.get(session_id)
 
     def remove(self, session_id):
-        if self.cached.get(session_id):
+        if session_id in self.cached:
+            del self.cached[session_id]
+            self.logger.debug(f"Removed session {session_id} from cache.")
+        else:
             if self._should_cache(session_id):
-                self.logger.warning(f"The session {session_id} has not been cached")
-            return
-
-        del self.cached[session_id]
+                self.logger.warning(f"Session {session_id} is not existed.")
 
     def clear(self):
         if self.connection_manager:
-            for [k, v] in self.cached:
+            for k, v in self.cached.items():
                 self.connection_manager.release_connection(k, v)
         self.cached = {}
 
