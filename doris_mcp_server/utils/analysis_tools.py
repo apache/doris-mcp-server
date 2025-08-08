@@ -516,7 +516,7 @@ class SQLAnalyzer:
             try:
                 # Switch to specified database/catalog if provided
                 if catalog_name:
-                    await connection.execute(f"USE `{catalog_name}`")
+                    await connection.execute(f"SWITCH `{catalog_name}`")
                 if db_name:
                     await connection.execute(f"USE `{db_name}`")
                 

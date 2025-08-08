@@ -28,8 +28,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List
-import random
+from typing import Any, Dict, Optional
 
 import aiomysql
 from aiomysql import Connection, Pool
@@ -191,6 +190,51 @@ class DorisConnection:
             logging.error(f"Error occurred while closing connection: {e}")
 
 
+class DorisSessionCache:
+    """Doris database session cache
+
+    Save doris session in memory and get session by session id.
+    Provide cache_system_session/cache_user_session to specify whether to save system/user type sessions.
+    By default, only session_id is "query" or "system" will be saved.
+    """
+
+    def __init__(self, connection_manager=None, cache_system_session=True, cache_user_session=False):
+        self.logger = get_logger(__name__)
+        self.cached = {}
+        self.connection_manager = connection_manager
+        self.cache_system_session = cache_system_session
+        self.cache_user_session = cache_user_session
+        self.logger.info(f"Session  Cache initialized, save system session: {self.cache_system_session}, save user session: {self.cache_user_session}")
+
+    def save(self, connection: DorisConnection):
+        if self._should_cache(connection.session_id):
+            self.cached[connection.session_id] = connection
+
+    def get(self, session_id: str) -> Optional[DorisConnection]:
+        self.logger.debug(f"Use cached connection: {session_id}")
+        return self.cached.get(session_id)
+
+    def remove(self, session_id):
+        if session_id in self.cached:
+            del self.cached[session_id]
+            self.logger.debug(f"Removed session {session_id} from cache.")
+        else:
+            if self._should_cache(session_id):
+                self.logger.warning(f"Session {session_id} is not existed.")
+
+    def clear(self):
+        if self.connection_manager:
+            for k, v in self.cached.items():
+                self.connection_manager.release_connection(k, v)
+        self.cached = {}
+
+    def _is_system_session(self, session_id) -> bool:
+        return session_id in ["query", "system"]
+
+    def _should_cache(self, session_id):
+        return (self.cache_system_session and self._is_system_session(session_id)) or (self.cache_user_session and not self._is_system_session(session_id))
+
+
 class DorisConnectionManager:
     """Doris database connection manager - Enhanced Strategy
 
@@ -198,11 +242,13 @@ class DorisConnectionManager:
     Implements connection pool health monitoring and proactive cleanup
     """
 
+
     def __init__(self, config, security_manager=None):
         self.config = config
         self.pool: Pool | None = None
         self.logger = get_logger(__name__)
         self.security_manager = security_manager
+        self.session_cache = DorisSessionCache(self)
 
         # Connection pool state management
         self.pool_recovering = False
@@ -521,8 +567,13 @@ class DorisConnectionManager:
     async def get_connection(self, session_id: str) -> DorisConnection:
         """🔧 FIX: Simplified connection acquisition without double locking
         
-        Uses only semaphore to prevent too many concurrent acquisitions
+        Uses only semaphore to prevent too many concurrent acquisitions.
+        If the connection is successfully obtained, it will be added to the connection pool cache.
         """
+        cached_conn = self.session_cache.get(session_id)
+        if cached_conn:
+            return cached_conn
+
         # 🔧 FIX: Use only semaphore to limit concurrent acquisitions (remove double locking)
         async with self._connection_semaphore:
             try:
@@ -582,6 +633,8 @@ class DorisConnectionManager:
                     raise RuntimeError("Acquired connection is already closed")
                 
                 self.logger.debug(f"✅ Acquired fresh connection for session {session_id}")
+
+                self.session_cache.save(doris_conn)
                 return doris_conn
                 
             except Exception as e:
@@ -590,6 +643,13 @@ class DorisConnectionManager:
 
     async def release_connection(self, session_id: str, connection: DorisConnection):
         """🔧 FIX: Release connection back to pool with proper error handling"""
+        cached_conn = self.session_cache.get(session_id)
+        if cached_conn:
+            self.session_cache.remove(session_id)
+            if not (cached_conn is connection):
+                self.logger.warning("Invalid connection")
+                connection = cached_conn
+
         if not connection or not connection.connection:
             self.logger.debug(f"No connection to release for session {session_id}")
             return
