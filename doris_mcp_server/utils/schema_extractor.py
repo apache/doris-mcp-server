@@ -36,9 +36,6 @@ from .logger import get_logger
 # Configure logging
 logger = get_logger(__name__)
 
-# Load environment variables
-load_dotenv(override=True)
-
 METADATA_DB_NAME="information_schema"
 ENABLE_MULTI_DATABASE=os.getenv("ENABLE_MULTI_DATABASE",True)
 MULTI_DATABASE_NAMES=os.getenv("MULTI_DATABASE_NAMES","")

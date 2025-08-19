@@ -323,7 +323,7 @@ class DorisUnifiedClient:
             async with streamablehttp_client(
                 self.config.server_url,
                 timeout=timedelta(seconds=self.config.timeout)
-            ) as (read, write):
+            ) as (read, write, _):
                 async with ClientSession(read, write) as session:
                     self.session = session
                     self._init_sub_clients()
@@ -463,7 +463,7 @@ async def create_http_client(server_url: str, timeout: int = 60) -> DorisUnified
 # Example usage
 async def example_stdio():
     """stdio mode example"""
-    client = await create_stdio_client("python", ["doris_mcp_server/main.py"])
+    client = await create_stdio_client("python", ["-m", "doris_mcp_server.main", "--transport", "stdio"])
 
     async def test_client(client: DorisUnifiedClient):
         # Get server capabilities

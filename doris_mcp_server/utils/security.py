@@ -537,7 +537,7 @@ class SQLSecurityValidator:
         """Check SQL injection risks"""
         # Check common SQL injection patterns
         injection_patterns = [
-            r"(\s|^)(union|select|insert|update|delete|drop|create|alter)\s+.*\s+(union|select|insert|update|delete|drop|create|alter)",
+            r"(?i)(?<![A-Za-z0-9_])(union|select|insert|update|delete|drop|create|alter)(?![A-Za-z0-9_])\s+[\s\S]*?\s+(?<![A-Za-z0-9_])(union|select|insert|update|delete|drop|create|alter)(?![A-Za-z0-9_])",
             r"(\s|^)(or|and)\s+\d+\s*=\s*\d+",
             r"(\s|^)(or|and)\s+['\"].*['\"]",
             r";\s*(drop|delete|truncate|alter|create)",

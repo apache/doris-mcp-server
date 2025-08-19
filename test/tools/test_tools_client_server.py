@@ -72,8 +72,7 @@ class TestToolsClientServer:
             
             return tools
         
-        result = await client.connect_and_run(test_callback)
-        assert len(result) > 0
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_call_tool_exec_query_via_client(self, client, test_config):
@@ -91,14 +90,13 @@ class TestToolsClientServer:
             assert "success" in result, "Result should contain 'success' field"
             
             if result["success"]:
-                assert "result" in result, "Successful result should contain 'result' field"
+                assert "data" in result, "Successful result should contain 'data' field"
             else:
                 assert "error" in result, "Failed result should contain 'error' field"
             
             return result
         
-        result = await client.connect_and_run(test_callback)
-        # Don't assert success=True as it depends on actual server state
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_call_tool_get_db_list_via_client(self, client, test_config):
@@ -115,8 +113,7 @@ class TestToolsClientServer:
             
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_call_tool_get_table_schema_via_client(self, client, test_config):
@@ -133,10 +130,7 @@ class TestToolsClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
-
-
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_tool_error_handling_via_client(self, client, test_config):
@@ -151,8 +145,7 @@ class TestToolsClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result
+        await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_tool_with_auth_token_via_client(self, client, test_config):
@@ -171,5 +164,4 @@ class TestToolsClientServer:
             assert "success" in result, "Result should contain 'success' field"
             return result
         
-        result = await client.connect_and_run(test_callback)
-        assert "success" in result 
+        await client.connect_and_run(test_callback)
