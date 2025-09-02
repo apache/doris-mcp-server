@@ -209,6 +209,7 @@ from .utils.security import DorisSecurityManager
 _worker_server = None
 _worker_session_manager = None
 _worker_connection_manager = None
+_worker_security_manager = None
 _worker_session_manager_context = None
 _worker_initialized = False
 
@@ -242,7 +243,7 @@ def get_mcp_capabilities():
 
 async def initialize_worker():
     """Initialize MCP server and managers for this worker process"""
-    global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_session_manager_context, _worker_initialized
+    global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_security_manager, _worker_session_manager_context, _worker_initialized, _oauth_handlers, _token_handlers
     
     if _worker_initialized:
         return
@@ -263,10 +264,14 @@ async def initialize_worker():
         config_manager.setup_logging()
         
         # Create security manager
-        security_manager = DorisSecurityManager(config)
+        _worker_security_manager = DorisSecurityManager(config)
+        
+        # Initialize security manager first (includes JWT setup if enabled)
+        await _worker_security_manager.initialize()
+        logger.info(f"Worker {os.getpid()} security manager initialization completed")
         
         # Create connection manager
-        _worker_connection_manager = DorisConnectionManager(config, security_manager)
+        _worker_connection_manager = DorisConnectionManager(config, _worker_security_manager)
         await _worker_connection_manager.initialize()
         
         # Create MCP server
@@ -382,6 +387,12 @@ async def initialize_worker():
         _worker_session_manager_context = _worker_session_manager.run()
         await _worker_session_manager_context.__aenter__()
         
+        # Initialize OAuth and Token handlers
+        from .auth.oauth_handlers import OAuthHandlers
+        from .auth.token_handlers import TokenHandlers
+        _oauth_handlers = OAuthHandlers(_worker_security_manager)
+        _token_handlers = TokenHandlers(_worker_security_manager)
+        
         _worker_initialized = True
         logger.info(f"Worker {os.getpid()} MCP initialization completed successfully")
         
@@ -404,6 +415,73 @@ async def health_check(request):
         "mcp_initialized": _worker_initialized,
         "mcp_version": MCP_VERSION
     })
+
+# OAuth and Token handlers (initialize after worker setup)
+_oauth_handlers = None
+_token_handlers = None
+
+async def oauth_login(request):
+    """OAuth login endpoint"""
+    if not _oauth_handlers:
+        return JSONResponse({"error": "OAuth not initialized"}, status_code=503)
+    return await _oauth_handlers.handle_login(request)
+
+async def oauth_callback(request):
+    """OAuth callback endpoint"""
+    if not _oauth_handlers:
+        return JSONResponse({"error": "OAuth not initialized"}, status_code=503)
+    return await _oauth_handlers.handle_callback(request)
+
+async def oauth_provider_info(request):
+    """OAuth provider info endpoint"""
+    if not _oauth_handlers:
+        return JSONResponse({"error": "OAuth not initialized"}, status_code=503)
+    return await _oauth_handlers.handle_provider_info(request)
+
+async def oauth_demo(request):
+    """OAuth demo page endpoint"""
+    if not _oauth_handlers:
+        from starlette.responses import HTMLResponse
+        return HTMLResponse("<h1>OAuth not initialized</h1>")
+    return await _oauth_handlers.handle_demo_page(request)
+
+# Token management endpoints
+async def token_create(request):
+    """Token creation endpoint"""
+    if not _token_handlers:
+        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+    return await _token_handlers.handle_create_token(request)
+
+async def token_revoke(request):
+    """Token revocation endpoint"""
+    if not _token_handlers:
+        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+    return await _token_handlers.handle_revoke_token(request)
+
+async def token_list(request):
+    """Token listing endpoint"""
+    if not _token_handlers:
+        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+    return await _token_handlers.handle_list_tokens(request)
+
+async def token_stats(request):
+    """Token statistics endpoint"""
+    if not _token_handlers:
+        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+    return await _token_handlers.handle_token_stats(request)
+
+async def token_cleanup(request):
+    """Token cleanup endpoint"""
+    if not _token_handlers:
+        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+    return await _token_handlers.handle_cleanup_tokens(request)
+
+async def token_demo(request):
+    """Token demo page endpoint"""
+    if not _token_handlers:
+        from starlette.responses import HTMLResponse
+        return HTMLResponse("<h1>Token handlers not initialized</h1>")
+    return await _token_handlers.handle_demo_page(request)
 
 async def root_info(request):
     """Root endpoint"""
@@ -452,6 +530,13 @@ async def lifespan(app):
             except Exception as e:
                 logger.error(f"Error closing worker connection manager: {e}")
         
+        if _worker_security_manager:
+            try:
+                await _worker_security_manager.shutdown()
+                logger.info(f"Worker {os.getpid()} security manager shutdown completed")
+            except Exception as e:
+                logger.error(f"Error shutting down worker security manager: {e}")
+        
         # Shutdown logging system
         try:
             from .utils.logger import shutdown_logging
@@ -492,6 +577,18 @@ basic_app = Starlette(
     routes=[
         Route("/", root_info, methods=["GET"]),
         Route("/health", health_check, methods=["GET"]),
+        # OAuth endpoints
+        Route("/auth/login", oauth_login, methods=["GET"]),
+        Route("/auth/callback", oauth_callback, methods=["GET"]),
+        Route("/auth/provider", oauth_provider_info, methods=["GET"]),
+        Route("/auth/demo", oauth_demo, methods=["GET"]),
+        # Token management endpoints
+        Route("/token/create", token_create, methods=["GET", "POST"]),
+        Route("/token/revoke", token_revoke, methods=["GET", "DELETE"]),
+        Route("/token/list", token_list, methods=["GET"]),
+        Route("/token/stats", token_stats, methods=["GET"]),
+        Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
+        Route("/token/demo", token_demo, methods=["GET"]),
     ],
     lifespan=lifespan
 )
@@ -505,5 +602,5 @@ async def app(scope, receive, send):
         # Handle MCP requests with session manager
         await mcp_asgi_app(scope, receive, send)
     else:
-        # Handle other requests with basic Starlette app
+        # Handle other requests with basic Starlette app (includes auth endpoints)
         await basic_app(scope, receive, send)

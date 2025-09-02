@@ -77,10 +77,43 @@ class DatabaseConfig:
 class SecurityConfig:
     """Security configuration"""
 
-    # Authentication configuration
-    auth_type: str = "token"  # token, basic, oauth
-    token_secret: str = "default_secret"
+    # Independent authentication switches - any one enabled allows that method
+    enable_token_auth: bool = False  # Enable token-based authentication (default: disabled)
+    enable_jwt_auth: bool = False    # Enable JWT authentication (default: disabled)
+    enable_oauth_auth: bool = False  # Enable OAuth 2.0/OIDC authentication (default: disabled)
+    
+    # Legacy configuration (kept for backward compatibility)
+    auth_type: str = "token"  # jwt, token, basic, oauth (deprecated: use individual switches)
+    token_secret: str = "default_secret"  # Legacy token secret for backward compatibility
     token_expiry: int = 3600
+    
+    # Enhanced Token Authentication Configuration
+    token_file_path: str = "tokens.json"  # Path to token configuration file
+    enable_token_expiry: bool = True  # Enable token expiration
+    default_token_expiry_hours: int = 24 * 30  # Default expiry: 30 days
+    token_hash_algorithm: str = "sha256"  # Token hashing algorithm: sha256, sha512
+    
+    # JWT Configuration
+    jwt_algorithm: str = "RS256"  # RS256, ES256, HS256
+    jwt_issuer: str = "doris-mcp-server"
+    jwt_audience: str = "doris-mcp-client"
+    jwt_private_key_path: str = ""
+    jwt_public_key_path: str = ""
+    jwt_secret_key: str = ""  # Only used for HS256 algorithm
+    jwt_access_token_expiry: int = 3600  # 1 hour
+    jwt_refresh_token_expiry: int = 86400  # 24 hours
+    enable_token_refresh: bool = True
+    enable_token_revocation: bool = True
+    key_rotation_interval: int = 30 * 24 * 3600  # 30 days in seconds
+    
+    # JWT Security Features
+    jwt_require_iat: bool = True  # Require "issued at" claim
+    jwt_require_exp: bool = True  # Require "expires at" claim
+    jwt_require_nbf: bool = False  # Require "not before" claim
+    jwt_leeway: int = 10  # Clock skew tolerance in seconds
+    jwt_verify_signature: bool = True  # Verify JWT signature
+    jwt_verify_audience: bool = True  # Verify audience claim
+    jwt_verify_issuer: bool = True  # Verify issuer claim
 
     # SQL security configuration
     enable_security_check: bool = True  # Main switch: whether to enable SQL security check
@@ -114,6 +147,45 @@ class SecurityConfig:
     # Data masking configuration
     enable_masking: bool = True
     masking_rules: list[dict[str, Any]] = field(default_factory=list)
+
+    # OAuth 2.0/OIDC Configuration
+    oauth_enabled: bool = False
+    oauth_provider: str = ""  # 'google', 'microsoft', 'github', 'custom'
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_redirect_uri: str = "http://localhost:3000/auth/callback"
+    
+    # OIDC Discovery
+    oidc_discovery_url: str = ""  # e.g., https://accounts.google.com/.well-known/openid_configuration
+    oauth_authorization_endpoint: str = ""
+    oauth_token_endpoint: str = ""
+    oauth_userinfo_endpoint: str = ""
+    oauth_jwks_uri: str = ""
+    
+    # OAuth Scopes and Settings
+    oauth_scopes: list[str] = field(default_factory=list)
+    oauth_state_expiry: int = 600  # State parameter expiry in seconds (10 minutes)
+    oauth_pkce_enabled: bool = True  # Enable PKCE for better security
+    oauth_nonce_enabled: bool = True  # Enable nonce for OIDC
+    
+    # User Mapping Configuration
+    oauth_user_id_claim: str = "sub"  # JWT claim for user ID
+    oauth_email_claim: str = "email"
+    oauth_name_claim: str = "name"
+    oauth_roles_claim: str = "roles"  # Custom claim for roles
+    oauth_default_roles: list[str] = field(default_factory=lambda: ["oauth_user"])
+    
+    def __post_init__(self):
+        """Initialize default OAuth scopes based on provider"""
+        if not self.oauth_scopes and self.oauth_provider:
+            if self.oauth_provider == "google":
+                self.oauth_scopes = ["openid", "email", "profile"]
+            elif self.oauth_provider == "microsoft":
+                self.oauth_scopes = ["openid", "profile", "email", "User.Read"]
+            elif self.oauth_provider == "github":
+                self.oauth_scopes = ["user:email", "read:user"]
+            else:
+                self.oauth_scopes = ["openid", "email", "profile"]
 
 
 @dataclass
@@ -338,6 +410,10 @@ class DorisConfig:
         )
 
         # Security configuration
+        # Independent authentication switches
+        config.security.enable_token_auth = os.getenv("ENABLE_TOKEN_AUTH", str(config.security.enable_token_auth)).lower() == "true"
+        config.security.enable_jwt_auth = os.getenv("ENABLE_JWT_AUTH", str(config.security.enable_jwt_auth)).lower() == "true"
+        config.security.enable_oauth_auth = os.getenv("ENABLE_OAUTH_AUTH", str(config.security.enable_oauth_auth)).lower() == "true"
         config.security.auth_type = os.getenv("AUTH_TYPE", config.security.auth_type)
         config.security.token_secret = os.getenv("TOKEN_SECRET", config.security.token_secret)
         config.security.token_expiry = int(
@@ -368,6 +444,16 @@ class DorisConfig:
         config.security.enable_masking = (
             os.getenv("ENABLE_MASKING", str(config.security.enable_masking).lower()).lower() == "true"
         )
+        
+        # Enhanced Token Authentication configuration
+        config.security.token_file_path = os.getenv("TOKEN_FILE_PATH", config.security.token_file_path)
+        config.security.enable_token_expiry = (
+            os.getenv("ENABLE_TOKEN_EXPIRY", str(config.security.enable_token_expiry).lower()).lower() == "true"
+        )
+        config.security.default_token_expiry_hours = int(
+            os.getenv("DEFAULT_TOKEN_EXPIRY_HOURS", str(config.security.default_token_expiry_hours))
+        )
+        config.security.token_hash_algorithm = os.getenv("TOKEN_HASH_ALGORITHM", config.security.token_hash_algorithm)
 
         # Performance configuration
         config.performance.enable_query_cache = (

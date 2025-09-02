@@ -22,10 +22,10 @@ Implements enterprise-level authentication, authorization, SQL security validati
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 import sqlparse
 from sqlparse.sql import Statement
@@ -45,15 +45,13 @@ class SecurityLevel(Enum):
 
 @dataclass
 class AuthContext:
-    """Authentication context"""
+    """Authentication context for audit and session tracking"""
 
-    user_id: str
-    roles: list[str]
-    permissions: list[str]
-    session_id: str
-    login_time: datetime | None = None
+    token_id: str  # Token identifier for audit logging
+    client_ip: str = "unknown"  # Client IP address
+    session_id: str = ""  # Session identifier
+    login_time: datetime = field(default_factory=datetime.utcnow)
     last_activity: datetime | None = None
-    security_level: SecurityLevel = SecurityLevel.INTERNAL
 
 
 @dataclass
@@ -100,6 +98,36 @@ class DorisSecurityManager:
         self.blocked_keywords = self._load_blocked_keywords()
         self.sensitive_tables = self._load_sensitive_tables()
         self.masking_rules = self._load_masking_rules()
+        
+        # Track initialization state
+        self._initialized = False
+
+    async def initialize(self):
+        """Initialize security manager components"""
+        if self._initialized:
+            return
+            
+        try:
+            # Initialize authentication provider (for JWT setup)
+            await self.auth_provider.initialize()
+            
+            self._initialized = True
+            self.logger.info("DorisSecurityManager initialized successfully")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to initialize DorisSecurityManager: {e}")
+            raise
+
+    async def shutdown(self):
+        """Shutdown security manager components"""
+        try:
+            await self.auth_provider.shutdown()
+            self._initialized = False
+            self.logger.info("DorisSecurityManager shutdown completed")
+            
+        except Exception as e:
+            self.logger.error(f"Error during DorisSecurityManager shutdown: {e}")
+            raise
 
     def _load_blocked_keywords(self) -> set[str]:
         """Load blocked SQL keywords from configuration"""
@@ -184,8 +212,55 @@ class DorisSecurityManager:
         return default_rules
 
     async def authenticate_request(self, auth_info: dict[str, Any]) -> AuthContext:
-        """Validate request authentication information"""
-        return await self.auth_provider.authenticate(auth_info)
+        """Validate request authentication information
+        
+        Tries authentication methods in order: Token -> JWT -> OAuth
+        Any one method succeeding allows access
+        If all methods are disabled, returns anonymous context
+        """
+        # Check if any authentication method is enabled
+        if not (self.config.security.enable_token_auth or 
+                self.config.security.enable_jwt_auth or 
+                self.config.security.enable_oauth_auth):
+            self.logger.debug("All authentication methods are disabled")
+            # Return anonymous context when no authentication is enabled
+            return AuthContext(
+                token_id="anonymous",
+                client_ip=auth_info.get("client_ip", "unknown"),
+                session_id="anonymous_session"
+            )
+        
+        # Try authentication methods in order of preference
+        last_error = None
+        
+        # 1. Try Token authentication first (most common)
+        if self.config.security.enable_token_auth:
+            try:
+                return await self.auth_provider.authenticate_token(auth_info)
+            except Exception as e:
+                self.logger.debug(f"Token authentication failed: {e}")
+                last_error = e
+        
+        # 2. Try JWT authentication
+        if self.config.security.enable_jwt_auth:
+            try:
+                return await self.auth_provider.authenticate_jwt(auth_info)
+            except Exception as e:
+                self.logger.debug(f"JWT authentication failed: {e}")
+                last_error = e
+        
+        # 3. Try OAuth authentication
+        if self.config.security.enable_oauth_auth:
+            try:
+                return await self.auth_provider.authenticate_oauth(auth_info)
+            except Exception as e:
+                self.logger.debug(f"OAuth authentication failed: {e}")
+                last_error = e
+        
+        # All enabled authentication methods failed
+        error_message = f"Authentication failed: {str(last_error)}" if last_error else "No authentication method succeeded"
+        self.logger.warning(f"Authentication failed for client {auth_info.get('client_ip', 'unknown')}: {error_message}")
+        raise ValueError(error_message)
 
     async def authorize_resource_access(
         self, auth_context: AuthContext, resource_uri: str
@@ -207,6 +282,117 @@ class DorisSecurityManager:
         """Apply data masking processing"""
         return await self.masking_processor.process(data, auth_context)
 
+    # OAuth-specific methods
+    def get_oauth_authorization_url(self) -> tuple[str, str]:
+        """Get OAuth authorization URL
+        
+        Returns:
+            Tuple of (authorization_url, state)
+        """
+        if not self.auth_provider.oauth_provider:
+            raise ValueError("OAuth is not enabled")
+        return self.auth_provider.oauth_provider.get_authorization_url()
+
+    async def handle_oauth_callback(self, code: str, state: str) -> AuthContext:
+        """Handle OAuth callback
+        
+        Args:
+            code: Authorization code from OAuth provider
+            state: State parameter for CSRF protection
+            
+        Returns:
+            AuthContext for authenticated user
+        """
+        if not self.auth_provider.oauth_provider:
+            raise ValueError("OAuth is not enabled")
+        return await self.auth_provider.oauth_provider.handle_callback(code, state)
+
+    def get_oauth_provider_info(self) -> dict[str, Any]:
+        """Get OAuth provider information
+        
+        Returns:
+            OAuth provider information
+        """
+        if not self.auth_provider.oauth_provider:
+            return {"enabled": False}
+        return self.auth_provider.oauth_provider.get_provider_info()
+
+    # Token management methods
+    async def create_token(
+        self,
+        token_id: str,
+        expires_hours: Optional[int] = None,
+        description: str = "",
+        custom_token: Optional[str] = None
+    ) -> str:
+        """Create a new API access token
+        
+        Args:
+            token_id: Unique token identifier for audit and management
+            expires_hours: Token expiration in hours (None for no expiration)
+            description: Token description for management purposes
+            custom_token: Custom token string (if None, generates random token)
+            
+        Returns:
+            Generated token string
+        """
+        if not self.auth_provider.token_manager:
+            raise ValueError("Token manager not initialized")
+        
+        return await self.auth_provider.token_manager.create_token(
+            token_id=token_id,
+            expires_hours=expires_hours,
+            description=description,
+            custom_token=custom_token
+        )
+    
+    async def revoke_token(self, token_id: str) -> bool:
+        """Revoke a token by token ID
+        
+        Args:
+            token_id: Token ID to revoke
+            
+        Returns:
+            True if token was revoked successfully
+        """
+        if not self.auth_provider.token_manager:
+            raise ValueError("Token manager not initialized")
+        
+        return await self.auth_provider.token_manager.revoke_token(token_id)
+    
+    async def list_tokens(self) -> list[dict[str, Any]]:
+        """List all tokens (without sensitive data)
+        
+        Returns:
+            List of token information
+        """
+        if not self.auth_provider.token_manager:
+            raise ValueError("Token manager not initialized")
+        
+        return await self.auth_provider.token_manager.list_tokens()
+    
+    async def cleanup_expired_tokens(self) -> int:
+        """Remove expired tokens and return count
+        
+        Returns:
+            Number of expired tokens removed
+        """
+        if not self.auth_provider.token_manager:
+            return 0
+        
+        return await self.auth_provider.token_manager.cleanup_expired_tokens()
+    
+    def get_token_stats(self) -> dict[str, Any]:
+        """Get token statistics
+        
+        Returns:
+            Token statistics dictionary
+        """
+        if not self.auth_provider.token_manager:
+            return {"error": "Token manager not initialized"}
+        
+        return self.auth_provider.token_manager.get_token_stats()
+
 
 class AuthenticationProvider:
     """Authentication provider"""
@@ -215,35 +401,199 @@ class AuthenticationProvider:
         self.config = config
         self.logger = get_logger(__name__)
         self.session_cache = {}
-
-    async def authenticate(self, auth_info: dict[str, Any]) -> AuthContext:
-        """Perform identity authentication"""
-        auth_type = auth_info.get("type", "token")
-
-        if auth_type == "token":
-            return await self._authenticate_token(auth_info)
-        elif auth_type == "basic":
-            return await self._authenticate_basic(auth_info)
+        self.jwt_manager = None
+        self.oauth_provider = None
+        self.token_manager = None
+        
+        # Initialize authentication providers based on individual switches
+        auth_methods_enabled = []
+        
+        # Initialize Token manager if enabled
+        if config.security.enable_token_auth:
+            self._initialize_token_manager()
+            auth_methods_enabled.append("Token")
+            
+        # Initialize JWT manager if enabled
+        if config.security.enable_jwt_auth:
+            self._initialize_jwt_manager()
+            auth_methods_enabled.append("JWT")
+            
+        # Initialize OAuth provider if enabled
+        if config.security.enable_oauth_auth or (hasattr(config.security, 'oauth_enabled') and config.security.oauth_enabled):
+            self._initialize_oauth_provider()
+            auth_methods_enabled.append("OAuth")
+            
+        if auth_methods_enabled:
+            self.logger.info(f"Authentication enabled with methods: {', '.join(auth_methods_enabled)}")
         else:
-            raise ValueError(f"Unsupported authentication type: {auth_type}")
+            self.logger.info("All authentication methods are disabled - anonymous access allowed")
+
+    def _initialize_jwt_manager(self):
+        """Initialize JWT manager"""
+        try:
+            from ..auth.jwt_manager import JWTManager
+            self.jwt_manager = JWTManager(self.config)
+            self.logger.info("JWT manager initialized")
+        except ImportError as e:
+            self.logger.error(f"Failed to import JWT manager: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Failed to initialize JWT manager: {e}")
+            raise
+
+    def _initialize_token_manager(self):
+        """Initialize Token manager"""
+        try:
+            from ..auth.token_manager import TokenManager
+            self.token_manager = TokenManager(self.config)
+            self.logger.info("Token manager initialized")
+        except ImportError as e:
+            self.logger.error(f"Failed to import Token manager: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Token manager: {e}")
+            raise
+
+    def _initialize_oauth_provider(self):
+        """Initialize OAuth provider"""
+        try:
+            from ..auth.oauth_provider import OAuthAuthenticationProvider
+            self.oauth_provider = OAuthAuthenticationProvider(self.config)
+            self.logger.info("OAuth provider initialized")
+        except ImportError as e:
+            self.logger.error(f"Failed to import OAuth provider: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Failed to initialize OAuth provider: {e}")
+            raise
+
+    async def initialize(self):
+        """Initialize authentication provider asynchronously"""
+        if self.jwt_manager:
+            success = await self.jwt_manager.initialize()
+            if not success:
+                raise RuntimeError("Failed to initialize JWT manager")
+            self.logger.info("JWT authentication provider initialized successfully")
+        
+        if self.token_manager:
+            # Token manager doesn't need async initialization, just log success
+            self.logger.info("Token authentication provider initialized successfully")
+            
+        if self.oauth_provider:
+            success = await self.oauth_provider.initialize()
+            if not success:
+                raise RuntimeError("Failed to initialize OAuth provider")
+            self.logger.info("OAuth authentication provider initialized successfully")
+
+    async def shutdown(self):
+        """Shutdown authentication provider"""
+        if self.jwt_manager:
+            await self.jwt_manager.shutdown()
+            self.logger.info("JWT authentication provider shutdown completed")
+        
+        if self.token_manager:
+            # Token manager doesn't need async shutdown, just log
+            self.logger.info("Token authentication provider shutdown completed")
+            
+        if self.oauth_provider:
+            await self.oauth_provider.shutdown()
+            self.logger.info("OAuth authentication provider shutdown completed")
+
+    async def authenticate_token(self, auth_info: dict[str, Any]) -> AuthContext:
+        """Perform token authentication"""
+        if not self.config.security.enable_token_auth:
+            raise ValueError("Token authentication is not enabled")
+        return await self._authenticate_token(auth_info)
+    
+    async def authenticate_jwt(self, auth_info: dict[str, Any]) -> AuthContext:
+        """Perform JWT authentication"""
+        if not self.config.security.enable_jwt_auth:
+            raise ValueError("JWT authentication is not enabled")
+        return await self._authenticate_jwt(auth_info)
+    
+    async def authenticate_oauth(self, auth_info: dict[str, Any]) -> AuthContext:
+        """Perform OAuth authentication"""
+        if not self.config.security.enable_oauth_auth:
+            raise ValueError("OAuth authentication is not enabled")
+        return await self._authenticate_oauth(auth_info)
+
+    async def _authenticate_jwt(self, auth_info: dict[str, Any]) -> AuthContext:
+        """JWT authentication"""
+        if not self.jwt_manager:
+            raise ValueError("JWT manager not initialized")
+        
+        token = auth_info.get("token")
+        if not token:
+            # Try to extract from Authorization header
+            authorization = auth_info.get("authorization")
+            if authorization and authorization.startswith('Bearer '):
+                token = authorization[7:]
+            
+        if not token:
+            raise ValueError("Missing JWT token")
+
+        try:
+            # Use JWT middleware for authentication
+            from ..auth.auth_middleware import AuthMiddleware
+            middleware = AuthMiddleware(self.jwt_manager)
+            return await middleware.authenticate_request(auth_info)
+            
+        except Exception as e:
+            self.logger.error(f"JWT authentication failed: {e}")
+            raise ValueError(f"JWT authentication failed: {str(e)}")
+
+    async def _authenticate_oauth(self, auth_info: dict[str, Any]) -> AuthContext:
+        """OAuth authentication"""
+        if not self.oauth_provider:
+            raise ValueError("OAuth provider not initialized")
+        
+        # Handle different OAuth authentication scenarios
+        if "access_token" in auth_info:
+            # Direct OAuth access token authentication
+            return await self.oauth_provider.authenticate_with_token(auth_info["access_token"])
+        elif "code" in auth_info and "state" in auth_info:
+            # OAuth callback authentication
+            return await self.oauth_provider.handle_callback(auth_info["code"], auth_info["state"])
+        else:
+            raise ValueError("OAuth authentication requires either access_token or code+state")
 
     async def _authenticate_token(self, auth_info: dict[str, Any]) -> AuthContext:
         """Token authentication"""
+        if not self.token_manager:
+            raise ValueError("Token manager not initialized")
+            
         token = auth_info.get("token")
+        if not token:
+            # Try to extract from Authorization header
+            authorization = auth_info.get("authorization")
+            if authorization and authorization.startswith('Bearer '):
+                token = authorization[7:]
+            elif authorization and authorization.startswith('Token '):
+                token = authorization[6:]
+                
         if not token:
             raise ValueError("Missing authentication token")
 
-        # Validate token (simplified implementation, should validate JWT or query authentication service in practice)
-        user_info = await self._validate_token(token)
-
-        return AuthContext(
-            user_id=user_info["user_id"],
-            roles=user_info["roles"],
-            permissions=user_info["permissions"],
-            session_id=auth_info.get("session_id", "default"),
-            login_time=datetime.utcnow(),
-            security_level=SecurityLevel(user_info.get("security_level", "internal")),
-        )
+        try:
+            # Validate token using TokenManager
+            validation_result = await self.token_manager.validate_token(token)
+            
+            if not validation_result.is_valid:
+                raise ValueError(f"Token validation failed: {validation_result.error_message}")
+            
+            token_info = validation_result.token_info
+            
+            return AuthContext(
+                token_id=token_info.token_id,
+                client_ip=auth_info.get("client_ip", "unknown"),
+                session_id=auth_info.get("session_id", f"session_{token_info.token_id}"),
+                login_time=datetime.utcnow(),
+                last_activity=token_info.last_used
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Token authentication failed: {e}")
+            raise ValueError(f"Token authentication failed: {str(e)}")
 
     async def _authenticate_basic(self, auth_info: dict[str, Any]) -> AuthContext:
         """Basic authentication (username password)"""
