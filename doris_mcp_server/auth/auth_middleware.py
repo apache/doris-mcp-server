@@ -31,53 +31,53 @@ logger = get_logger(__name__)
 
 
 class AuthMiddleware:
-    """认证中间件
+    """Authentication Middleware
     
-    为HTTP和MCP请求提供JWT认证功能
+    Provides JWT authentication functionality for HTTP and MCP requests
     """
     
     def __init__(self, jwt_manager: JWTManager):
-        """初始化认证中间件
+        """Initialize authentication middleware
         
         Args:
-            jwt_manager: JWT管理器实例
+            jwt_manager: JWT manager instance
         """
         self.jwt_manager = jwt_manager
         logger.info("AuthMiddleware initialized")
     
     def extract_token_from_header(self, authorization: str) -> Optional[str]:
-        """从Authorization头提取JWT令牌
+        """Extract JWT token from Authorization header
         
         Args:
-            authorization: Authorization头的值
+            authorization: Authorization header value
             
         Returns:
-            JWT令牌字符串，如果没有则返回None
+            JWT token string, or None if not found
         """
         if not authorization:
             return None
         
-        # 支持 Bearer 格式
+        # Support Bearer format
         if authorization.startswith('Bearer '):
-            return authorization[7:]  # 去除 "Bearer " 前缀
+            return authorization[7:]  # Remove "Bearer " prefix
         
-        # 支持直接的token格式
+        # Support direct token format
         if not authorization.startswith('Basic '):
             return authorization
         
         return None
     
     async def authenticate_request(self, auth_info: Dict[str, Any]) -> AuthContext:
-        """认证请求并返回认证上下文
+        """Authenticate request and return authentication context
         
         Args:
-            auth_info: 认证信息字典
+            auth_info: Authentication information dictionary
             
         Returns:
-            AuthContext认证上下文
+            AuthContext authentication context
             
         Raises:
-            ValueError: 认证失败
+            ValueError: Authentication failed
         """
         try:
             auth_type = auth_info.get("type", "jwt")
@@ -92,18 +92,18 @@ class AuthMiddleware:
             raise
     
     async def _authenticate_jwt(self, auth_info: Dict[str, Any]) -> AuthContext:
-        """JWT认证处理
+        """JWT authentication processing
         
         Args:
-            auth_info: 包含JWT令牌的认证信息
+            auth_info: Authentication information containing JWT token
             
         Returns:
-            AuthContext认证上下文
+            AuthContext authentication context
         """
-        # 获取令牌
+        # Get token
         token = auth_info.get("token")
         if not token:
-            # 尝试从Authorization头获取
+            # Try to get from Authorization header
             authorization = auth_info.get("authorization")
             token = self.extract_token_from_header(authorization)
         
@@ -111,16 +111,16 @@ class AuthMiddleware:
             raise ValueError("Missing JWT token")
         
         try:
-            # 验证令牌
+            # Validate token
             validation_result = await self.jwt_manager.validate_token(token, 'access')
             payload = validation_result['payload']
             
-            # 构建认证上下文
+            # Build authentication context
             auth_context = AuthContext(
                 user_id=payload.get('sub'),
                 roles=payload.get('roles', []),
                 permissions=payload.get('permissions', []),
-                session_id=payload.get('jti'),  # 使用JWT ID作为会话ID
+                session_id=payload.get('jti'),  # Use JWT ID as session ID
                 login_time=datetime.fromtimestamp(payload.get('iat', 0)),
                 last_activity=datetime.utcnow(),
                 security_level=SecurityLevel(payload.get('security_level', 'internal'))
@@ -134,13 +134,13 @@ class AuthMiddleware:
             raise ValueError(f"JWT authentication failed: {str(e)}")
     
     async def create_auth_response_headers(self, auth_context: AuthContext) -> Dict[str, str]:
-        """创建认证响应头
+        """Create authentication response headers
         
         Args:
-            auth_context: 认证上下文
+            auth_context: Authentication context
             
         Returns:
-            响应头字典
+            Response headers dictionary
         """
         return {
             'X-Auth-User': auth_context.user_id,
@@ -150,44 +150,44 @@ class AuthMiddleware:
         }
     
     def create_http_middleware(self, skip_paths: Optional[list] = None):
-        """创建HTTP中间件函数
+        """Create HTTP middleware function
         
         Args:
-            skip_paths: 跳过认证的路径列表
+            skip_paths: List of paths to skip authentication
             
         Returns:
-            ASGI中间件函数
+            ASGI middleware function
         """
         skip_paths = skip_paths or ['/health', '/docs', '/openapi.json']
         
         async def middleware(scope, receive, send):
-            """HTTP认证中间件"""
+            """HTTP authentication middleware"""
             if scope['type'] != 'http':
-                # 非HTTP请求直接传递
+                # Pass through non-HTTP requests directly
                 return await self.app(scope, receive, send)
             
             path = scope.get('path', '')
             
-            # 检查是否跳过认证
+            # Check if authentication should be skipped
             if any(path.startswith(skip) for skip in skip_paths):
                 return await self.app(scope, receive, send)
             
-            # 提取认证信息
+            # Extract authentication information
             headers = dict(scope.get('headers', []))
             authorization = headers.get(b'authorization', b'').decode()
             
             try:
-                # 进行认证
+                # Perform authentication
                 auth_info = {
                     'type': 'jwt',
                     'authorization': authorization
                 }
                 auth_context = await self.authenticate_request(auth_info)
                 
-                # 将认证上下文添加到scope
+                # Add authentication context to scope
                 scope['auth_context'] = auth_context
                 
-                # 创建响应包装器来添加认证头
+                # Create response wrapper to add authentication headers
                 async def send_wrapper(message):
                     if message['type'] == 'http.response.start':
                         headers = dict(message.get('headers', []))
@@ -203,7 +203,7 @@ class AuthMiddleware:
                 return await self.app(scope, receive, send_wrapper)
                 
             except Exception as e:
-                # 认证失败，返回401错误
+                # Authentication failed, return 401 error
                 response_body = f'{{"error": "Authentication failed", "message": "{str(e)}"}}'
                 
                 await send({
@@ -222,16 +222,16 @@ class AuthMiddleware:
         return middleware
     
     async def authenticate_mcp_request(self, headers: Dict[str, str]) -> AuthContext:
-        """认证MCP请求
+        """Authenticate MCP request
         
         Args:
-            headers: MCP请求头
+            headers: MCP request headers
             
         Returns:
-            AuthContext认证上下文
+            AuthContext authentication context
         """
         try:
-            # 从多个可能的头字段提取认证信息
+            # Extract authentication information from multiple possible header fields
             authorization = (
                 headers.get('Authorization') or 
                 headers.get('authorization') or
@@ -252,7 +252,7 @@ class AuthMiddleware:
 
 
 class AuthenticationError(Exception):
-    """认证错误异常"""
+    """Authentication error exception"""
     
     def __init__(self, message: str, error_code: str = "AUTH_FAILED"):
         self.message = message
@@ -261,7 +261,7 @@ class AuthenticationError(Exception):
 
 
 class AuthorizationError(Exception):
-    """授权错误异常"""
+    """Authorization error exception"""
     
     def __init__(self, message: str, error_code: str = "ACCESS_DENIED"):
         self.message = message

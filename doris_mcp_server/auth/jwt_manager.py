@@ -39,14 +39,14 @@ logger = get_logger(__name__)
 
 
 class JWTManager:
-    """JWT令牌管理器
+    """JWT Token Manager
     
-    提供完整的JWT令牌生命周期管理，包括：
-    - 令牌生成和签名
-    - 令牌验证和解析
-    - 令牌刷新机制
-    - 令牌撤销和黑名单
-    - 自动密钥轮换
+    Provides comprehensive JWT token lifecycle management, including:
+    - Token generation and signing
+    - Token validation and parsing
+    - Token refresh mechanism
+    - Token revocation and blacklist
+    - Automatic key rotation
     """
     
     def __init__(self, config):
@@ -71,28 +71,28 @@ class JWTManager:
         self.enable_refresh = security_config.enable_token_refresh
         self.enable_revocation = security_config.enable_token_revocation
         
-        # 初始化组件
+        # Initialize components
         self.key_manager = KeyManager(config)
         self.token_blacklist = TokenBlacklist()
         self.validator = TokenValidator(config, self.token_blacklist)
         
-        # 自动密钥轮换任务
+        # Automatic key rotation task
         self._key_rotation_task = None
         
         logger.info(f"JWTManager initialized with algorithm: {self.algorithm}")
     
     async def initialize(self) -> bool:
-        """初始化JWT管理器"""
+        """Initialize JWT manager"""
         try:
-            # 初始化密钥管理器
+            # Initialize key manager
             if not await self.key_manager.initialize():
                 logger.error("Failed to initialize key manager")
                 return False
             
-            # 启动令牌验证器
+            # Start token validator
             await self.validator.start()
             
-            # 启动自动密钥轮换
+            # Start automatic key rotation
             if self.key_manager.key_rotation_interval > 0:
                 self._key_rotation_task = asyncio.create_task(self._auto_key_rotation())
             
@@ -104,9 +104,9 @@ class JWTManager:
             return False
     
     async def shutdown(self):
-        """关闭JWT管理器"""
+        """Shutdown JWT manager"""
         try:
-            # 停止密钥轮换任务
+            # Stop key rotation task
             if self._key_rotation_task:
                 self._key_rotation_task.cancel()
                 try:
@@ -114,7 +114,7 @@ class JWTManager:
                 except asyncio.CancelledError:
                     pass
             
-            # 停止验证器
+            # Stop validator
             await self.validator.stop()
             
             logger.info("JWTManager shutdown completed")
@@ -124,20 +124,20 @@ class JWTManager:
     
     async def generate_tokens(self, user_info: Dict[str, Any], 
                             custom_claims: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """生成访问令牌和刷新令牌
+        """Generate access token and refresh token
         
         Args:
-            user_info: 用户信息字典，包含user_id, roles, permissions等
-            custom_claims: 自定义声明
+            user_info: User information dictionary, containing user_id, roles, permissions, etc.
+            custom_claims: Custom claims
             
         Returns:
-            包含access_token和refresh_token的字典
+            Dictionary containing access_token and refresh_token
         """
         try:
             current_time = int(time.time())
             jti = str(uuid.uuid4())
             
-            # 构建基础载荷
+            # Build base payload
             base_payload = {
                 'iss': self.issuer,
                 'aud': self.audience,
@@ -149,11 +149,11 @@ class JWTManager:
                 'security_level': user_info.get('security_level', 'internal')
             }
             
-            # 添加自定义声明
+            # Add custom claims
             if custom_claims:
                 base_payload.update(custom_claims)
             
-            # 生成访问令牌
+            # Generate access token
             access_payload = base_payload.copy()
             access_payload.update({
                 'exp': current_time + self.access_token_expiry,
@@ -170,7 +170,7 @@ class JWTManager:
                 'issued_at': current_time
             }
             
-            # 生成刷新令牌（如果启用）
+            # Generate refresh token (if enabled)
             if self.enable_refresh:
                 refresh_jti = str(uuid.uuid4())
                 refresh_payload = {
@@ -181,7 +181,7 @@ class JWTManager:
                     'jti': refresh_jti,
                     'sub': user_info.get('user_id'),
                     'token_type': 'refresh',
-                    'access_jti': jti  # 关联的访问令牌ID
+                    'access_jti': jti  # Associated access token ID
                 }
                 
                 refresh_token = await self._sign_token(refresh_payload)
@@ -198,22 +198,22 @@ class JWTManager:
             raise
     
     async def _sign_token(self, payload: Dict[str, Any]) -> str:
-        """签名JWT令牌
+        """Sign JWT token
         
         Args:
-            payload: JWT载荷
+            payload: JWT payload
             
         Returns:
-            签名后的JWT令牌
+            Signed JWT token
         """
         try:
             signing_key = self.key_manager.get_private_key()
             
             if self.algorithm == "HS256":
-                # 对称密钥签名
+                # Symmetric key signing
                 token = jwt.encode(payload, signing_key, algorithm=self.algorithm)
             else:
-                # 非对称密钥签名
+                # Asymmetric key signing
                 token = jwt.encode(payload, signing_key, algorithm=self.algorithm)
             
             return token
@@ -223,20 +223,20 @@ class JWTManager:
             raise
     
     async def validate_token(self, token: str, token_type: str = 'access') -> Dict[str, Any]:
-        """验证JWT令牌
+        """Validate JWT token
         
         Args:
-            token: JWT令牌字符串
-            token_type: 令牌类型 ('access' 或 'refresh')
+            token: JWT token string
+            token_type: Token type ('access' or 'refresh')
             
         Returns:
-            验证结果和用户信息
+            Validation result and user information
             
         Raises:
-            ValueError: 令牌验证失败
+            ValueError: Token validation failed
         """
         try:
-            # 解码令牌
+            # Decode token
             verification_key = self.key_manager.get_public_key()
             
             # Get security configuration
@@ -245,7 +245,7 @@ class JWTManager:
             else:
                 security_config = self.config
             
-            # JWT解码选项
+            # JWT decoding options
             options = {
                 'verify_signature': security_config.jwt_verify_signature,
                 'verify_exp': security_config.jwt_require_exp,
@@ -255,7 +255,7 @@ class JWTManager:
                 'verify_iss': security_config.jwt_verify_issuer,
             }
             
-            # 解码JWT
+            # Decode JWT
             payload = jwt.decode(
                 token,
                 verification_key,
@@ -266,11 +266,11 @@ class JWTManager:
                 options=options
             )
             
-            # 检查令牌类型
+            # Check token type
             if payload.get('token_type') != token_type:
                 raise ValueError(f"Invalid token type: expected {token_type}")
             
-            # 使用验证器进行额外检查
+            # Use validator for additional checks
             validation_result = await self.validator.validate_claims(payload)
             
             logger.info(f"Token validation successful for user: {payload.get('sub')}")
@@ -285,31 +285,31 @@ class JWTManager:
             raise ValueError(f"Token validation failed: {str(e)}")
     
     async def refresh_token(self, refresh_token: str) -> Dict[str, Any]:
-        """刷新访问令牌
+        """Refresh access token
         
         Args:
-            refresh_token: 刷新令牌
+            refresh_token: Refresh token
             
         Returns:
-            新的令牌对
+            New token pair
         """
         if not self.enable_refresh:
             raise ValueError("Token refresh is disabled")
         
         try:
-            # 验证刷新令牌
+            # Validate refresh token
             refresh_result = await self.validate_token(refresh_token, 'refresh')
             refresh_payload = refresh_result['payload']
             
-            # 撤销关联的访问令牌（如果启用撤销功能）
+            # Revoke associated access token (if revocation is enabled)
             if self.enable_revocation:
                 access_jti = refresh_payload.get('access_jti')
                 if access_jti:
-                    # 这里应该撤销旧的访问令牌，但由于我们无法知道其过期时间，
-                    # 在实际应用中可能需要存储更多信息或使用不同的策略
+                    # Should revoke old access token here, but since we don't know its expiration time,
+                    # in practice might need to store more information or use different strategy
                     pass
             
-            # 构建新的用户信息
+            # Build new user information
             user_info = {
                 'user_id': refresh_payload.get('sub'),
                 'roles': refresh_payload.get('roles', []),
@@ -317,7 +317,7 @@ class JWTManager:
                 'security_level': refresh_payload.get('security_level', 'internal')
             }
             
-            # 生成新的令牌对
+            # Generate new token pair
             new_tokens = await self.generate_tokens(user_info)
             
             logger.info(f"Token refreshed for user: {user_info['user_id']}")
@@ -328,26 +328,26 @@ class JWTManager:
             raise
     
     async def revoke_token(self, token: str) -> bool:
-        """撤销令牌
+        """Revoke token
         
         Args:
-            token: 要撤销的令牌
+            token: Token to revoke
             
         Returns:
-            撤销是否成功
+            Whether revocation was successful
         """
         if not self.enable_revocation:
             logger.warning("Token revocation is disabled")
             return False
         
         try:
-            # 解码令牌获取JTI和过期时间
+            # Decode token to get JTI and expiration time
             verification_key = self.key_manager.get_public_key()
             payload = jwt.decode(
                 token,
                 verification_key,
                 algorithms=[self.algorithm],
-                options={'verify_exp': False}  # 允许解码过期令牌
+                options={'verify_exp': False}  # Allow decoding expired tokens
             )
             
             jti = payload.get('jti')
@@ -357,7 +357,7 @@ class JWTManager:
                 logger.error("Token missing required claims for revocation")
                 return False
             
-            # 添加到黑名单
+            # Add to blacklist
             await self.validator.revoke_token(jti, exp)
             
             logger.info(f"Token {jti} revoked successfully")
@@ -368,13 +368,13 @@ class JWTManager:
             return False
     
     async def decode_token_unsafe(self, token: str) -> Dict[str, Any]:
-        """不验证签名地解码令牌（仅用于调试）
+        """Decode token without verifying signature (for debugging only)
         
         Args:
-            token: JWT令牌
+            token: JWT token
             
         Returns:
-            令牌载荷
+            Token payload
         """
         try:
             payload = jwt.decode(token, options={'verify_signature': False})
@@ -384,13 +384,13 @@ class JWTManager:
             raise
     
     async def get_token_info(self, token: str) -> Dict[str, Any]:
-        """获取令牌信息（不验证签名）
+        """Get token information (without verifying signature)
         
         Args:
-            token: JWT令牌
+            token: JWT token
             
         Returns:
-            令牌信息
+            Token information
         """
         try:
             payload = await self.decode_token_unsafe(token)
@@ -414,29 +414,29 @@ class JWTManager:
             raise
     
     async def _auto_key_rotation(self):
-        """自动密钥轮换任务"""
+        """Automatic key rotation task"""
         while True:
             try:
-                # 检查密钥是否需要轮换
+                # Check if key rotation is needed
                 if await self.key_manager.is_key_expired():
                     logger.info("Key rotation needed, rotating keys...")
                     await self.key_manager.rotate_keys()
                 
-                # 等待到下次检查
-                await asyncio.sleep(3600)  # 每小时检查一次
+                # Wait until next check
+                await asyncio.sleep(3600)  # Check every hour
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error in auto key rotation: {e}")
-                # 出错后等待较长时间再重试
+                # Wait longer before retry after error
                 await asyncio.sleep(3600)
     
     async def get_public_key_info(self) -> Dict[str, Any]:
-        """获取公钥信息（用于客户端验证）
+        """Get public key information (for client verification)
         
         Returns:
-            公钥信息
+            Public key information
         """
         key_info = await self.key_manager.get_key_info()
         public_key_pem = await self.key_manager.export_public_key_pem()
@@ -448,10 +448,10 @@ class JWTManager:
         }
     
     async def get_manager_stats(self) -> Dict[str, Any]:
-        """获取管理器统计信息
+        """Get manager statistics
         
         Returns:
-            统计信息
+            Statistics information
         """
         key_info = await self.key_manager.get_key_info()
         validation_stats = await self.validator.get_validation_stats()

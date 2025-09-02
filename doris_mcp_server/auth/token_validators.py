@@ -32,32 +32,32 @@ logger = get_logger(__name__)
 
 
 class TokenBlacklist:
-    """JWT令牌黑名单管理器
+    """JWT Token Blacklist Manager
     
-    管理已撤销的令牌，防止被撤销的令牌继续使用
-    支持内存和持久化存储
+    Manages revoked tokens to prevent revoked tokens from being used again
+    Supports both in-memory and persistent storage
     """
     
     def __init__(self, cleanup_interval: int = 3600):
-        """初始化令牌黑名单
+        """Initialize token blacklist
         
         Args:
-            cleanup_interval: 清理过期令牌的间隔(秒)
+            cleanup_interval: Interval for cleaning up expired tokens (seconds)
         """
         self.cleanup_interval = cleanup_interval
-        # 存储格式: {token_jti: expiry_timestamp}
+        # Storage format: {token_jti: expiry_timestamp}
         self._blacklisted_tokens: Dict[str, float] = {}
         self._cleanup_task = None
         
         logger.info("TokenBlacklist initialized")
     
     async def start(self):
-        """启动黑名单管理器"""
+        """Start blacklist manager"""
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
         logger.info("TokenBlacklist started with periodic cleanup")
     
     async def stop(self):
-        """停止黑名单管理器"""
+        """Stop blacklist manager"""
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -67,17 +67,17 @@ class TokenBlacklist:
         logger.info("TokenBlacklist stopped")
     
     async def add_token(self, jti: str, exp: float):
-        """添加令牌到黑名单
+        """Add token to blacklist
         
         Args:
-            jti: JWT ID (唯一标识符)
-            exp: 令牌过期时间戳
+            jti: JWT ID (unique identifier)
+            exp: Token expiration timestamp
         """
         self._blacklisted_tokens[jti] = exp
         logger.info(f"Token {jti} added to blacklist")
     
     async def is_blacklisted(self, jti: str) -> bool:
-        """检查令牌是否在黑名单中
+        """Check if token is blacklisted
         
         Args:
             jti: JWT ID
@@ -88,7 +88,7 @@ class TokenBlacklist:
         return jti in self._blacklisted_tokens
     
     async def remove_token(self, jti: str) -> bool:
-        """从黑名单移除令牌
+        """Remove token from blacklist
         
         Args:
             jti: JWT ID
@@ -103,10 +103,10 @@ class TokenBlacklist:
         return False
     
     async def cleanup_expired(self) -> int:
-        """清理过期的黑名单令牌
+        """Clean up expired blacklisted tokens
         
         Returns:
-            清理的令牌数量
+            Number of tokens cleaned up
         """
         current_time = time.time()
         expired_tokens = [
@@ -123,7 +123,7 @@ class TokenBlacklist:
         return len(expired_tokens)
     
     async def get_stats(self) -> Dict[str, Any]:
-        """获取黑名单统计信息"""
+        """Get blacklist statistics"""
         current_time = time.time()
         active_tokens = sum(1 for exp in self._blacklisted_tokens.values() if exp > current_time)
         
@@ -135,7 +135,7 @@ class TokenBlacklist:
         }
     
     async def _periodic_cleanup(self):
-        """定期清理过期令牌"""
+        """Periodically clean up expired tokens"""
         while True:
             try:
                 await asyncio.sleep(self.cleanup_interval)
@@ -147,27 +147,27 @@ class TokenBlacklist:
 
 
 class RateLimiter:
-    """令牌使用率限制器"""
+    """Token usage rate limiter"""
     
     def __init__(self, max_requests: int = 100, time_window: int = 3600):
-        """初始化速率限制器
+        """Initialize rate limiter
         
         Args:
-            max_requests: 时间窗口内最大请求数
-            time_window: 时间窗口(秒)
+            max_requests: Maximum requests within time window
+            time_window: Time window in seconds
         """
         self.max_requests = max_requests
         self.time_window = time_window
-        # 存储格式: {user_id: [timestamp1, timestamp2, ...]}
+        # Storage format: {user_id: [timestamp1, timestamp2, ...]}
         self._request_history: Dict[str, list] = defaultdict(list)
         
         logger.info(f"RateLimiter initialized: {max_requests} requests per {time_window} seconds")
     
     async def is_allowed(self, user_id: str) -> bool:
-        """检查用户是否允许请求
+        """Check if user is allowed to make request
         
         Args:
-            user_id: 用户ID
+            user_id: User ID
             
         Returns:
             True if allowed, False otherwise
@@ -175,32 +175,32 @@ class RateLimiter:
         current_time = time.time()
         user_requests = self._request_history[user_id]
         
-        # 清理过期的请求记录
+        # Clean up expired request records
         cutoff_time = current_time - self.time_window
         user_requests[:] = [t for t in user_requests if t > cutoff_time]
         
-        # 检查是否超过限制
+        # Check if limit exceeded
         if len(user_requests) >= self.max_requests:
             logger.warning(f"Rate limit exceeded for user {user_id}")
             return False
         
-        # 记录当前请求
+        # Record current request
         user_requests.append(current_time)
         return True
     
     async def get_usage(self, user_id: str) -> Dict[str, Any]:
-        """获取用户使用情况
+        """Get user usage information
         
         Args:
-            user_id: 用户ID
+            user_id: User ID
             
         Returns:
-            使用情况统计
+            Usage statistics
         """
         current_time = time.time()
         user_requests = self._request_history[user_id]
         
-        # 清理过期记录
+        # Clean up expired records
         cutoff_time = current_time - self.time_window
         active_requests = [t for t in user_requests if t > cutoff_time]
         
@@ -214,10 +214,10 @@ class RateLimiter:
 
 
 class TokenValidator:
-    """JWT令牌验证器
+    """JWT Token Validator
     
-    提供全面的JWT令牌验证功能，包括签名验证、声明验证、
-    黑名单检查和速率限制
+    Provides comprehensive JWT token validation functionality, including signature verification,
+    claim validation, blacklist checking and rate limiting
     """
     
     def __init__(self, config, blacklist: Optional[TokenBlacklist] = None):
@@ -254,25 +254,25 @@ class TokenValidator:
         logger.info("TokenValidator initialized")
     
     async def validate_claims(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """验证JWT声明
+        """Validate JWT claims
         
         Args:
-            payload: JWT载荷
+            payload: JWT payload
             
         Returns:
-            验证结果
+            Validation result
             
         Raises:
-            ValueError: 验证失败
+            ValueError: Validation failed
         """
         current_time = time.time()
         
-        # 验证issuer
+        # Validate issuer
         if self.verify_issuer:
             if payload.get('iss') != self.expected_issuer:
                 raise ValueError(f"Invalid issuer: expected {self.expected_issuer}")
         
-        # 验证audience
+        # Validate audience
         if self.verify_audience:
             aud = payload.get('aud')
             if isinstance(aud, list):
@@ -281,7 +281,7 @@ class TokenValidator:
             elif aud != self.expected_audience:
                 raise ValueError(f"Invalid audience: expected {self.expected_audience}")
         
-        # 验证过期时间
+        # Validate expiration time
         if self.require_exp or 'exp' in payload:
             exp = payload.get('exp')
             if not exp:
@@ -289,7 +289,7 @@ class TokenValidator:
             if current_time > exp + self.leeway:
                 raise ValueError("Token has expired")
         
-        # 验证生效时间
+        # Validate not before time
         if self.require_nbf or 'nbf' in payload:
             nbf = payload.get('nbf')
             if not nbf:
@@ -297,21 +297,21 @@ class TokenValidator:
             if current_time < nbf - self.leeway:
                 raise ValueError("Token not yet valid")
         
-        # 验证签发时间
+        # Validate issued at time
         if self.require_iat or 'iat' in payload:
             iat = payload.get('iat')
             if not iat:
                 raise ValueError("Missing 'iat' claim")
-            # 允许一定的时钟偏差，但不能是未来的时间
+            # Allow some clock skew, but cannot be future time
             if iat > current_time + self.leeway:
                 raise ValueError("Token issued in the future")
         
-        # 检查黑名单
+        # Check blacklist
         jti = payload.get('jti')
         if jti and await self.blacklist.is_blacklisted(jti):
             raise ValueError("Token has been revoked")
         
-        # 速率限制检查
+        # Rate limit check
         user_id = payload.get('sub')
         if user_id:
             if not await self.rate_limiter.is_allowed(user_id):
@@ -324,27 +324,27 @@ class TokenValidator:
         }
     
     async def start(self):
-        """启动验证器"""
+        """Start validator"""
         await self.blacklist.start()
         logger.info("TokenValidator started")
     
     async def stop(self):
-        """停止验证器"""
+        """Stop validator"""
         await self.blacklist.stop()
         logger.info("TokenValidator stopped")
     
     async def revoke_token(self, jti: str, exp: float):
-        """撤销令牌
+        """Revoke token
         
         Args:
             jti: JWT ID
-            exp: 令牌过期时间
+            exp: Token expiration time
         """
         await self.blacklist.add_token(jti, exp)
         logger.info(f"Token {jti} has been revoked")
     
     async def get_validation_stats(self) -> Dict[str, Any]:
-        """获取验证统计信息"""
+        """Get validation statistics"""
         blacklist_stats = await self.blacklist.get_stats()
         
         return {
@@ -361,5 +361,5 @@ class TokenValidator:
         }
     
     async def get_user_rate_limit_info(self, user_id: str) -> Dict[str, Any]:
-        """获取用户速率限制信息"""
+        """Get user rate limit information"""
         return await self.rate_limiter.get_usage(user_id)

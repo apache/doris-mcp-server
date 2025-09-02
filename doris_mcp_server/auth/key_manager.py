@@ -36,10 +36,10 @@ logger = get_logger(__name__)
 
 
 class KeyManager:
-    """JWT密钥管理器
+    """JWT Key Manager
     
-    负责JWT签名密钥的生成、加载、轮换和安全存储
-    支持RSA和EC算法，提供自动密钥轮换功能
+    Responsible for generating, loading, rotating and securely storing JWT signing keys
+    Supports RSA and EC algorithms, provides automatic key rotation functionality
     """
     
     def __init__(self, config):
@@ -62,7 +62,7 @@ class KeyManager:
         self.public_key_path = security_config.jwt_public_key_path
         self.secret_key = security_config.jwt_secret_key
         
-        # 密钥存储
+        # Key storage
         self._private_key = None
         self._public_key = None
         self._secret_key = None
@@ -71,7 +71,7 @@ class KeyManager:
         logger.info(f"KeyManager initialized with algorithm: {self.algorithm}")
     
     async def initialize(self) -> bool:
-        """初始化密钥管理器，加载或生成密钥"""
+        """Initialize key manager, load or generate keys"""
         try:
             if self.algorithm == "HS256":
                 await self._initialize_symmetric_key()
@@ -86,36 +86,36 @@ class KeyManager:
             return False
     
     async def _initialize_symmetric_key(self):
-        """初始化对称密钥 (HS256)"""
+        """Initialize symmetric key (HS256)"""
         if self.secret_key:
-            # 使用配置的密钥
+            # Use configured key
             self._secret_key = self.secret_key.encode()
             logger.info("Loaded symmetric key from configuration")
         else:
-            # 生成新的密钥
+            # Generate new key
             self._secret_key = await self.generate_symmetric_key()
             logger.info("Generated new symmetric key")
         
         self._key_generated_at = datetime.utcnow()
     
     async def _initialize_asymmetric_keys(self):
-        """初始化非对称密钥对 (RS256/ES256)"""
-        # 尝试从文件加载密钥
+        """Initialize asymmetric key pair (RS256/ES256)"""
+        # Try to load keys from files
         if await self._load_keys_from_files():
             logger.info("Loaded asymmetric keys from files")
             return
         
-        # 尝试从环境变量加载
+        # Try to load from environment variables
         if await self._load_keys_from_env():
             logger.info("Loaded asymmetric keys from environment")
             return
         
-        # 生成新的密钥对
+        # Generate new key pair
         await self.generate_key_pair()
         logger.info("Generated new asymmetric key pair")
     
     async def _load_keys_from_files(self) -> bool:
-        """从文件加载密钥"""
+        """Load keys from files"""
         try:
             if not self.private_key_path or not self.public_key_path:
                 return False
@@ -126,21 +126,21 @@ class KeyManager:
             if not (private_path.exists() and public_path.exists()):
                 return False
             
-            # 读取私钥
+            # Read private key
             with open(private_path, 'rb') as f:
                 private_key_data = f.read()
             self._private_key = serialization.load_pem_private_key(
                 private_key_data, password=None, backend=default_backend()
             )
             
-            # 读取公钥
+            # Read public key
             with open(public_path, 'rb') as f:
                 public_key_data = f.read()
             self._public_key = serialization.load_pem_public_key(
                 public_key_data, backend=default_backend()
             )
             
-            # 获取密钥生成时间（使用文件修改时间）
+            # Get key generation time (using file modification time)
             self._key_generated_at = datetime.fromtimestamp(private_path.stat().st_mtime)
             
             return True
@@ -150,7 +150,7 @@ class KeyManager:
             return False
     
     async def _load_keys_from_env(self) -> bool:
-        """从环境变量加载密钥"""
+        """Load keys from environment variables"""
         try:
             private_key_env = os.getenv('JWT_PRIVATE_KEY')
             public_key_env = os.getenv('JWT_PUBLIC_KEY')
@@ -158,12 +158,12 @@ class KeyManager:
             if not (private_key_env and public_key_env):
                 return False
             
-            # 解析私钥
+            # Parse private key
             self._private_key = serialization.load_pem_private_key(
                 private_key_env.encode(), password=None, backend=default_backend()
             )
             
-            # 解析公钥
+            # Parse public key
             self._public_key = serialization.load_pem_public_key(
                 public_key_env.encode(), backend=default_backend()
             )
@@ -176,21 +176,21 @@ class KeyManager:
             return False
     
     async def generate_symmetric_key(self, length: int = 32) -> bytes:
-        """生成对称密钥
+        """Generate symmetric key
         
         Args:
-            length: 密钥长度(字节)，默认32字节(256位)
+            length: Key length (bytes), default 32 bytes (256 bits)
             
         Returns:
-            生成的密钥
+            Generated key
         """
         return secrets.token_bytes(length)
     
     async def generate_key_pair(self) -> Tuple[bytes, bytes]:
-        """生成非对称密钥对
+        """Generate asymmetric key pair
         
         Returns:
-            (私钥PEM, 公钥PEM) 元组
+            (private key PEM, public key PEM) tuple
         """
         try:
             if self.algorithm == "RS256":
@@ -206,28 +206,28 @@ class KeyManager:
             else:
                 raise ValueError(f"Unsupported algorithm for key generation: {self.algorithm}")
             
-            # 获取公钥
+            # Get public key
             public_key = private_key.public_key()
             
-            # 序列化私钥
+            # Serialize private key
             private_pem = private_key.private_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PrivateFormat.PKCS8,
                 encryption_algorithm=serialization.NoEncryption()
             )
             
-            # 序列化公钥
+            # Serialize public key
             public_pem = public_key.public_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PublicFormat.SubjectPublicKeyInfo
             )
             
-            # 存储密钥
+            # Store keys
             self._private_key = private_key
             self._public_key = public_key
             self._key_generated_at = datetime.utcnow()
             
-            # 如果配置了文件路径，保存到文件
+            # If file paths are configured, save to files
             if self.private_key_path and self.public_key_path:
                 await self._save_keys_to_files(private_pem, public_pem)
             
@@ -239,24 +239,24 @@ class KeyManager:
             raise
     
     async def _save_keys_to_files(self, private_pem: bytes, public_pem: bytes):
-        """保存密钥到文件"""
+        """Save keys to files"""
         try:
-            # 确保目录存在
+            # Ensure directories exist
             private_path = Path(self.private_key_path)
             public_path = Path(self.public_key_path)
             
             private_path.parent.mkdir(parents=True, exist_ok=True)
             public_path.parent.mkdir(parents=True, exist_ok=True)
             
-            # 保存私钥（设置安全权限）
+            # Save private key (set secure permissions)
             with open(private_path, 'wb') as f:
                 f.write(private_pem)
-            os.chmod(private_path, 0o600)  # 只有所有者可读写
+            os.chmod(private_path, 0o600)  # Only owner can read/write
             
-            # 保存公钥
+            # Save public key
             with open(public_path, 'wb') as f:
                 f.write(public_pem)
-            os.chmod(public_path, 0o644)  # 所有者读写，其他人只读
+            os.chmod(public_path, 0o644)  # Owner read/write, others read only
             
             logger.info(f"Saved keys to files: {private_path}, {public_path}")
             
@@ -265,25 +265,25 @@ class KeyManager:
             raise
     
     def get_private_key(self):
-        """获取私钥用于签名"""
+        """Get private key for signing"""
         if self.algorithm == "HS256":
             return self._secret_key
         else:
             return self._private_key
     
     def get_public_key(self):
-        """获取公钥用于验证"""
+        """Get public key for verification"""
         if self.algorithm == "HS256":
             return self._secret_key
         else:
             return self._public_key
     
     def get_algorithm(self) -> str:
-        """获取签名算法"""
+        """Get signing algorithm"""
         return self.algorithm
     
     async def is_key_expired(self) -> bool:
-        """检查密钥是否过期"""
+        """Check if key is expired"""
         if not self._key_generated_at:
             return True
         
@@ -291,16 +291,16 @@ class KeyManager:
         return datetime.utcnow() > expiry_time
     
     async def rotate_keys(self) -> bool:
-        """轮换密钥"""
+        """Rotate keys"""
         try:
             logger.info("Starting key rotation")
             
             if self.algorithm == "HS256":
-                # 生成新的对称密钥
+                # Generate new symmetric key
                 self._secret_key = await self.generate_symmetric_key()
                 self._key_generated_at = datetime.utcnow()
             else:
-                # 生成新的非对称密钥对
+                # Generate new asymmetric key pair
                 await self.generate_key_pair()
             
             logger.info("Key rotation completed successfully")
@@ -311,7 +311,7 @@ class KeyManager:
             return False
     
     async def get_key_info(self) -> dict:
-        """获取密钥信息"""
+        """Get key information"""
         return {
             "algorithm": self.algorithm,
             "key_generated_at": self._key_generated_at.isoformat() if self._key_generated_at else None,
@@ -324,9 +324,9 @@ class KeyManager:
         }
     
     async def export_public_key_pem(self) -> Optional[str]:
-        """导出公钥PEM格式"""
+        """Export public key in PEM format"""
         if self.algorithm == "HS256":
-            return None  # 对称密钥不导出
+            return None  # Symmetric key not exported
         
         if not self._public_key:
             return None
