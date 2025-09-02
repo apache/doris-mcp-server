@@ -426,6 +426,10 @@ class DorisQueryExecutor:
         self, query_request: QueryRequest, auth_context
     ) -> QueryResult:
         """Internal query execution"""
+        
+        # Database configuration should already be handled during authentication
+        # No need to configure again during query execution
+        
         # Optimize query
         optimized_sql = await self.query_optimizer.optimize_query(
             query_request.sql, {"user_roles": getattr(auth_context, 'roles', [])}

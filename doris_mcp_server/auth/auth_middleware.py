@@ -117,13 +117,15 @@ class AuthMiddleware:
             
             # Build authentication context
             auth_context = AuthContext(
+                token_id=payload.get('jti', ''),
                 user_id=payload.get('sub'),
                 roles=payload.get('roles', []),
                 permissions=payload.get('permissions', []),
+                security_level=SecurityLevel(payload.get('security_level', 'internal')),
                 session_id=payload.get('jti'),  # Use JWT ID as session ID
                 login_time=datetime.fromtimestamp(payload.get('iat', 0)),
                 last_activity=datetime.utcnow(),
-                security_level=SecurityLevel(payload.get('security_level', 'internal'))
+                token=token  # Store raw token for token-bound database configuration
             )
             
             logger.info(f"JWT authentication successful for user: {auth_context.user_id}")

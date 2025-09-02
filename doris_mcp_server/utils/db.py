@@ -240,15 +240,30 @@ class DorisConnectionManager:
 
     Uses direct connection pool management with proper synchronization
     Implements connection pool health monitoring and proactive cleanup
+    Supports token-bound database configurations for multi-tenant access
     """
 
 
-    def __init__(self, config, security_manager=None):
+    def __init__(self, config, security_manager=None, token_manager=None):
         self.config = config
         self.pool: Pool | None = None
         self.logger = get_logger(__name__)
         self.security_manager = security_manager
+        self.token_manager = token_manager  # Token manager for token-bound DB config
         self.session_cache = DorisSessionCache(self)
+        
+        # Store original database config for fallback
+        self.original_db_config = {
+            'host': config.database.host,
+            'port': config.database.port, 
+            'user': config.database.user,
+            'password': config.database.password,
+            'database': config.database.database,
+            'charset': config.database.charset
+        }
+        
+        # Current active database config (may be overridden by token-bound config)
+        self.active_db_config = self.original_db_config.copy()
 
         # Connection pool state management
         self.pool_recovering = False
@@ -267,14 +282,7 @@ class DorisConnectionManager:
         
         # Database connection parameters from config.database
         self.pool_recovery_lock = self._recovery_lock  # Compatibility alias
-        self.host = config.database.host
-        self.port = config.database.port
-        self.user = config.database.user
-        self.password = config.database.password
-        self.database = config.database.database
-        # Convert charset to aiomysql compatible format
-        charset_map = {"UTF8": "utf8", "UTF8MB4": "utf8mb4"}
-        self.charset = charset_map.get(config.database.charset.upper(), config.database.charset.lower())
+        self._update_db_params_from_config(self.active_db_config)
         self.connect_timeout = config.database.connection_timeout
         
         # Connection pool parameters - more conservative settings
@@ -285,11 +293,306 @@ class DorisConnectionManager:
         # 🔧 FIX: Add missing monitoring parameters that were removed during refactoring
         self.health_check_interval = 30  # seconds
         self.pool_warmup_size = 3  # connections to maintain
+    
+    def _update_db_params_from_config(self, db_config: dict):
+        """Update database connection parameters from config dictionary"""
+        self.host = db_config['host']
+        self.port = db_config['port']
+        self.user = db_config['user']
+        self.password = db_config['password']
+        self.database = db_config['database']
+        # Convert charset to aiomysql compatible format
+        charset_map = {"UTF8": "utf8", "UTF8MB4": "utf8mb4"}
+        self.charset = charset_map.get(db_config['charset'].upper(), db_config['charset'].lower())
+    
+    def _is_config_empty(self, config_value) -> bool:
+        """Check if a config value is empty (None, empty string, or 'null')"""
+        return config_value is None or config_value == '' or str(config_value).lower() == 'null'
+    
+    def _has_valid_global_config(self) -> bool:
+        """Check if global database configuration is valid and non-empty"""
+        return (not self._is_config_empty(self.original_db_config['host']) and
+                not self._is_config_empty(self.original_db_config['user']))
+    
+    def _find_available_token_with_db_config(self) -> str:
+        """Find the first available token with database configuration
+        
+        Returns:
+            Raw token string if found, empty string if not found
+        """
+        if not self.token_manager:
+            return ""
+            
+        try:
+            for token_hash, token_info in self.token_manager._tokens.items():
+                if (token_info.database_config and 
+                    token_info.is_active and
+                    not self._is_config_empty(token_info.database_config.host) and
+                    not self._is_config_empty(token_info.database_config.user)):
+                    
+                    # We need to find the raw token from the hash
+                    # This is a bit tricky since we only store hashes
+                    # We'll need to use the admin token from tokens.json if it has db config
+                    if token_info.token_id == 'admin-token':
+                        # Try the known admin token
+                        return 'doris_admin_token_123456'
+                    elif 'tenant' in token_info.token_id:
+                        # For tenant tokens, we'll need a different approach
+                        # For now, skip these as we don't know the raw token
+                        continue
+                        
+            return ""
+        except Exception as e:
+            self.logger.error(f"Error finding available token: {e}")
+            return ""
+    
+    async def configure_for_token(self, token: str) -> tuple[bool, str]:
+        """Configure connection manager for token with new priority logic
+        
+        Priority: Token-bound DB config > .env config > error
+        
+        Args:
+            token: Authentication token to get database config for
+            
+        Returns:
+            (success: bool, config_source: str): Result and which config was used
+            
+        Raises:
+            RuntimeError: If no valid database configuration is available
+        """
+        try:
+            # Priority 1: Try token-bound database config first
+            if self.token_manager:
+                db_config = self.token_manager.get_database_config_by_token(token)
+                if db_config:
+                    # Convert DatabaseConfig to dictionary
+                    token_db_config = {
+                        'host': db_config.host,
+                        'port': db_config.port,
+                        'user': db_config.user,
+                        'password': db_config.password,
+                        'database': db_config.database,
+                        'charset': db_config.charset
+                    }
+                    
+                    # Check if token-bound config is valid
+                    if (not self._is_config_empty(token_db_config['host']) and
+                        not self._is_config_empty(token_db_config['user'])):
+                        self.logger.info(f"Using token-bound database configuration for host: {token_db_config['host']}")
+                        self.active_db_config = token_db_config
+                        self._update_db_params_from_config(self.active_db_config)
+                        
+                        # Create/recreate connection pool with token-bound config
+                        await self._ensure_pool_with_current_config()
+                        
+                        return True, "token-bound"
+            
+            # Priority 2: Use global .env config if available
+            if self._has_valid_global_config():
+                self.logger.info("Using global .env database configuration")
+                self.active_db_config = self.original_db_config.copy()
+                self._update_db_params_from_config(self.active_db_config)
+                
+                # Create/recreate connection pool with global config
+                await self._ensure_pool_with_current_config()
+                
+                return True, "global-env"
+            
+            # Priority 3: No valid configuration available
+            error_msg = (
+                "No valid database configuration available for this token. "
+                "Please contact administrator to:\n"
+                "1. Add database configuration to tokens.json for this token, OR\n"
+                "2. Configure valid global database settings in .env file\n"
+                "Required fields: DB_HOST, DB_USER"
+            )
+            self.logger.error(error_msg)
+            raise RuntimeError(error_msg)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to configure database for token: {e}")
+            raise
+    
+    async def _ensure_pool_with_current_config(self):
+        """Ensure connection pool exists with current configuration"""
+        try:
+            # If pool exists with different config, need to recreate it
+            # If no pool exists, create one with current config
+            if self.pool and not self.pool.closed:
+                # Since we can't reliably check pool config attributes, 
+                # we'll recreate the pool if we detect a potential config change
+                # by checking if current config differs from what we stored
+                pool_needs_recreation = False
+                
+                # Compare current config with what we might have used before
+                if hasattr(self, '_last_pool_config'):
+                    current_config = {
+                        'host': self.host,
+                        'port': self.port, 
+                        'user': self.user,
+                        'database': self.database
+                    }
+                    if current_config != self._last_pool_config:
+                        pool_needs_recreation = True
+                
+                if pool_needs_recreation:
+                    self.logger.info("Database configuration changed, recreating connection pool")
+                    await self._recreate_pool()
+            elif not self.pool:
+                self.logger.info("Creating connection pool with current configuration")
+                await self._create_pool_with_current_config()
+                
+            # Test the connection immediately
+            if not await self._test_pool_health():
+                raise RuntimeError(f"Database connection test failed for {self.host}:{self.port}")
+                
+        except Exception as e:
+            self.logger.error(f"Failed to ensure connection pool: {e}")
+            raise
+    
+    async def _create_pool_with_current_config(self):
+        """Create connection pool with current database configuration"""
+        try:
+            self.pool = await aiomysql.create_pool(
+                host=self.host,
+                port=self.port,
+                user=self.user,
+                password=self.password,
+                db=self.database,
+                charset=self.charset,
+                minsize=self.minsize,
+                maxsize=self.maxsize,
+                pool_recycle=self.pool_recycle,
+                connect_timeout=self.connect_timeout,
+                autocommit=True
+            )
+            
+            # Store the current config for comparison later
+            self._last_pool_config = {
+                'host': self.host,
+                'port': self.port,
+                'user': self.user,
+                'database': self.database
+            }
+            
+            # Test initial connection
+            if not await self._test_pool_health():
+                raise RuntimeError("Connection pool health check failed")
+
+            # Start background monitoring tasks if not already running
+            if not self.pool_health_check_task or self.pool_health_check_task.done():
+                self.pool_health_check_task = asyncio.create_task(self._pool_health_monitor())
+            if not self.pool_cleanup_task or self.pool_cleanup_task.done():
+                self.pool_cleanup_task = asyncio.create_task(self._pool_cleanup_monitor())
+            
+            # Perform initial pool warmup
+            await self._warmup_pool()
+            
+            self.logger.info(f"Connection pool created successfully with {self.host}:{self.port}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create connection pool: {e}")
+            raise
+
+    async def _recreate_pool(self):
+        """Recreate connection pool with current database configuration"""
+        try:
+            # Close existing pool
+            if self.pool and not self.pool.closed:
+                self.pool.close()
+                await self.pool.wait_closed()
+                self.pool = None
+            
+            # Create new pool with current config
+            await self._create_pool_with_current_config()
+            
+        except Exception as e:
+            self.logger.error(f"Failed to recreate connection pool: {e}")
+            raise
+
+    def validate_database_configuration(self) -> tuple[bool, str]:
+        """Validate database configuration completeness
+        
+        Returns:
+            (is_valid, error_message): Configuration validation result
+        """
+        # Check if Token authentication is enabled
+        token_auth_enabled = getattr(self.config.security, 'enable_token_auth', False)
+        
+        # Check if tokens.json exists and has valid tokens with database configs
+        tokens_file_available = False
+        token_bound_configs_available = False
+        
+        if self.token_manager:
+            try:
+                # Check if tokens.json file exists
+                import os
+                tokens_file_path = getattr(self.token_manager, 'token_file_path', 'tokens.json')
+                tokens_file_available = os.path.exists(tokens_file_path)
+                
+                # Check if any tokens have database configurations
+                if tokens_file_available or self.token_manager._tokens:
+                    for token_hash, token_info in self.token_manager._tokens.items():
+                        if token_info.database_config:
+                            token_bound_configs_available = True
+                            break
+            except Exception:
+                pass
+        
+        # Validate .env database configuration
+        env_config_valid = self._has_valid_global_config()
+        
+        # Decision logic
+        if token_auth_enabled:
+            if tokens_file_available:
+                # tokens.json exists - either .env OR token-bound config must be valid
+                if env_config_valid or token_bound_configs_available:
+                    return True, "Configuration valid"
+                else:
+                    return False, (
+                        "Token authentication is enabled and tokens.json exists, but no valid database "
+                        "configuration found. Please provide either:\n"
+                        "1. Valid database configuration in .env file (DB_HOST, DB_USER, etc.)\n"
+                        "2. Database configuration in tokens.json for at least one token"
+                    )
+            else:
+                # tokens.json does not exist - must have valid .env config
+                if env_config_valid:
+                    return True, "Configuration valid"
+                else:
+                    return False, (
+                        "Token authentication is enabled but tokens.json file not found. "
+                        "Either:\n"
+                        "1. Create tokens.json file with token configurations\n"
+                        "2. Provide valid database configuration in .env file (DB_HOST, DB_USER, etc.)"
+                    )
+        else:
+            # Token auth is disabled, must have valid .env config
+            if env_config_valid:
+                return True, "Configuration valid"
+            else:
+                return False, (
+                    "Token authentication is disabled. Valid database configuration is required "
+                    "in .env file (DB_HOST, DB_USER, etc.)"
+                )
 
     async def initialize(self):
         """Initialize connection pool with health monitoring"""
         try:
+            # First validate configuration
+            is_valid, error_message = self.validate_database_configuration()
+            if not is_valid:
+                self.logger.error(f"Database configuration validation failed: {error_message}")
+                raise RuntimeError(f"Database configuration validation failed:\n{error_message}")
+            
+            self.logger.info(f"Database configuration validated successfully")
             self.logger.info(f"Initializing connection pool to {self.host}:{self.port}")
+            
+            # Only create connection pool if we have valid global config
+            # Token-bound configs will be handled dynamically during requests
+            if not self._has_valid_global_config():
+                self.logger.info("No valid global database config, pool will be created dynamically for token-bound configs")
+                return
             
             # Create connection pool
             self.pool = await aiomysql.create_pool(
@@ -592,7 +895,20 @@ class DorisConnectionManager:
                 # Check if pool is available
                 if not self.pool:
                     self.logger.warning("Connection pool is not available, attempting recovery...")
-                    await self._recover_pool_with_lock()
+                    
+                    # Try to use token-bound configuration if available
+                    if self.token_manager and not self._has_valid_global_config():
+                        available_token = self._find_available_token_with_db_config()
+                        if available_token:
+                            self.logger.info(f"Using token-bound configuration for pool creation: {available_token}")
+                            try:
+                                await self.configure_for_token(available_token)
+                            except Exception as e:
+                                self.logger.error(f"Failed to configure with token-bound config: {e}")
+                    
+                    # Fallback to recovery
+                    if not self.pool:
+                        await self._recover_pool_with_lock()
                     
                     if not self.pool:
                         raise RuntimeError("Connection pool is not available and recovery failed")

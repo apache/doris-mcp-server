@@ -230,11 +230,15 @@ class DorisServer:
         self.config = config
         self.server = Server("doris-mcp-server")
 
-        # Initialize security manager
+        # Initialize security manager (without connection_manager initially)
         self.security_manager = DorisSecurityManager(config)
 
-        # Initialize connection manager, pass in security manager
-        self.connection_manager = DorisConnectionManager(config, self.security_manager)
+        # Initialize connection manager, pass in security manager and token manager for token-bound DB config
+        token_manager = self.security_manager.auth_provider.token_manager if hasattr(self.security_manager, 'auth_provider') and hasattr(self.security_manager.auth_provider, 'token_manager') else None
+        self.connection_manager = DorisConnectionManager(config, self.security_manager, token_manager)
+        
+        # Set connection manager reference in security manager for database validation
+        self.security_manager.connection_manager = self.connection_manager
 
         # Initialize independent managers
         self.resources_manager = DorisResourcesManager(self.connection_manager)
@@ -785,14 +789,14 @@ Examples:
     parser.add_argument(
         "--port",
         type=int,
-        default=os.getenv("SERVER_PORT", _default_config.server_port),
-        help=f"Port number for HTTP mode (default: {_default_config.server_port})"
+        default=3000,
+        help="Port number for HTTP mode (default: 3000)"
     )
 
     parser.add_argument(
         "--workers",
         type=int,
-        default=int(os.getenv("WORKERS", "1")),
+        default=1,
         help="Number of worker processes for HTTP mode (default: 1, use 0 for auto-detect CPU cores)"
     )
 
@@ -804,7 +808,7 @@ Examples:
     )
 
     parser.add_argument(
-        "--doris-port", "--db-port", type=int, default=os.getenv("DORIS_PORT", _default_config.database.port), help=f"Doris database port number (default: {_default_config.database.port})"
+        "--doris-port", "--db-port", type=int, default=9030, help="Doris database port number (default: 9030)"
     )
 
     parser.add_argument(

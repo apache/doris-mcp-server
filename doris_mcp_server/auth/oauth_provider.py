@@ -191,13 +191,15 @@ class OAuthAuthenticationProvider:
         session_id = f"oauth_{user_info.sub}_{datetime.utcnow().timestamp()}"
         
         return AuthContext(
+            token_id=f"oauth_{user_info.sub}",
             user_id=user_info.sub,
             roles=user_info.roles,
             permissions=permissions,
+            security_level=security_level,
             session_id=session_id,
             login_time=datetime.utcnow(),
             last_activity=datetime.utcnow(),
-            security_level=security_level
+            token=""  # OAuth doesn't have raw token, use empty string
         )
     
     async def _determine_security_level(self, user_info: OAuthUserInfo) -> SecurityLevel:

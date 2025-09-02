@@ -372,19 +372,34 @@ class DorisConfig:
 
         config = cls()
 
-        # Database configuration
-        config.database.host = os.getenv("DORIS_HOST", config.database.host)
-        config.database.port = int(os.getenv("DORIS_PORT", str(config.database.port)))
-        config.database.user = os.getenv("DORIS_USER", config.database.user)
-        config.database.password = os.getenv("DORIS_PASSWORD", config.database.password)
-        config.database.database = os.getenv("DORIS_DATABASE", config.database.database)
-        config.database.fe_http_port = int(os.getenv("DORIS_FE_HTTP_PORT", str(config.database.fe_http_port)))
+        # Database configuration - handle empty strings properly
+        doris_host = os.getenv("DORIS_HOST", "").strip()
+        config.database.host = doris_host if doris_host else config.database.host
+        
+        doris_port = os.getenv("DORIS_PORT", "").strip()
+        if doris_port and doris_port.isdigit():
+            config.database.port = int(doris_port)
+        
+        doris_user = os.getenv("DORIS_USER", "").strip()
+        config.database.user = doris_user if doris_user else config.database.user
+        
+        doris_password = os.getenv("DORIS_PASSWORD", "")
+        config.database.password = doris_password if doris_password else config.database.password
+        
+        doris_database = os.getenv("DORIS_DATABASE", "").strip()
+        config.database.database = doris_database if doris_database else config.database.database
+        
+        doris_fe_http_port = os.getenv("DORIS_FE_HTTP_PORT", "").strip()
+        if doris_fe_http_port and doris_fe_http_port.isdigit():
+            config.database.fe_http_port = int(doris_fe_http_port)
         
         # BE nodes configuration
         be_hosts_env = os.getenv("DORIS_BE_HOSTS", "")
         if be_hosts_env:
             config.database.be_hosts = [host.strip() for host in be_hosts_env.split(",") if host.strip()]
-        config.database.be_webserver_port = int(os.getenv("DORIS_BE_WEBSERVER_PORT", str(config.database.be_webserver_port)))
+        be_webserver_port = os.getenv("DORIS_BE_WEBSERVER_PORT", "").strip()
+        if be_webserver_port and be_webserver_port.isdigit():
+            config.database.be_webserver_port = int(be_webserver_port)
         
         # Arrow Flight SQL Configuration
         fe_arrow_port_env = os.getenv("FE_ARROW_FLIGHT_SQL_PORT")
@@ -557,7 +572,9 @@ class DorisConfig:
         # Server configuration
         config.server_name = os.getenv("SERVER_NAME", config.server_name)
         config.server_version = os.getenv("SERVER_VERSION", config.server_version)
-        config.server_port = int(os.getenv("SERVER_PORT", str(config.server_port)))
+        server_port = os.getenv("SERVER_PORT", "").strip()
+        if server_port and server_port.isdigit():
+            config.server_port = int(server_port)
         config.temp_files_dir = os.getenv("TEMP_FILES_DIR", config.temp_files_dir)
 
         return config

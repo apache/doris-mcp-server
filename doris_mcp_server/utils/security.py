@@ -47,11 +47,16 @@ class SecurityLevel(Enum):
 class AuthContext:
     """Authentication context for audit and session tracking"""
 
-    token_id: str  # Token identifier for audit logging
+    token_id: str = ""  # Token identifier for audit logging  
+    user_id: str = ""  # User identifier
+    roles: list[str] = field(default_factory=list)  # User roles
+    permissions: list[str] = field(default_factory=list)  # User permissions
+    security_level: 'SecurityLevel' = field(default_factory=lambda: SecurityLevel.INTERNAL)  # Security level
     client_ip: str = "unknown"  # Client IP address
     session_id: str = ""  # Session identifier
     login_time: datetime = field(default_factory=datetime.utcnow)
     last_activity: datetime | None = None
+    token: str = ""  # Raw token for token-bound database configuration
 
 
 @dataclass
@@ -84,12 +89,13 @@ class DorisSecurityManager:
     Provides complete security control functionality, including authentication, authorization, SQL security validation and data masking
     """
 
-    def __init__(self, config):
+    def __init__(self, config, connection_manager=None):
         self.config = config
         self.logger = get_logger(__name__)
+        self.connection_manager = connection_manager
 
         # Initialize security components
-        self.auth_provider = AuthenticationProvider(config)
+        self.auth_provider = AuthenticationProvider(config, self)
         self.authz_provider = AuthorizationProvider(config)
         self.sql_validator = SQLSecurityValidator(config)
         self.masking_processor = DataMaskingProcessor(config)
@@ -226,6 +232,10 @@ class DorisSecurityManager:
             # Return anonymous context when no authentication is enabled
             return AuthContext(
                 token_id="anonymous",
+                user_id="anonymous",
+                roles=["anonymous"],
+                permissions=["read"],
+                security_level=SecurityLevel.PUBLIC,
                 client_ip=auth_info.get("client_ip", "unknown"),
                 session_id="anonymous_session"
             )
@@ -392,18 +402,50 @@ class DorisSecurityManager:
             return {"error": "Token manager not initialized"}
         
         return self.auth_provider.token_manager.get_token_stats()
+    
+    async def _validate_token_database_config(self, token: str, token_info) -> None:
+        """Validate database configuration for token immediately during authentication
+        
+        This ensures database connectivity issues are caught at authentication time,
+        not during query execution, providing better user experience.
+        
+        Args:
+            token: Raw authentication token
+            token_info: TokenInfo object from token validation
+            
+        Raises:
+            ValueError: If database configuration is invalid or connection fails
+        """
+        try:
+            if not self.connection_manager:
+                self.logger.warning("Connection manager not available for immediate database validation")
+                return
+            
+            # Configure and test database connection for this token
+            success, config_source = await self.connection_manager.configure_for_token(token)
+            
+            if success:
+                self.logger.info(f"Database configuration validated successfully for token {token_info.token_id} (source: {config_source})")
+            else:
+                raise ValueError("Database configuration validation failed")
+                
+        except Exception as e:
+            error_msg = f"Database configuration validation failed for token {token_info.token_id}: {str(e)}"
+            self.logger.error(error_msg)
+            raise ValueError(error_msg)
 
 
 class AuthenticationProvider:
     """Authentication provider"""
 
-    def __init__(self, config):
+    def __init__(self, config, security_manager=None):
         self.config = config
         self.logger = get_logger(__name__)
         self.session_cache = {}
         self.jwt_manager = None
         self.oauth_provider = None
         self.token_manager = None
+        self.security_manager = security_manager
         
         # Initialize authentication providers based on individual switches
         auth_methods_enabled = []
@@ -583,12 +625,21 @@ class AuthenticationProvider:
             
             token_info = validation_result.token_info
             
+            # Immediately validate database configuration for this token
+            if self.security_manager:
+                await self.security_manager._validate_token_database_config(token, token_info)
+            
             return AuthContext(
                 token_id=token_info.token_id,
+                user_id=token_info.token_id,  # Use token_id as user_id for token auth
+                roles=["token_user"],  # Default role for token users
+                permissions=["read", "write"],  # Default permissions for token users
+                security_level=SecurityLevel.INTERNAL,
                 client_ip=auth_info.get("client_ip", "unknown"),
                 session_id=auth_info.get("session_id", f"session_{token_info.token_id}"),
                 login_time=datetime.utcnow(),
-                last_activity=token_info.last_used
+                last_activity=token_info.last_used,
+                token=token  # Store raw token for token-bound database configuration
             )
             
         except Exception as e:

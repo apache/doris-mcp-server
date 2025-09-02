@@ -270,8 +270,13 @@ async def initialize_worker():
         await _worker_security_manager.initialize()
         logger.info(f"Worker {os.getpid()} security manager initialization completed")
         
-        # Create connection manager
-        _worker_connection_manager = DorisConnectionManager(config, _worker_security_manager)
+        # Create connection manager with token manager for token-bound DB config
+        token_manager = _worker_security_manager.auth_provider.token_manager if hasattr(_worker_security_manager, 'auth_provider') and hasattr(_worker_security_manager.auth_provider, 'token_manager') else None
+        _worker_connection_manager = DorisConnectionManager(config, _worker_security_manager, token_manager)
+        
+        # Set connection manager reference in security manager for database validation
+        _worker_security_manager.connection_manager = _worker_connection_manager
+        
         await _worker_connection_manager.initialize()
         
         # Create MCP server

@@ -11,17 +11,32 @@ import json
 import os
 import secrets
 import time
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
+from pathlib import Path
 
 from ..utils.logger import get_logger
 from ..utils.security import SecurityLevel
 
 
 @dataclass
+class DatabaseConfig:
+    """Database connection configuration for token binding"""
+    
+    host: str
+    port: int = 9030
+    user: str = ""
+    password: str = ""
+    database: str = "information_schema"
+    charset: str = "UTF8"
+    fe_http_port: int = 8030
+
+
+@dataclass
 class TokenInfo:
-    """Token information structure"""
+    """Token information structure with optional database binding"""
     
     token_id: str  # Unique token identifier for audit and management
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -29,6 +44,7 @@ class TokenInfo:
     last_used: Optional[datetime] = None
     description: str = ""  # Optional description for token purpose
     is_active: bool = True
+    database_config: Optional[DatabaseConfig] = None  # Optional database binding
 
 
 @dataclass
@@ -65,13 +81,23 @@ class TokenManager:
         self.default_token_expiry_hours = getattr(config.security, 'default_token_expiry_hours', 24 * 30)  # 30 days
         self.token_hash_algorithm = getattr(config.security, 'token_hash_algorithm', 'sha256')
         
+        # Hot reload configuration
+        self.enable_hot_reload = True
+        self.hot_reload_interval = 10  # Check every 10 seconds
+        self._file_last_modified = 0
+        self._hot_reload_task = None
+        
         # Initialize with default tokens if none exist
         self._initialize_default_tokens()
         
         # Load tokens from configuration
         self._load_tokens()
         
-        self.logger.info(f"TokenManager initialized with {len(self._tokens)} tokens")
+        # Start hot reload monitoring
+        if self.enable_hot_reload:
+            self._start_hot_reload()
+        
+        self.logger.info(f"TokenManager initialized with {len(self._tokens)} tokens, hot reload: {self.enable_hot_reload}")
     
     def _initialize_default_tokens(self):
         """Initialize default tokens for basic authentication (configurable via environment)"""
@@ -132,7 +158,7 @@ class TokenManager:
             self.logger.info("Skipped default tokens initialization (custom tokens detected)")
     
     def _add_token_from_config(self, token_config: Dict[str, Any]):
-        """Add token from configuration"""
+        """Add token from configuration with optional database binding"""
         try:
             # Calculate expiration time
             expires_at = None
@@ -141,12 +167,27 @@ class TokenManager:
                 if expires_hours is not None:
                     expires_at = datetime.utcnow() + timedelta(hours=expires_hours)
             
+            # Parse database configuration if provided
+            database_config = None
+            if 'database_config' in token_config:
+                db_config = token_config['database_config']
+                database_config = DatabaseConfig(
+                    host=db_config.get('host', 'localhost'),
+                    port=db_config.get('port', 9030),
+                    user=db_config.get('user', 'root'),
+                    password=db_config.get('password', ''),
+                    database=db_config.get('database', 'information_schema'),
+                    charset=db_config.get('charset', 'UTF8'),
+                    fe_http_port=db_config.get('fe_http_port', 8030)
+                )
+            
             # Create token info
             token_info = TokenInfo(
                 token_id=token_config['token_id'],
                 expires_at=expires_at,
                 description=token_config.get('description', ''),
-                is_active=token_config.get('is_active', True)
+                is_active=token_config.get('is_active', True),
+                database_config=database_config
             )
             
             # Hash the token
@@ -157,10 +198,12 @@ class TokenManager:
             self._tokens[token_hash] = token_info
             self._token_ids[token_info.token_id] = token_hash
             
-            self.logger.debug(f"Added token '{token_info.token_id}'")
+            db_info = f" with DB binding ({database_config.host})" if database_config else ""
+            self.logger.debug(f"Added token '{token_info.token_id}'{db_info}")
             
         except Exception as e:
             self.logger.error(f"Failed to add token from config: {e}")
+            raise
     
     def _load_tokens(self):
         """Load tokens from configuration sources"""
@@ -378,7 +421,7 @@ class TokenManager:
         tokens = []
         
         for token_hash, token_info in self._tokens.items():
-            tokens.append({
+            token_data = {
                 'token_id': token_info.token_id,
                 'created_at': token_info.created_at.isoformat(),
                 'expires_at': token_info.expires_at.isoformat() if token_info.expires_at else None,
@@ -386,7 +429,21 @@ class TokenManager:
                 'is_active': token_info.is_active,
                 'description': token_info.description,
                 'is_expired': token_info.expires_at and datetime.utcnow() > token_info.expires_at if token_info.expires_at else False
-            })
+            }
+            
+            # Add database binding info (without sensitive data)
+            if token_info.database_config:
+                token_data['database_binding'] = {
+                    'host': token_info.database_config.host,
+                    'port': token_info.database_config.port,
+                    'user': token_info.database_config.user,
+                    'database': token_info.database_config.database,
+                    'has_password': bool(token_info.database_config.password)
+                }
+            else:
+                token_data['database_binding'] = None
+                
+            tokens.append(token_data)
         
         # Sort by creation time
         tokens.sort(key=lambda x: x['created_at'], reverse=True)
@@ -439,6 +496,32 @@ class TokenManager:
             self.logger.error(f"Failed to save tokens to file: {e}")
             return False
     
+    def get_database_config_by_token(self, token: str) -> Optional[DatabaseConfig]:
+        """Get database configuration bound to a token
+        
+        Args:
+            token: The raw token string
+            
+        Returns:
+            DatabaseConfig if token exists and has database binding, None otherwise
+        """
+        try:
+            token_hash = self._hash_token(token)
+            token_info = self._tokens.get(token_hash)
+            
+            if not token_info or not token_info.is_active:
+                return None
+                
+            # Check expiration
+            if token_info.expires_at and datetime.utcnow() > token_info.expires_at:
+                return None
+                
+            return token_info.database_config
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get database config for token: {e}")
+            return None
+    
     def get_token_stats(self) -> Dict[str, Any]:
         """Get token statistics"""
         now = datetime.utcnow()
@@ -446,11 +529,89 @@ class TokenManager:
         active_tokens = sum(1 for info in self._tokens.values() if info.is_active)
         expired_tokens = sum(1 for info in self._tokens.values() 
                            if info.expires_at and now > info.expires_at)
+        tokens_with_db = sum(1 for info in self._tokens.values() 
+                           if info.database_config is not None)
         
         return {
             'total_tokens': total_tokens,
             'active_tokens': active_tokens,
             'expired_tokens': expired_tokens,
+            'tokens_with_database_binding': tokens_with_db,
             'expiry_enabled': self.enable_token_expiry,
-            'default_expiry_hours': self.default_token_expiry_hours
+            'default_expiry_hours': self.default_token_expiry_hours,
+            'hot_reload_enabled': self.enable_hot_reload,
+            'last_file_check': datetime.fromtimestamp(self._file_last_modified).isoformat() if self._file_last_modified else None
         }
+    
+    def _start_hot_reload(self):
+        """Start hot reload monitoring task"""
+        if self._hot_reload_task:
+            return  # Already running
+        
+        # Update initial file modification time
+        self._update_file_modified_time()
+        
+        # Start monitoring task
+        self._hot_reload_task = asyncio.create_task(self._hot_reload_monitor())
+        self.logger.info(f"Started hot reload monitoring for {self.token_file_path}")
+    
+    def stop_hot_reload(self):
+        """Stop hot reload monitoring"""
+        if self._hot_reload_task:
+            self._hot_reload_task.cancel()
+            self._hot_reload_task = None
+            self.logger.info("Stopped hot reload monitoring")
+    
+    def _update_file_modified_time(self):
+        """Update the last modified time of tokens file"""
+        try:
+            if os.path.exists(self.token_file_path):
+                self._file_last_modified = os.path.getmtime(self.token_file_path)
+        except Exception as e:
+            self.logger.debug(f"Failed to get file modification time: {e}")
+    
+    async def _hot_reload_monitor(self):
+        """Background task to monitor tokens.json file changes"""
+        while True:
+            try:
+                await asyncio.sleep(self.hot_reload_interval)
+                
+                if not os.path.exists(self.token_file_path):
+                    continue
+                
+                # Check if file was modified
+                current_mtime = os.path.getmtime(self.token_file_path)
+                if current_mtime > self._file_last_modified:
+                    self.logger.info(f"Detected changes in {self.token_file_path}, reloading tokens...")
+                    
+                    try:
+                        # Backup current tokens
+                        old_tokens = self._tokens.copy()
+                        old_token_ids = self._token_ids.copy()
+                        
+                        # Clear and reload
+                        self._tokens.clear()
+                        self._token_ids.clear()
+                        
+                        # Reinitialize default tokens
+                        self._initialize_default_tokens()
+                        
+                        # Load from file
+                        self._load_tokens_from_file()
+                        
+                        # Update modification time
+                        self._file_last_modified = current_mtime
+                        
+                        self.logger.info(f"Hot reload completed, {len(self._tokens)} tokens loaded")
+                        
+                    except Exception as reload_error:
+                        # Restore backup on failure
+                        self.logger.error(f"Hot reload failed, restoring previous tokens: {reload_error}")
+                        self._tokens = old_tokens
+                        self._token_ids = old_token_ids
+                
+            except asyncio.CancelledError:
+                self.logger.info("Hot reload monitor stopped")
+                break
+            except Exception as e:
+                self.logger.error(f"Error in hot reload monitor: {e}")
