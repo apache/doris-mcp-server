@@ -67,6 +67,7 @@ fi
 export MCP_TRANSPORT_TYPE="http"
 export MCP_HOST="${MCP_HOST:-0.0.0.0}"
 export MCP_PORT="${MCP_PORT:-3000}"
+export WORKERS="${WORKERS:-1}"
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export MCP_ALLOW_CREDENTIALS="${MCP_ALLOW_CREDENTIALS:-false}"
@@ -80,10 +81,11 @@ echo -e "${YELLOW}Service will run on http://${MCP_HOST}:${MCP_PORT}/mcp${NC}"
 echo -e "${YELLOW}Health Check: http://${MCP_HOST}:${MCP_PORT}/health${NC}"
 echo -e "${YELLOW}MCP Endpoint: http://${MCP_HOST}:${MCP_PORT}/mcp${NC}"
 echo -e "${YELLOW}Local access: http://localhost:${MCP_PORT}/mcp${NC}"
+echo -e "${YELLOW}Workers: ${WORKERS}${NC}"
 echo -e "${YELLOW}Use Ctrl+C to stop the service${NC}"
 
 # Start the server in HTTP mode (Streamable HTTP)
-python -m doris_mcp_server.main --transport http --host ${MCP_HOST} --port ${MCP_PORT}
+python -m doris_mcp_server.main --transport http --host ${MCP_HOST} --port ${MCP_PORT} --workers ${WORKERS}
 
 # Check exit status
 if [ $? -ne 0 ]; then

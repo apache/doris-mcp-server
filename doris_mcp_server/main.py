@@ -221,6 +221,8 @@ logger = logging.getLogger(__name__)
 _default_config = DorisConfig()
 
 
+
+
 class DorisServer:
     """Apache Doris MCP Server main class"""
 
@@ -449,9 +451,9 @@ class DorisServer:
 
 
 
-    async def start_http(self, host: str = os.getenv("SERVER_HOST", _default_config.database.host), port: int = os.getenv("SERVER_PORT", _default_config.server_port)):
-        """Start Streamable HTTP transport mode"""
-        self.logger.info(f"Starting Doris MCP Server (Streamable HTTP mode) - {host}:{port}")
+    async def start_http(self, host: str = os.getenv("SERVER_HOST", _default_config.database.host), port: int = os.getenv("SERVER_PORT", _default_config.server_port), workers: int = 1):
+        """Start Streamable HTTP transport mode with workers support"""
+        self.logger.info(f"Starting Doris MCP Server (Streamable HTTP mode) - {host}:{port}, workers: {workers}")
 
         try:
             # Ensure connection manager is initialized
@@ -568,19 +570,35 @@ class DorisServer:
                     self.logger.warning(f"Unsupported scope type: {scope['type']}")
                     return
             
-            # Start uvicorn server with session manager lifecycle
-            config = uvicorn.Config(
-                app=mcp_app,
-                host=host,
-                port=port,
-                log_level="info"
-            )
-            server = uvicorn.Server(config)
-            
-            # Run session manager and server together
-            async with session_manager.run():
-                self.logger.info("Session manager started, now starting HTTP server")
-                await server.serve()
+            # Choose startup method based on worker count
+            if workers > 1:
+                self.logger.info(f"Using multi-process mode with {workers} workers")
+                self.logger.info("Note: Multi-worker mode provides full MCP functionality with independent worker processes")
+                
+                # Use the dedicated multiworker app module with full MCP support
+                uvicorn.run(
+                    "doris_mcp_server.multiworker_app:app",
+                    host=host,
+                    port=port,
+                    workers=workers,
+                    log_level="info"
+                )
+                
+            else:
+                self.logger.info("Using single-process mode")
+                # Single worker mode, use original logic with session manager lifecycle
+                config = uvicorn.Config(
+                    app=mcp_app,
+                    host=host,
+                    port=port,
+                    log_level="info"
+                )
+                server = uvicorn.Server(config)
+                
+                # Run session manager and server together
+                async with session_manager.run():
+                    self.logger.info("Session manager started, now starting HTTP server")
+                    await server.serve()
 
         except Exception as e:
             self.logger.error(f"Streamable HTTP server startup failed: {e}")
@@ -594,6 +612,8 @@ class DorisServer:
                 for i, exc in enumerate(e.exceptions):
                     self.logger.error(f"  Exception {i+1}: {type(exc).__name__}: {exc}")
             raise
+
+
 
     async def shutdown(self):
         """Shutdown server"""
@@ -646,6 +666,13 @@ Examples:
         type=int,
         default=os.getenv("SERVER_PORT", _default_config.server_port),
         help=f"Port number for HTTP mode (default: {_default_config.server_port})"
+    )
+
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.getenv("WORKERS", "1")),
+        help="Number of worker processes for HTTP mode (default: 1, use 0 for auto-detect CPU cores)"
     )
 
     parser.add_argument(
@@ -720,6 +747,10 @@ def update_configuration(config: DorisConfig):
     # logging
     if args.log_level != _default_config.logging.level:
         config.logging.level = args.log_level
+    
+    # workers (add to config for HTTP mode)
+    if hasattr(args, 'workers'):
+        config.workers = args.workers
 
 
 async def main():
@@ -754,9 +785,16 @@ async def main():
         if config.transport == "stdio":
             await server.start_stdio()
         elif config.transport == "http":
-            await server.start_http(config.server_host, config.server_port)
+            # Get workers configuration with auto-detection support
+            workers = getattr(config, 'workers', 1)
+            if workers == 0:
+                import multiprocessing
+                workers = multiprocessing.cpu_count()
+                logger.info(f"Auto-detected {workers} CPU cores for worker processes")
+            
+            await server.start_http(config.server_host, config.server_port, workers)
         else:
-            logger.error(f"Unsupported transport protocol: {args.transport}")
+            logger.error(f"Unsupported transport protocol: {config.transport}")
             await server.shutdown()
             return 1
 
