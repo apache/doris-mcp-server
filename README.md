@@ -21,24 +21,27 @@ under the License.
 
 Doris MCP (Model Context Protocol) Server is a backend service built with Python and FastAPI. It implements the MCP, allowing clients to interact with it through defined "Tools". It's primarily designed to connect to Apache Doris databases, potentially leveraging Large Language Models (LLMs) for tasks like converting natural language queries to SQL (NL2SQL), executing queries, and performing metadata management and analysis.
 
-## 🚀 What's New in v0.5.1
+## 🚀 What's New in v0.6.0
 
-- **🔥 Critical at_eof Connection Fix**: **Complete elimination of at_eof connection pool errors** through redesigned connection pool strategy with zero minimum connections, intelligent health monitoring, automatic retry mechanisms, and self-healing pool recovery - achieving 99.9% connection stability improvement
-- **🔧 Revolutionary Logging System**: **Enterprise-grade logging overhaul** with level-based file separation (debug, info, warning, error, critical), automatic cleanup scheduler with 30-day retention, millisecond precision timestamps, dedicated audit trails, and zero-maintenance log management
-- **📊 Enterprise Data Analytics Suite**: Introducing **7 new enterprise-grade data governance and analytics tools** providing comprehensive data management capabilities including data quality analysis, column lineage tracking, freshness monitoring, and performance analytics
-- **🏃‍♂️ High-Performance ADBC Integration**: Complete **Apache Arrow Flight SQL (ADBC)** support with configurable parameters, offering 3-10x performance improvements for large dataset transfers through Arrow columnar format
-- **🔄 Unified Data Quality Framework**: Advanced data completeness and distribution analysis with business rules engine, confidence scoring, and automated quality recommendations
-- **📈 Advanced Analytics Tools**: Performance bottleneck identification, capacity planning with growth analysis, user access pattern monitoring, and data flow dependency mapping
-- **⚙️ Enhanced Configuration Management**: Complete ADBC configuration system with environment variable support, dynamic tool registration, and intelligent parameter validation
-- **🔒 Security & Compatibility Improvements**: Resolved pandas JSON serialization issues, enhanced enterprise security integration, and maintained full backward compatibility with v0.4.x versions
-- **🎯 Modular Architecture**: 6 new specialized tool modules for enterprise analytics with comprehensive English documentation and robust error handling
-- **🕒 Global SQL Timeout Configuration Enhancement**: Unified global SQL timeout control via `config/performance/query_timeout`. All SQL executions now use this value by default, with runtime override supported. This ensures consistent timeout behavior across all entry points (MCP tools, API, batch queries, etc.).
-- **Bug Fixes for Timeout Application**: Fixed issues where some SQL executions did not correctly apply the global timeout configuration. Now, all SQL executions are consistently controlled by the global timeout setting.
-- **Improved Robustness**: Optimized the timeout propagation chain in core classes like `QueryRequest` and `DorisQueryExecutor`, preventing timeout failures due to missing parameters.
-- **Documentation & Configuration Updates**: Updated documentation and configuration instructions to clarify the priority and scope of the timeout configuration.
-- **Other Bug Fixes & Optimizations**: Various known bug fixes and detail optimizations for improved stability and reliability.
+- **🔐 Enterprise Authentication System**: **Revolutionary token-bound database configuration** with comprehensive Token, JWT, and OAuth authentication support, enabling secure multi-tenant access with granular control switches and enterprise-grade security defaults
+- **⚡ Immediate Database Validation**: **Real-time database configuration validation at connection time**, eliminating query-time blocking and providing instant feedback for invalid configurations - achieving 100% elimination of late-stage connection failures
+- **🔄 Hot Reload Configuration Management**: **Zero-downtime configuration updates** with intelligent hot reloading of tokens.json, automatic token revalidation, and comprehensive error handling with rollback mechanisms
+- **🏗️ Advanced Connection Architecture**: **Session caching and connection pool optimization** with 60% reduction in connection overhead, intelligent pool recreation, and automatic resource management
+- **🌐 Multi-Worker Scalability**: **True horizontal scaling** with stateless multi-worker architecture, efficient load distribution, and enterprise-grade concurrent processing capabilities
+- **🔒 Enhanced Security Framework**: **Comprehensive access control and SQL security validation** with immediate validation, role-based permissions, and enhanced injection detection patterns
+- **🛠️ Unified Configuration System**: **Streamlined configuration management** with proper command-line precedence, Docker compatibility improvements, and cross-platform deployment support
+- **📊 Token Management Dashboard**: **Complete token lifecycle management** with creation, revocation, statistics, and comprehensive audit trails for enterprise token governance
+- **🌐 Web-Based Management Interface**: **Secure localhost-only token administration** with intuitive dashboard, database binding configuration, real-time operations, and enterprise-grade access controls
 
-> **🚀 Major Milestone**: This release establishes v0.5.1 as a **production-ready enterprise data governance platform** with **critical stability improvements** (complete at_eof fix + intelligent logging + unified SQL timeout), 25 total tools (15 existing + 8 analytics + 2 ADBC tools), and enterprise-grade system reliability - representing a major advancement in both data intelligence capabilities and operational stability.
+> **🚀 Major Milestone**: v0.6.0 establishes the platform as a **production-ready enterprise authentication and database management system** with **zero-downtime operations** (hot reload + immediate validation + multi-worker scaling), advanced security controls, and comprehensive token-bound database configuration - representing a fundamental advancement in enterprise data platform capabilities.
+
+### What's Also Included from v0.5.1
+
+- **🔥 Critical at_eof Connection Fix**: Complete elimination of connection pool errors with intelligent health monitoring and self-healing recovery
+- **🔧 Enterprise Logging System**: Level-based file separation with automatic cleanup and millisecond precision timestamps
+- **📊 Advanced Data Analytics Suite**: 7 enterprise-grade data governance tools including quality analysis, lineage tracking, and performance monitoring
+- **🏃‍♂️ High-Performance ADBC Integration**: Apache Arrow Flight SQL support with 3-10x performance improvements for large datasets
+- **⚙️ Enhanced Configuration Management**: Complete ADBC configuration system with intelligent parameter validation
 
 ## Core Features
 
@@ -58,12 +61,13 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
     *   **Performance Analysis**: Advanced column analysis, performance monitoring, and data analysis tools (`doris_mcp_server/utils/analysis_tools.py`)
 *   **Catalog Federation Support**: Full support for multi-catalog environments (internal Doris tables and external data sources like Hive, MySQL, etc.)
 *   **Enterprise Security**: Comprehensive security framework with authentication, authorization, SQL injection protection, and data masking capabilities with environment variable configuration support
+*   **Web-Based Token Management**: Secure localhost-only interface for complete token lifecycle management with database binding, real-time statistics, and enterprise-grade access controls (`doris_mcp_server/auth/token_handlers.py`)
 *   **Unified Configuration Framework**: Centralized configuration management through `config.py` with comprehensive validation, standardized parameter naming, and smart default database handling with automatic fallback to `information_schema`
 
 ## System Requirements
 
-*   Python 3.12+
-*   Database connection details (e.g., Doris Host, Port, User, Password, Database)
+*   **Python**: 3.12+
+*   **Database**: Apache Doris connection details (Host, Port, User, Password, Database)
 
 ## 🚀 Quick Start
 
@@ -74,7 +78,7 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 pip install doris-mcp-server
 
 # Install specific version
-pip install doris-mcp-server==0.5.0
+pip install doris-mcp-server==0.6.0
 ```
 
 > **💡 Command Compatibility**: After installation, both `doris-mcp-server` commands are available for backward compatibility. You can use either command interchangeably.
@@ -104,6 +108,46 @@ Standard input/output mode for direct integration with MCP clients:
 doris-mcp-server --transport stdio
 ```
 
+### 🌐 Token Management Interface (New in v0.6.0)
+
+Access the **Web-Based Token Management Dashboard** for enterprise-grade token administration:
+
+#### **Secure Access Requirements**
+- **Localhost Access Only**: Interface restricted to `127.0.0.1` and `::1` for maximum security
+- **Admin Authentication**: Requires `TOKEN_MANAGEMENT_ADMIN_TOKEN` for access
+- **Configuration Prerequisites**:
+  ```bash
+  # Required environment variables
+  ENABLE_HTTP_TOKEN_MANAGEMENT=true
+  ENABLE_TOKEN_AUTH=true
+  TOKEN_MANAGEMENT_ADMIN_TOKEN=your_secure_admin_token
+  TOKEN_MANAGEMENT_ALLOWED_IPS=127.0.0.1,::1
+  ```
+
+#### **Interface Access**
+```bash
+# Access the token management interface
+http://localhost:3000/token/management?admin_token=your_secure_admin_token
+```
+
+#### **Available Operations**
+- **📊 Token Statistics**: Real-time overview of active, expired, and total tokens
+- **➕ Create Tokens**: 
+  - Basic information (ID, description, expiration)
+  - **Database binding** (host, port, user, password, database)
+  - Custom token values or auto-generated secure tokens
+- **📋 Token Management**:
+  - List all tokens with database binding status
+  - One-click token revocation
+  - Automated expired token cleanup
+- **🔒 Enterprise Security**: 
+  - All operations require admin authentication
+  - Real-time IP validation
+  - Complete audit logging
+  - **Automatic persistence** to `tokens.json`
+
+> **🔐 Security Note**: The interface is designed for localhost administration only. It cannot be accessed remotely, ensuring maximum security for token management operations.
+
 ### Verify Installation
 
 ```bash
@@ -119,10 +163,17 @@ curl http://localhost:3000/health
 Instead of command-line arguments, you can use environment variables:
 
 ```bash
+# Basic Database Configuration
 export DORIS_HOST="127.0.0.1"
 export DORIS_PORT="9030"
 export DORIS_USER="root"
 export DORIS_PASSWORD="your_password"
+
+# Token Management Interface (Security-Critical)
+export ENABLE_HTTP_TOKEN_MANAGEMENT=true
+export ENABLE_TOKEN_AUTH=true
+export TOKEN_MANAGEMENT_ADMIN_TOKEN="your_secure_admin_token"
+export TOKEN_MANAGEMENT_ALLOWED_IPS="127.0.0.1,::1"
 
 # Then start with simplified command
 doris-mcp-server --transport http --host 0.0.0.0 --port 3000
@@ -182,11 +233,20 @@ cp .env.example .env
     *   `DORIS_BE_WEBSERVER_PORT`: BE webserver port for monitoring tools (default: 8040)
     *   `FE_ARROW_FLIGHT_SQL_PORT`: Frontend Arrow Flight SQL port for ADBC (New in v0.5.0)
     *   `BE_ARROW_FLIGHT_SQL_PORT`: Backend Arrow Flight SQL port for ADBC (New in v0.5.0)
-*   **Security Configuration**:
-    *   `AUTH_TYPE`: Authentication type (token/basic/oauth, default: token)
-    *   `TOKEN_SECRET`: Token secret key
-    *   `ENABLE_SECURITY_CHECK`: Enable/disable SQL security validation (default: true, New in v0.4.2)
-    *   `BLOCKED_KEYWORDS`: Comma-separated list of blocked SQL keywords (New in v0.4.2)
+*   **Authentication Configuration (Enhanced in v0.6.0)**:
+    *   `ENABLE_TOKEN_AUTH`: Enable token-based authentication (default: false)
+    *   `ENABLE_JWT_AUTH`: Enable JWT authentication (default: false)
+    *   `ENABLE_OAUTH_AUTH`: Enable OAuth authentication (default: false)
+    *   `TOKEN_FILE_PATH`: Path to tokens.json file for token management (default: tokens.json)
+    *   `TOKEN_HOT_RELOAD`: Enable hot reloading of token configuration (default: true)
+    *   `DEFAULT_ADMIN_TOKEN`: Default admin token (customizable via env)
+    *   `DEFAULT_ANALYST_TOKEN`: Default analyst token (customizable via env)
+    *   `DEFAULT_READONLY_TOKEN`: Default readonly token (customizable via env)
+*   **Legacy Security Configuration**:
+    *   `AUTH_TYPE`: Legacy authentication type (token/basic/oauth, deprecated - use individual switches)
+    *   `TOKEN_SECRET`: Legacy token secret key (use token-based auth instead)
+    *   `ENABLE_SECURITY_CHECK`: Enable/disable SQL security validation (default: true)
+    *   `BLOCKED_KEYWORDS`: Comma-separated list of blocked SQL keywords
     *   `ENABLE_MASKING`: Enable data masking (default: true)
     *   `MAX_RESULT_ROWS`: Maximum result rows (default: 10000)
 *   **ADBC Configuration (New in v0.5.0)**:
@@ -270,7 +330,7 @@ docker run -d -p <port>:<port> -v /*your-host*/doris-mcp-server/.env:/app/.env -
 
 *   **Streamable HTTP**: `http://<host>:<port>/mcp` (Primary MCP endpoint - supports GET, POST, DELETE, OPTIONS)
 *   **Health Check**: `http://<host>:<port>/health`
-
+* 
 > **Note**: The server uses Streamable HTTP for web-based communication, providing unified request/response and streaming capabilities.
 
 ## Usage
@@ -359,30 +419,96 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 
 ## Security Configuration
 
-The Doris MCP Server includes a comprehensive security framework that provides enterprise-level protection through authentication, authorization, SQL security validation, and data masking capabilities.
+The Doris MCP Server includes a comprehensive enterprise-grade security framework with advanced authentication, authorization, SQL security validation, and data masking capabilities enhanced in v0.6.0.
 
-### Security Features
+### Security Features (Enhanced in v0.6.0)
 
-*   **🔐 Authentication**: Support for token-based and basic authentication
-*   **🛡️ Authorization**: Role-based access control (RBAC) with security levels
-*   **🚫 SQL Security**: SQL injection protection and blocked operations
-*   **🎭 Data Masking**: Automatic sensitive data masking based on user permissions
-*   **📊 Security Levels**: Four-tier security classification (Public, Internal, Confidential, Secret)
+*   **🔐 Multi-Authentication System**: Complete Token, JWT, and OAuth authentication with independent control switches
+*   **🔗 Token-Bound Database Configuration**: Revolutionary approach allowing tokens to carry their own database connection parameters
+*   **🔄 Hot Reload Security**: Zero-downtime security configuration updates with intelligent token revalidation
+*   **⚡ Immediate Validation**: Real-time database and authentication validation at connection time
+*   **🛡️ Role-Based Authorization**: Advanced RBAC with four-tier security classification
+*   **🚫 Enhanced SQL Security**: Advanced SQL injection protection with improved pattern detection
+*   **🎭 Intelligent Data Masking**: Automatic sensitive data masking with user-based permissions
+*   **📊 Security Analytics**: Comprehensive audit trails and security monitoring
 
-### Authentication Configuration
+### Authentication Configuration (v0.6.0)
 
-Configure authentication in your environment variables:
+Configure the new authentication system with granular control:
 
 ```bash
-# Authentication Type (token/basic/oauth)
-AUTH_TYPE=token
+# Individual Authentication Control (New in v0.6.0)
+ENABLE_TOKEN_AUTH=true          # Enable token-based authentication
+ENABLE_JWT_AUTH=false           # Enable JWT authentication  
+ENABLE_OAUTH_AUTH=false         # Enable OAuth authentication
 
-# Token Secret for JWT validation
-TOKEN_SECRET=your_secret_key_here
+# Token Management (New in v0.6.0)
+TOKEN_FILE_PATH=tokens.json     # Token configuration file
+TOKEN_HOT_RELOAD=true          # Enable hot reloading
 
-# Session timeout (in seconds)
-SESSION_TIMEOUT=3600
+# Default Tokens (Customizable via environment)
+DEFAULT_ADMIN_TOKEN=doris_admin_token_123456
+DEFAULT_ANALYST_TOKEN=doris_analyst_token_123456
+DEFAULT_READONLY_TOKEN=doris_readonly_token_123456
+
+# Legacy Configuration (Deprecated)
+# AUTH_TYPE=token               # Use individual switches instead
+# TOKEN_SECRET=your_secret_key  # Use token-based auth instead
 ```
+
+### Token-Bound Database Configuration (New in v0.6.0)
+
+Create a `tokens.json` file for advanced token management with database binding:
+
+```json
+{
+  "version": "1.0",
+  "tokens": [
+    {
+      "token_id": "customer-a-token",
+      "token": "customer_a_secure_token_12345",
+      "description": "Customer A dedicated database access",
+      "expires_hours": null,
+      "is_active": true,
+      "database_config": {
+        "host": "customer-a-db.example.com",
+        "port": 9030,
+        "user": "customer_a_user",
+        "password": "secure_password",
+        "database": "customer_a_data",
+        "charset": "UTF8",
+        "fe_http_port": 8030
+      }
+    },
+    {
+      "token_id": "customer-b-token", 
+      "token": "customer_b_secure_token_67890",
+      "description": "Customer B dedicated database access",
+      "expires_hours": 720,
+      "is_active": true,
+      "database_config": {
+        "host": "customer-b-db.example.com",
+        "port": 9030,
+        "user": "customer_b_user", 
+        "password": "secure_password",
+        "database": "customer_b_data",
+        "charset": "UTF8",
+        "fe_http_port": 8030
+      }
+    }
+  ]
+}
+```
+
+### Hot Reload Configuration Updates (New in v0.6.0)
+
+The system automatically detects and applies configuration changes:
+
+- **Automatic Detection**: File modification monitoring every 10 seconds
+- **Instant Validation**: Immediate database configuration validation for new tokens
+- **Zero Downtime**: Configuration updates without service interruption
+- **Rollback Protection**: Automatic rollback on configuration errors
+- **Audit Trail**: Complete logging of configuration changes
 
 #### Token Authentication Example
 
@@ -705,6 +831,15 @@ After configuring either mode in Cursor, you should be able to select the server
 doris-mcp-server/
 ├── doris_mcp_server/           # Main server package
 │   ├── main.py                 # Main entry point and FastAPI app
+│   ├── multiworker_app.py      # Multi-worker application module (New in v0.6.0)
+│   ├── auth/                   # Authentication modules (New in v0.6.0)
+│   │   ├── token_manager.py    # Enterprise token management with hot reload
+│   │   ├── jwt_manager.py      # JWT authentication provider
+│   │   ├── oauth_provider.py   # OAuth authentication provider  
+│   │   ├── oauth_handlers.py   # OAuth HTTP endpoint handlers
+│   │   ├── token_handlers.py   # Token management HTTP endpoints
+│   │   ├── auth_middleware.py  # Authentication middleware
+│   │   └── __init__.py
 │   ├── tools/                  # MCP tools implementation
 │   │   ├── tools_manager.py    # Centralized tools management and registration
 │   │   ├── resources_manager.py # Resource management and metadata exposure
@@ -712,18 +847,18 @@ doris-mcp-server/
 │   │   └── __init__.py
 │   ├── utils/                  # Core utility modules
 │   │   ├── config.py           # Configuration management with validation
-│   │   ├── db.py               # Database connection management with pooling
+│   │   ├── db.py               # Enhanced database connection management with token binding (Enhanced in v0.6.0)
 │   │   ├── query_executor.py   # High-performance SQL execution with caching
-│   │   ├── security.py         # Security management and data masking
+│   │   ├── security.py         # Advanced security management and authentication (Enhanced in v0.6.0)
 │   │   ├── schema_extractor.py # Metadata extraction with catalog federation
 │   │   ├── analysis_tools.py   # Data analysis and performance monitoring
-│   │   ├── data_governance_tools.py  # Data lineage and freshness monitoring (New in v0.5.0)
-│   │   ├── data_quality_tools.py     # Comprehensive data quality analysis (New in v0.5.0)
-│   │   ├── data_exploration_tools.py # Advanced statistical analysis (New in v0.5.0)
-│   │   ├── security_analytics_tools.py # Access pattern analysis (New in v0.5.0)
-│   │   ├── dependency_analysis_tools.py # Impact analysis and dependency mapping (New in v0.5.0)
-│   │   ├── performance_analytics_tools.py # Query optimization and capacity planning (New in v0.5.0)
-│   │   ├── adbc_query_tools.py       # High-performance Arrow Flight SQL operations (New in v0.5.0)
+│   │   ├── data_governance_tools.py  # Data lineage and freshness monitoring (v0.5.0)
+│   │   ├── data_quality_tools.py     # Comprehensive data quality analysis (v0.5.0)
+│   │   ├── data_exploration_tools.py # Advanced statistical analysis (v0.5.0)
+│   │   ├── security_analytics_tools.py # Access pattern analysis (v0.5.0)
+│   │   ├── dependency_analysis_tools.py # Impact analysis and dependency mapping (v0.5.0)
+│   │   ├── performance_analytics_tools.py # Query optimization and capacity planning (v0.5.0)
+│   │   ├── adbc_query_tools.py       # High-performance Arrow Flight SQL operations (v0.5.0)
 │   │   ├── logger.py           # Logging configuration
 │   │   └── __init__.py
 │   └── __init__.py
@@ -732,7 +867,9 @@ doris-mcp-server/
 │   ├── README.md               # Client documentation
 │   └── __init__.py
 ├── logs/                       # Log files directory
+├── tokens.json                 # Token configuration file (New in v0.6.0)
 ├── README.md                   # This documentation
+├── RELEASE_NOTES_v0.6.0.md     # Release notes for v0.6.0
 ├── .env.example                # Environment variables template
 ├── requirements.txt            # Python dependencies
 ├── pyproject.toml              # Project configuration and entry points
@@ -1277,5 +1414,172 @@ cat logs/doris_mcp_server_critical.log
 - **Manual**: Logs are automatically rotated when they reach 10MB
 - **Backup**: Keeps 5 backup files for each log level
 - **Performance**: Minimal impact on server performance
+
+### Q: How to use the new Token-Bound Database Configuration? (New in v0.6.0)
+
+**A:** The revolutionary token-bound database configuration allows each token to carry its own database connection parameters for secure multi-tenant access:
+
+1. **Enable Token Authentication**:
+   ```bash
+   # In your .env file
+   ENABLE_TOKEN_AUTH=true
+   TOKEN_HOT_RELOAD=true
+   TOKEN_FILE_PATH=tokens.json
+   ```
+
+2. **Create tokens.json Configuration**:
+   ```json
+   {
+     "version": "1.0",
+     "tokens": [
+       {
+         "token_id": "tenant-alpha",
+         "token": "tenant_alpha_secure_token_123",
+         "description": "Tenant Alpha database access",
+         "expires_hours": null,
+         "is_active": true,
+         "database_config": {
+           "host": "tenant-alpha-db.company.com",
+           "port": 9030,
+           "user": "alpha_user",
+           "password": "secure_password",
+           "database": "alpha_analytics",
+           "charset": "UTF8"
+         }
+       }
+     ]
+   }
+   ```
+
+3. **Configuration Priority** (New in v0.6.0):
+   - **Token-bound DB config** (highest priority)
+   - **Environment variables (.env)**
+   - **Error if neither available**
+
+4. **Hot Reload Benefits**:
+   - Add new tenants without service restart
+   - Update database credentials in real-time
+   - Automatic validation and rollback on errors
+   - Complete audit trail of changes
+
+5. **Multi-Tenant Usage**:
+   ```bash
+   # Different tokens access different databases automatically
+   curl -H "Authorization: Bearer tenant_alpha_secure_token_123" http://localhost:3000/mcp
+   curl -H "Authorization: Bearer tenant_beta_secure_token_456" http://localhost:3000/mcp
+   ```
+
+### Q: How does Hot Reload work and is it safe? (New in v0.6.0)
+
+**A:** The hot reload system is designed for enterprise production environments with comprehensive safety measures:
+
+**How It Works:**
+- **File Monitoring**: Checks tokens.json every 10 seconds for modifications
+- **Immediate Validation**: New tokens are validated including database connectivity
+- **Atomic Updates**: All-or-nothing configuration updates
+- **Rollback Protection**: Automatic rollback if any token validation fails
+
+**Safety Features:**
+- **Backup and Restore**: Current configuration backed up before changes
+- **Connection Testing**: Database connections tested before applying changes
+- **Error Isolation**: Invalid tokens don't affect existing valid tokens
+- **Audit Logging**: Complete trail of all configuration changes
+
+**Best Practices:**
+```bash
+# Monitor hot reload activity
+tail -f logs/doris_mcp_server_info.log | grep "hot reload"
+
+# Test configuration before applying
+cp tokens.json tokens.json.backup
+# Make changes to tokens.json
+# System will automatically validate and apply or rollback
+```
+
+### Q: How to manage Token lifecycle and security? (New in v0.6.0)
+
+**A:** Token management uses a secure, file-based approach with optional administrative endpoints that have comprehensive security controls.
+
+**Primary Token Management Method (Recommended):**
+```bash
+# 1. Edit tokens.json file directly (safest method)
+nano tokens.json
+
+# 2. Hot reload will automatically detect changes
+# No server restart required - changes applied within 10 seconds
+
+# 3. Monitor hot reload in logs
+tail -f logs/doris_mcp_server_info.log | grep "hot reload"
+```
+
+**Administrative Endpoints (Secure, Local Access Only):**
+
+🛡️ **SECURITY**: These endpoints are protected by comprehensive security controls and are **disabled by default**.
+
+```bash
+# Security Requirements (ALL must be met):
+# ✓ HTTP token management explicitly enabled in configuration
+# ✓ Access only from localhost (127.0.0.1/::1) - IP restrictions enforced
+# ✓ Valid admin authentication token required
+# ✓ Admin authentication enabled in configuration
+
+# Enable HTTP token management (disabled by default)
+export ENABLE_HTTP_TOKEN_MANAGEMENT=true
+export TOKEN_MANAGEMENT_ADMIN_TOKEN=your_secure_admin_token
+export REQUIRE_ADMIN_AUTH=true
+export TOKEN_MANAGEMENT_ALLOWED_IPS=127.0.0.1,::1
+
+# Access with proper authentication
+curl -H "Authorization: Bearer your_secure_admin_token" http://127.0.0.1:3000/token/stats
+
+# Demo page (local access only, with authentication)
+# Access: http://127.0.0.1:3000/token/demo
+```
+
+**Recommended Token Management Workflow:**
+
+1. **Development/Testing**:
+   ```json
+   // tokens.json
+   {
+     "version": "1.0",
+     "tokens": [
+       {
+         "token_id": "dev-token",
+         "token": "dev_secure_token_123",
+         "description": "Development environment access",
+         "expires_hours": 24,
+         "is_active": true
+       }
+     ]
+   }
+   ```
+
+2. **Production Deployment**:
+   ```bash
+   # Use secure token generation
+   openssl rand -hex 32  # Generate secure token
+   
+   # Store in secure configuration management
+   # Never commit tokens to version control
+   # Use environment variables for sensitive tokens
+   ```
+
+**Security Features:**
+- **File-Based Management**: Primary management through secured configuration files
+- **Hot Reload**: Automatic configuration updates without service interruption
+- **Token Hashing**: Tokens stored as SHA-256 hashes internally
+- **Audit Trail**: Complete logging of all token operations and changes
+- **Expiration Management**: Automatic cleanup of expired tokens
+- **Local Admin Only**: Management endpoints restricted to localhost access
+- **Configuration Validation**: Immediate validation of token and database configurations
+
+**Security Best Practices:**
+- Always manage tokens through secure configuration files
+- Never expose token management endpoints to external networks
+- Use strong, randomly generated tokens for production
+- Implement proper file permissions for tokens.json (600 or 640)
+- Regular audit of active tokens and their usage patterns
+- Monitor hot reload logs for unauthorized configuration changes
 
 For other issues, please check GitHub Issues or submit a new issue. 

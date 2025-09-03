@@ -32,6 +32,7 @@ from sqlparse.sql import Statement
 from sqlparse.tokens import Keyword, Name
 
 from .logger import get_logger
+from .config import DatabaseConfig
 
 
 class SecurityLevel(Enum):
@@ -333,7 +334,8 @@ class DorisSecurityManager:
         token_id: str,
         expires_hours: Optional[int] = None,
         description: str = "",
-        custom_token: Optional[str] = None
+        custom_token: Optional[str] = None,
+        database_config: Optional[DatabaseConfig] = None
     ) -> str:
         """Create a new API access token
         
@@ -342,6 +344,7 @@ class DorisSecurityManager:
             expires_hours: Token expiration in hours (None for no expiration)
             description: Token description for management purposes
             custom_token: Custom token string (if None, generates random token)
+            database_config: Optional database configuration for this token
             
         Returns:
             Generated token string
@@ -353,7 +356,8 @@ class DorisSecurityManager:
             token_id=token_id,
             expires_hours=expires_hours,
             description=description,
-            custom_token=custom_token
+            custom_token=custom_token,
+            database_config=database_config
         )
     
     async def revoke_token(self, token_id: str) -> bool:

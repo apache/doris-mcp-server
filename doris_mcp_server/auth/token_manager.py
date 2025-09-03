@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 """
 Token Authentication Management Module
 
@@ -355,7 +371,8 @@ class TokenManager:
         token_id: str,
         expires_hours: Optional[int] = None,
         description: str = "",
-        custom_token: Optional[str] = None
+        custom_token: Optional[str] = None,
+        database_config: Optional[DatabaseConfig] = None
     ) -> str:
         """Create a new token"""
         try:
@@ -380,7 +397,8 @@ class TokenManager:
             token_info = TokenInfo(
                 token_id=token_id,
                 expires_at=expires_at,
-                description=description
+                description=description,
+                database_config=database_config
             )
             
             # Hash and store token
@@ -389,6 +407,9 @@ class TokenManager:
             self._token_ids[token_id] = token_hash
             
             self.logger.info(f"Created new token '{token_id}'")
+            
+            # Save token to file
+            self._save_token_to_file(token_id, raw_token, token_info)
             
             return raw_token
             
@@ -410,11 +431,200 @@ class TokenManager:
             del self._token_ids[token_id]
             
             self.logger.info(f"Revoked token '{token_id}'")
+            
+            # Save updated tokens to file
+            self._remove_token_from_file(token_id)
+            
             return True
             
         except Exception as e:
             self.logger.error(f"Failed to revoke token '{token_id}': {e}")
             return False
+    
+    def _save_tokens_to_file(self):
+        """Save current tokens to JSON file"""
+        try:
+            # Convert current tokens to file format
+            tokens_list = []
+            
+            for token_hash, token_info in self._tokens.items():
+                # Find the raw token for this token_info
+                raw_token = None
+                for tid, thash in self._token_ids.items():
+                    if thash == token_hash and tid == token_info.token_id:
+                        # We can't recover the original token from hash, 
+                        # so we'll create a placeholder for existing tokens
+                        raw_token = f"<existing_token_hash_{token_hash[:8]}>"
+                        break
+                
+                if raw_token is None:
+                    continue
+                
+                token_config = {
+                    "token_id": token_info.token_id,
+                    "token": raw_token,
+                    "description": token_info.description,
+                    "expires_hours": None,
+                    "is_active": token_info.is_active
+                }
+                
+                # Add expiration info
+                if token_info.expires_at:
+                    # Calculate remaining hours from now
+                    remaining = token_info.expires_at - datetime.utcnow()
+                    if remaining.total_seconds() > 0:
+                        token_config["expires_hours"] = int(remaining.total_seconds() / 3600)
+                    else:
+                        token_config["expires_hours"] = 0
+                
+                # Add database config if present
+                if token_info.database_config:
+                    token_config["database_config"] = {
+                        "host": token_info.database_config.host,
+                        "port": token_info.database_config.port,
+                        "user": token_info.database_config.user,
+                        "password": token_info.database_config.password,
+                        "database": token_info.database_config.database,
+                        "charset": token_info.database_config.charset,
+                        "fe_http_port": token_info.database_config.fe_http_port
+                    }
+                
+                tokens_list.append(token_config)
+            
+            # Create file content
+            file_content = {
+                "version": "1.0",
+                "description": "Doris MCP Server Token configuration file",
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "tokens": tokens_list,
+                "notes": [
+                    "This file is automatically updated when tokens are created or revoked",
+                    "Please backup this file before making manual changes",
+                    "Tokens with hash placeholders were loaded from previous configuration"
+                ]
+            }
+            
+            # Save to file
+            with open(self.token_file_path, 'w', encoding='utf-8') as f:
+                json.dump(file_content, f, indent=2, ensure_ascii=False)
+            
+            self.logger.info(f"Saved {len(tokens_list)} tokens to file: {self.token_file_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save tokens to file {self.token_file_path}: {e}")
+    
+    def _save_token_to_file(self, token_id: str, raw_token: str, token_info: TokenInfo):
+        """Save a single new token to file (for newly created tokens only)"""
+        try:
+            # Load existing file
+            existing_data = {"tokens": []}
+            if os.path.exists(self.token_file_path):
+                try:
+                    with open(self.token_file_path, 'r', encoding='utf-8') as f:
+                        existing_data = json.load(f)
+                except Exception as e:
+                    self.logger.warning(f"Could not load existing token file: {e}")
+            
+            # Ensure tokens list exists
+            if 'tokens' not in existing_data or not isinstance(existing_data['tokens'], list):
+                existing_data['tokens'] = []
+            
+            # Check if token already exists in file
+            token_exists = False
+            for i, token_config in enumerate(existing_data['tokens']):
+                if token_config.get('token_id') == token_id:
+                    # Update existing token
+                    existing_data['tokens'][i] = self._token_info_to_config(token_id, raw_token, token_info)
+                    token_exists = True
+                    break
+            
+            # Add new token if it doesn't exist
+            if not token_exists:
+                new_token_config = self._token_info_to_config(token_id, raw_token, token_info)
+                existing_data['tokens'].append(new_token_config)
+            
+            # Update metadata
+            existing_data.update({
+                "version": "1.0",
+                "description": "Doris MCP Server Token configuration file",
+                "updated_at": datetime.utcnow().isoformat() + "Z"
+            })
+            
+            # Save to file
+            with open(self.token_file_path, 'w', encoding='utf-8') as f:
+                json.dump(existing_data, f, indent=2, ensure_ascii=False)
+            
+            self.logger.info(f"Saved token '{token_id}' to file: {self.token_file_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save token '{token_id}' to file: {e}")
+    
+    def _token_info_to_config(self, token_id: str, raw_token: str, token_info: TokenInfo) -> dict:
+        """Convert TokenInfo to file configuration format"""
+        token_config = {
+            "token_id": token_id,
+            "token": raw_token,
+            "description": token_info.description,
+            "expires_hours": None,
+            "is_active": token_info.is_active
+        }
+        
+        # Add expiration info
+        if token_info.expires_at:
+            # Calculate remaining hours from creation time
+            remaining = token_info.expires_at - token_info.created_at
+            token_config["expires_hours"] = int(remaining.total_seconds() / 3600) if remaining.total_seconds() > 0 else None
+        
+        # Add database config if present
+        if token_info.database_config:
+            token_config["database_config"] = {
+                "host": token_info.database_config.host,
+                "port": token_info.database_config.port,
+                "user": token_info.database_config.user,
+                "password": token_info.database_config.password,
+                "database": token_info.database_config.database,
+                "charset": token_info.database_config.charset,
+                "fe_http_port": token_info.database_config.fe_http_port
+            }
+        
+        return token_config
+    
+    def _remove_token_from_file(self, token_id: str):
+        """Remove a token from the JSON file"""
+        try:
+            if not os.path.exists(self.token_file_path):
+                return
+            
+            # Load existing file
+            with open(self.token_file_path, 'r', encoding='utf-8') as f:
+                existing_data = json.load(f)
+            
+            if 'tokens' not in existing_data or not isinstance(existing_data['tokens'], list):
+                return
+            
+            # Remove the token
+            original_count = len(existing_data['tokens'])
+            existing_data['tokens'] = [
+                token for token in existing_data['tokens'] 
+                if token.get('token_id') != token_id
+            ]
+            
+            if len(existing_data['tokens']) < original_count:
+                # Update metadata
+                existing_data.update({
+                    "version": "1.0", 
+                    "description": "Doris MCP Server Token configuration file",
+                    "updated_at": datetime.utcnow().isoformat() + "Z"
+                })
+                
+                # Save to file
+                with open(self.token_file_path, 'w', encoding='utf-8') as f:
+                    json.dump(existing_data, f, indent=2, ensure_ascii=False)
+                
+                self.logger.info(f"Removed token '{token_id}' from file: {self.token_file_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to remove token '{token_id}' from file: {e}")
     
     async def list_tokens(self) -> List[Dict[str, Any]]:
         """List all tokens (without sensitive data)"""

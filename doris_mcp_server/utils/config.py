@@ -93,6 +93,12 @@ class SecurityConfig:
     default_token_expiry_hours: int = 24 * 30  # Default expiry: 30 days
     token_hash_algorithm: str = "sha256"  # Token hashing algorithm: sha256, sha512
     
+    # Token Management Security (New in v0.6.0)
+    enable_http_token_management: bool = False  # Enable HTTP token management endpoints (default: disabled for security)
+    token_management_admin_token: str = ""  # Admin token for token management endpoints (required if HTTP management enabled)
+    token_management_allowed_ips: list[str] = field(default_factory=lambda: ["127.0.0.1", "::1", "localhost"])  # Allowed IPs for token management
+    require_admin_auth: bool = True  # Require admin authentication for token management (default: true)
+    
     # JWT Configuration
     jwt_algorithm: str = "RS256"  # RS256, ES256, HS256
     jwt_issuer: str = "doris-mcp-server"
@@ -469,6 +475,21 @@ class DorisConfig:
             os.getenv("DEFAULT_TOKEN_EXPIRY_HOURS", str(config.security.default_token_expiry_hours))
         )
         config.security.token_hash_algorithm = os.getenv("TOKEN_HASH_ALGORITHM", config.security.token_hash_algorithm)
+        
+        # Token Management Security Configuration (New in v0.6.0)
+        config.security.enable_http_token_management = (
+            os.getenv("ENABLE_HTTP_TOKEN_MANAGEMENT", str(config.security.enable_http_token_management).lower()).lower() == "true"
+        )
+        config.security.token_management_admin_token = os.getenv("TOKEN_MANAGEMENT_ADMIN_TOKEN", config.security.token_management_admin_token)
+        
+        # Parse allowed IPs from comma-separated string
+        allowed_ips_str = os.getenv("TOKEN_MANAGEMENT_ALLOWED_IPS", "")
+        if allowed_ips_str:
+            config.security.token_management_allowed_ips = [ip.strip() for ip in allowed_ips_str.split(",") if ip.strip()]
+        
+        config.security.require_admin_auth = (
+            os.getenv("REQUIRE_ADMIN_AUTH", str(config.security.require_admin_auth).lower()).lower() == "true"
+        )
 
         # Performance configuration
         config.performance.enable_query_cache = (

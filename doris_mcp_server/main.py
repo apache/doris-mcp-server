@@ -546,7 +546,7 @@ class DorisServer:
             
             # Token management endpoints
             from .auth.token_handlers import TokenHandlers
-            token_handlers = TokenHandlers(self.security_manager)
+            token_handlers = TokenHandlers(self.security_manager, self.config)
             
             async def token_create(request):
                 return await token_handlers.handle_create_token(request)
@@ -563,8 +563,8 @@ class DorisServer:
             async def token_cleanup(request):
                 return await token_handlers.handle_cleanup_tokens(request)
                 
-            async def token_demo(request):
-                return await token_handlers.handle_demo_page(request)
+            async def token_management(request):
+                return await token_handlers.handle_management_page(request)
             
             # Lifecycle manager - simplified since we manage session_manager externally
             @contextlib.asynccontextmanager
@@ -592,7 +592,7 @@ class DorisServer:
                     Route("/token/list", token_list, methods=["GET"]),
                     Route("/token/stats", token_stats, methods=["GET"]),
                     Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
-                    Route("/token/demo", token_demo, methods=["GET"]),
+                    Route("/token/management", token_management, methods=["GET"]),
                 ],
                 lifespan=lifespan,
             )

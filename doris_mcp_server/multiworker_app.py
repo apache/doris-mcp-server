@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 """
 Multi-worker application module for doris-mcp-server
 
@@ -396,7 +412,7 @@ async def initialize_worker():
         from .auth.oauth_handlers import OAuthHandlers
         from .auth.token_handlers import TokenHandlers
         _oauth_handlers = OAuthHandlers(_worker_security_manager)
-        _token_handlers = TokenHandlers(_worker_security_manager)
+        _token_handlers = TokenHandlers(_worker_security_manager, config)
         
         _worker_initialized = True
         logger.info(f"Worker {os.getpid()} MCP initialization completed successfully")
@@ -481,12 +497,12 @@ async def token_cleanup(request):
         return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
     return await _token_handlers.handle_cleanup_tokens(request)
 
-async def token_demo(request):
-    """Token demo page endpoint"""
+async def token_management(request):
+    """Token management page endpoint"""
     if not _token_handlers:
         from starlette.responses import HTMLResponse
         return HTMLResponse("<h1>Token handlers not initialized</h1>")
-    return await _token_handlers.handle_demo_page(request)
+    return await _token_handlers.handle_management_page(request)
 
 async def root_info(request):
     """Root endpoint"""
@@ -593,7 +609,7 @@ basic_app = Starlette(
         Route("/token/list", token_list, methods=["GET"]),
         Route("/token/stats", token_stats, methods=["GET"]),
         Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
-        Route("/token/demo", token_demo, methods=["GET"]),
+        Route("/token/management", token_management, methods=["GET"]),
     ],
     lifespan=lifespan
 )
