@@ -432,9 +432,9 @@ class DorisServer:
             await self.security_manager.initialize()
             self.logger.info("Security manager initialization completed")
             
-            # Ensure connection manager is initialized
-            await self.connection_manager.initialize()
-            self.logger.info("Connection manager initialization completed")
+            # For stdio mode, we must establish a working database connection
+            # Use the dedicated stdio mode initialization method
+            await self.connection_manager.initialize_for_stdio_mode()
 
             # Start stdio server - using compatible import approach
             try:
@@ -502,8 +502,12 @@ class DorisServer:
             await self.security_manager.initialize()
             self.logger.info("Security manager initialization completed")
             
-            # Ensure connection manager is initialized
-            await self.connection_manager.initialize()
+            # For HTTP mode, try to initialize global connection pool with graceful degradation
+            global_pool_created = await self.connection_manager.initialize_for_http_mode()
+            if global_pool_created:
+                self.logger.info("Global database connection pool available for HTTP mode")
+            else:
+                self.logger.info("HTTP mode running without global database pool, will use token-bound configurations")
 
             # Use Starlette and StreamableHTTPSessionManager according to official example
             import uvicorn
