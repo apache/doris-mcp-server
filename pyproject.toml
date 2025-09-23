@@ -20,7 +20,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "doris-mcp-server"
-version = "0.5.1"
+version = "0.6.1"
 description = "Enterprise-grade Model Context Protocol (MCP) server implementation for Apache Doris"
 authors = [
     {name = "Yijia Su", email = "freeoneplus@apache.org"}
