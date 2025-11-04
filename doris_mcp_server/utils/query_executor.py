@@ -541,17 +541,21 @@ class DorisQueryExecutor:
         await self.query_cache.clear_all()
 
     async def execute_sql_for_mcp(
-        self, 
-        sql: str, 
-        limit: int = 1000, 
+        self,
+        sql: str,
+        limit: int = 1000,
         timeout: int = 30,
         session_id: str = "mcp_session",
-        user_id: str = "mcp_user"
+        user_id: str = "mcp_user",
+        auth_context = None  # FIX for Issue #62 Bug 1: Accept auth_context with token
     ) -> Dict[str, Any]:
-        """Execute SQL query for MCP interface - unified method"""
+        """Execute SQL query for MCP interface - unified method
+
+        FIX for Issue #62 Bug 1: Now accepts auth_context parameter to support token-bound database configuration
+        """
         max_retries = 2
         retry_count = 0
-        
+
         while retry_count <= max_retries:
             try:
                 if not sql:
@@ -564,14 +568,20 @@ class DorisQueryExecutor:
                 # Import required security modules
                 from .security import DorisSecurityManager, AuthContext, SecurityLevel
 
-                # Create proper auth context with read-only permissions
-                auth_context = AuthContext(
-                    user_id=user_id,
-                    roles=["read_only_user"],  # Restrictive role for MCP interface
-                    permissions=["read_data"],  # Only read permissions
-                    session_id=session_id,
-                    security_level=SecurityLevel.INTERNAL
-                )
+                # FIX: Use provided auth_context if available (contains token for DB config)
+                # Otherwise create default auth context for backward compatibility
+                if auth_context is None:
+                    auth_context = AuthContext(
+                        user_id=user_id,
+                        roles=["read_only_user"],  # Restrictive role for MCP interface
+                        permissions=["read_data"],  # Only read permissions
+                        session_id=session_id,
+                        security_level=SecurityLevel.INTERNAL,
+                        token=""  # No token in default context
+                    )
+                else:
+                    # Use provided auth_context (may contain token for database configuration)
+                    self.logger.debug(f"Using provided auth_context with token: {bool(hasattr(auth_context, 'token') and auth_context.token)}")
 
                 # Perform SQL security validation if enabled
                 if hasattr(self.connection_manager, 'config') and hasattr(self.connection_manager.config, 'security'):
@@ -579,7 +589,7 @@ class DorisQueryExecutor:
                         try:
                             security_manager = DorisSecurityManager(self.connection_manager.config)
                             validation_result = await security_manager.validate_sql_security(sql, auth_context)
-                            
+
                             if not validation_result.is_valid:
                                 self.logger.warning(f"SQL security validation failed for query: {sql[:100]}...")
                                 return {
@@ -877,33 +887,42 @@ class QueryPerformanceMonitor:
 # Unified convenience function for MCP integration
 async def execute_sql_query(sql: str, connection_manager: DorisConnectionManager, **kwargs) -> Dict[str, Any]:
     """Execute SQL query - unified convenience function for MCP tools
-    
+
     This function now includes security validation to ensure safe query execution.
     All queries are validated against the configured security policies before execution.
+
+    FIX for Issue #62 Bug 1: Now supports auth_context parameter for token-bound database configuration
+    FIX for Issue #58 Problem 2: Removed executor.close() to prevent ClosedResourceError in multi-worker mode
     """
     try:
         # Create query executor with the connection manager's configuration
         executor = DorisQueryExecutor(connection_manager)
-        
-        try:
-            # Extract parameters from kwargs or use defaults
-            limit = kwargs.get("limit", 1000)
-            timeout = kwargs.get("timeout", 30)
-            session_id = kwargs.get("session_id", "mcp_session")
-            user_id = kwargs.get("user_id", "mcp_user")
-            
-            # The execute_sql_for_mcp method now includes security validation
-            result = await executor.execute_sql_for_mcp(
-                sql=sql,
-                limit=limit,
-                timeout=timeout,
-                session_id=session_id,
-                user_id=user_id
-            )
-            return result
-        finally:
-            await executor.close()
-            
+
+        # Extract parameters from kwargs or use defaults
+        limit = kwargs.get("limit", 1000)
+        timeout = kwargs.get("timeout", 30)
+        session_id = kwargs.get("session_id", "mcp_session")
+        user_id = kwargs.get("user_id", "mcp_user")
+        auth_context = kwargs.get("auth_context", None)  # FIX: Extract auth_context
+
+        # The execute_sql_for_mcp method now includes security validation
+        result = await executor.execute_sql_for_mcp(
+            sql=sql,
+            limit=limit,
+            timeout=timeout,
+            session_id=session_id,
+            user_id=user_id,
+            auth_context=auth_context  # FIX: Pass auth_context with token
+        )
+
+        # FIX for Issue #58 Problem 2: Do NOT close executor here
+        # In multi-worker mode, closing here causes ClosedResourceError
+        # The executor's resources (cache, background tasks) will be managed
+        # by the connection_manager lifecycle and Python's garbage collection
+        # This prevents premature cleanup while MCP session manager is still processing
+
+        return result
+
     except Exception as e:
         return {
             "success": False,

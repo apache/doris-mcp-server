@@ -95,12 +95,14 @@ class DorisConnection:
                 await cursor.execute(sql, params)
 
                 # Check if it's a query statement (statement that returns result set)
+                # FIX for Issue #62 Bug 5: Added WITH support for Common Table Expressions (CTE)
                 sql_upper = sql.strip().upper()
-                if (sql_upper.startswith("SELECT") or 
-                    sql_upper.startswith("SHOW") or 
-                    sql_upper.startswith("DESCRIBE") or 
-                    sql_upper.startswith("DESC") or 
-                    sql_upper.startswith("EXPLAIN")):
+                if (sql_upper.startswith("SELECT") or
+                    sql_upper.startswith("SHOW") or
+                    sql_upper.startswith("DESCRIBE") or
+                    sql_upper.startswith("DESC") or
+                    sql_upper.startswith("EXPLAIN") or
+                    sql_upper.startswith("WITH")):  # FIX: Support CTE queries
                     data = await cursor.fetchall()
                     row_count = len(data)
                 else:
@@ -250,7 +252,16 @@ class DorisConnectionManager:
         self.logger = get_logger(__name__)
         self.security_manager = security_manager
         self.token_manager = token_manager  # Token manager for token-bound DB config
-        self.session_cache = DorisSessionCache(self)
+
+        # FIX for Issue #58 Problem 1: Disable session caching to prevent connection sharing
+        # Session caching causes multiple threads to share the same MySQL connection,
+        # leading to race conditions and deadlocks in multi-threaded environments
+        # By disabling caching, each request gets a fresh connection from the pool
+        self.session_cache = DorisSessionCache(
+            self,
+            cache_system_session=False,  # Disabled to prevent multi-thread issues
+            cache_user_session=False     # Disabled to prevent multi-thread issues
+        )
         
         # Store original database config for fallback
         self.original_db_config = {
@@ -1258,17 +1269,43 @@ class DorisConnectionManager:
     async def execute_query(
         self, session_id: str, sql: str, params: tuple | None = None, auth_context=None
     ) -> QueryResult:
-        """Execute query - Simplified Strategy with automatic connection management"""
+        """Execute query - Simplified Strategy with automatic connection management
+
+        FIX for Issue #62 Bug 1: Configure token-bound database before query execution
+        """
         connection = None
         try:
-            # Always get fresh connection from pool
+            # FIX: Configure database for token BEFORE getting connection
+            # This ensures token-bound database configuration is used instead of global config
+            if auth_context and hasattr(auth_context, 'token') and auth_context.token:
+                try:
+                    success, config_source = await self.configure_for_token(auth_context.token)
+                    if success:
+                        self.logger.info(f"Session {session_id}: Using {config_source} database configuration")
+                    else:
+                        self.logger.warning(f"Session {session_id}: Token configuration failed, may use global config")
+                except Exception as token_config_error:
+                    # SECURITY: If token should have config but configuration fails, don't fallback
+                    # This prevents privilege escalation (using high-privilege default user)
+                    if self.token_manager:
+                        self.logger.error(f"Session {session_id}: Token database configuration failed: {token_config_error}")
+                        raise RuntimeError(
+                            f"Failed to configure database for authenticated token. "
+                            f"This is a security measure to prevent using default high-privilege credentials. "
+                            f"Error: {token_config_error}"
+                        )
+                    else:
+                        # No token manager, can use global config
+                        self.logger.warning(f"Session {session_id}: No token manager, using global config")
+
+            # Always get fresh connection from pool (with configured database)
             connection = await self.get_connection(session_id)
-            
+
             # Execute query
             result = await connection.execute(sql, params, auth_context)
-            
+
             return result
-            
+
         except Exception as e:
             self.logger.error(f"Query execution failed for session {session_id}: {e}")
             raise

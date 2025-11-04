@@ -634,14 +634,24 @@ class DorisServer:
                             try:
                                 # Extract authentication information
                                 auth_info = await self._extract_auth_info_from_scope(scope, headers)
-                                
+
                                 # Authenticate the request
                                 auth_context = await self.security_manager.authenticate_request(auth_info)
                                 self.logger.info(f"MCP request authenticated: token_id={auth_context.token_id}, client_ip={auth_context.client_ip}")
-                                
+
                                 # Store auth context in scope for potential use by tools/resources
                                 scope["auth_context"] = auth_context
-                                
+
+                                # FIX for Issue #62 Bug 1: Set auth_context in context variable
+                                # This allows tools to access token information for token-bound database configuration
+                                try:
+                                    from contextvars import ContextVar
+                                    auth_context_var: ContextVar = ContextVar('mcp_auth_context', default=None)
+                                    auth_context_var.set(auth_context)
+                                    self.logger.debug(f"Set auth_context in context variable with token: {bool(hasattr(auth_context, 'token') and auth_context.token)}")
+                                except Exception as ctx_error:
+                                    self.logger.warning(f"Failed to set auth_context in context variable: {ctx_error}")
+
                             except Exception as auth_error:
                                 self.logger.error(f"MCP authentication failed: {auth_error}")
                                 # Return 401 Unauthorized

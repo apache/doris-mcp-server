@@ -64,9 +64,10 @@ else
 fi
 
 # Set HTTP-specific environment variables
+# FIX for Issue #62 Bug 4: Use SERVER_PORT instead of MCP_PORT for consistency with code
 export MCP_TRANSPORT_TYPE="http"
 export MCP_HOST="${MCP_HOST:-0.0.0.0}"
-export MCP_PORT="${MCP_PORT:-3000}"
+export SERVER_PORT="${SERVER_PORT:-3000}"  # Changed from MCP_PORT to SERVER_PORT
 export WORKERS="${WORKERS:-1}"
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"
 export LOG_LEVEL="${LOG_LEVEL:-info}"
@@ -77,15 +78,15 @@ export MCP_DEBUG_ADAPTER="true"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 
 echo -e "${GREEN}Starting MCP server (Streamable HTTP mode)...${NC}"
-echo -e "${YELLOW}Service will run on http://${MCP_HOST}:${MCP_PORT}/mcp${NC}"
-echo -e "${YELLOW}Health Check: http://${MCP_HOST}:${MCP_PORT}/health${NC}"
-echo -e "${YELLOW}MCP Endpoint: http://${MCP_HOST}:${MCP_PORT}/mcp${NC}"
-echo -e "${YELLOW}Local access: http://localhost:${MCP_PORT}/mcp${NC}"
+echo -e "${YELLOW}Service will run on http://${MCP_HOST}:${SERVER_PORT}/mcp${NC}"
+echo -e "${YELLOW}Health Check: http://${MCP_HOST}:${SERVER_PORT}/health${NC}"
+echo -e "${YELLOW}MCP Endpoint: http://${MCP_HOST}:${SERVER_PORT}/mcp${NC}"
+echo -e "${YELLOW}Local access: http://localhost:${SERVER_PORT}/mcp${NC}"
 echo -e "${YELLOW}Workers: ${WORKERS}${NC}"
 echo -e "${YELLOW}Use Ctrl+C to stop the service${NC}"
 
 # Start the server in HTTP mode (Streamable HTTP)
-python -m doris_mcp_server.main --transport http --host ${MCP_HOST} --port ${MCP_PORT} --workers ${WORKERS}
+python -m doris_mcp_server.main --transport http --host ${MCP_HOST} --port ${SERVER_PORT} --workers ${WORKERS}
 
 # Check exit status
 if [ $? -ne 0 ]; then
@@ -97,4 +98,4 @@ fi
 echo -e "${YELLOW}Tip: If the page displays abnormally, please clear your browser cache or use incognito mode${NC}"
 echo -e "${YELLOW}Chrome browser clear cache shortcut: Ctrl+Shift+Del (Windows) or Cmd+Shift+Del (Mac)${NC}"
 echo -e "${CYAN}For testing HTTP endpoints, you can use:${NC}"
-echo -e "${CYAN}  curl -X POST http://localhost:${MCP_PORT}/mcp -H 'Content-Type: application/json' -d '{\"method\":\"tools/list\"}'${NC}" 
+echo -e "${CYAN}  curl -X POST http://localhost:${SERVER_PORT}/mcp -H 'Content-Type: application/json' -d '{\"method\":\"tools/list\"}'${NC}" 
