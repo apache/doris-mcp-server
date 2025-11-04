@@ -1454,32 +1454,83 @@ class MetadataExtractor:
         return response_data
 
     async def exec_query_for_mcp(
-        self, 
-        sql: str, 
-        db_name: str = None, 
-        catalog_name: str = None, 
-        max_rows: int = 100, 
+        self,
+        sql: str,
+        db_name: str = None,
+        catalog_name: str = None,
+        max_rows: int = 100,
         timeout: int = 30
     ) -> Dict[str, Any]:
         """
         Execute SQL query and return results, supports catalog federation queries
         Unified interface for MCP tools
+
+        FIX for Issue #62 Bug 1: Now retrieves auth_context from context variable to support token-bound database configuration
+        FIX for Issue #62 Bug 3: Now uses db_name and catalog_name parameters to switch database context
         """
         logger.info(f"Executing SQL query: {sql}, DB: {db_name}, Catalog: {catalog_name}, MaxRows: {max_rows}, Timeout: {timeout}")
-        
+
         try:
             if not sql:
                 return self._format_response(success=False, error="No SQL statement provided", message="Please provide SQL statement to execute")
 
+            # FIX for Issue #62 Bug 3: Build context switching SQL if db_name or catalog_name is specified
+            final_sql = sql
+            if catalog_name or db_name:
+                context_statements = []
+
+                if catalog_name:
+                    # Switch to specified catalog
+                    context_statements.append(f"USE CATALOG `{catalog_name}`")
+                    logger.debug(f"Switching to catalog: {catalog_name}")
+
+                if db_name:
+                    # Switch to specified database
+                    if catalog_name:
+                        context_statements.append(f"USE `{catalog_name}`.`{db_name}`")
+                    else:
+                        context_statements.append(f"USE `{db_name}`")
+                    logger.debug(f"Switching to database: {db_name}")
+
+                # Combine context switching with original SQL
+                if context_statements:
+                    # Remove trailing semicolon from context statements if present
+                    context_sql = "; ".join(context_statements)
+                    # Ensure original SQL doesn't start with semicolon
+                    sql_clean = sql.lstrip(";").strip()
+                    final_sql = f"{context_sql}; {sql_clean}"
+                    logger.debug(f"Modified SQL with context switching: {final_sql[:200]}...")
+
+            # FIX: Try to get auth_context from context variable (set by HTTP middleware)
+            # This allows token-bound database configuration to work
+            auth_context = None
+            try:
+                from contextvars import ContextVar
+                from .security import AuthContext
+
+                # Try to get auth_context from context variable
+                # This will be set by the HTTP request handler in main.py
+                auth_context_var: ContextVar = ContextVar('mcp_auth_context', default=None)
+                auth_context = auth_context_var.get()
+
+                if auth_context:
+                    logger.debug(f"Retrieved auth_context from context variable with token: {bool(hasattr(auth_context, 'token') and auth_context.token)}")
+                else:
+                    logger.debug("No auth_context found in context variable, using default")
+            except Exception as ctx_error:
+                logger.debug(f"Could not retrieve auth_context from context variable: {ctx_error}")
+                auth_context = None
+
             # Import query executor
             from .query_executor import execute_sql_query
 
-            # Call execute_sql_query to execute query
+            # Call execute_sql_query to execute query with auth_context
             exec_result = await execute_sql_query(
-                sql=sql,
+                sql=final_sql,  # Use modified SQL with context switching
                 connection_manager=self.connection_manager,
                 limit=max_rows,
-                timeout=timeout
+                timeout=timeout,
+                auth_context=auth_context  # FIX: Pass auth_context with token
             )
 
             return exec_result

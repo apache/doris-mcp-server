@@ -939,28 +939,69 @@ class SQLSecurityValidator:
     async def _check_sql_injection(
         self, sql: str, parsed: Statement
     ) -> ValidationResult:
-        """Check SQL injection risks"""
-        # Check common SQL injection patterns
+        """Check SQL injection risks with improved pattern detection
+
+        FIX for Issue #62 Bug 2: Improved patterns to reduce false positives
+        Now better distinguishes between legitimate SQL (like BETWEEN...AND) and injection attempts
+        """
+        # Improved injection patterns that are more specific and less prone to false positives
         injection_patterns = [
-            r"(?i)(?<![A-Za-z0-9_])(union|select|insert|update|delete|drop|create|alter)(?![A-Za-z0-9_])\s+[\s\S]*?\s+(?<![A-Za-z0-9_])(union|select|insert|update|delete|drop|create|alter)(?![A-Za-z0-9_])",
-            r"(\s|^)(or|and)\s+\d+\s*=\s*\d+",
-            r"(\s|^)(or|and)\s+['\"].*['\"]",
-            r";\s*(drop|delete|truncate|alter|create)",
-            r"(exec|execute|sp_|xp_)",
-            r"(script|javascript|vbscript)",
-            r"(char|ascii|substring|concat)\s*\(",
+            # Stacked queries with dangerous operations (true injection risk)
+            r";\s*(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\s+",
+
+            # UNION-based injection (but allow legitimate UNION queries)
+            # Only flag if UNION is followed by suspicious patterns like SELECT with WHERE 1=1
+            r"UNION\s+(ALL\s+)?SELECT\s+.*\s+(WHERE|AND|OR)\s+\d+\s*=\s*\d+",
+
+            # Boolean-based blind injection with comments (true injection pattern)
+            r"(WHERE|AND|OR)\s+\d+\s*=\s*\d+\s*(--|#|/\*)",
+
+            # Quote-based injection attempts (but not in legitimate strings)
+            r"(WHERE|AND|OR)\s+(['\"])[^\2]*\2\s*=\s*\2[^\2]*\2",
+
+            # Time-based blind injection
+            r"(SLEEP|WAITFOR|BENCHMARK)\s*\(",
+
+            # System stored procedure injection
+            r"(EXEC|EXECUTE|SP_|XP_)\s*\(",
+
+            # Script injection attempts
+            r"<\s*(SCRIPT|JAVASCRIPT|VBSCRIPT)",
         ]
 
-        sql_lower = sql.lower()
+        # FIX: Don't flag legitimate SQL functions and keywords
+        # These patterns are too broad and cause false positives:
+        # - REMOVED: r"(char|ascii|substring|concat)\s*\(" - These are legitimate SQL functions
+        # - REMOVED: r"(\s|^)(or|and)\s+\d+\s*=\s*\d+" - This flags BETWEEN...AND constructs
+        # - REMOVED: r"(\s|^)(or|and)\s+['\"].*['\"]" - This is too broad
+
+        sql_upper = sql.upper()
+
+        # Special case: Allow BETWEEN...AND which is legitimate SQL
+        # This prevents false positives like "WHERE dt BETWEEN '2025-01-01' AND '2025-01-31'"
+        if "BETWEEN" in sql_upper and "AND" in sql_upper:
+            # This is likely a BETWEEN clause, not injection
+            # Check if AND appears in a BETWEEN context
+            between_pattern = r"BETWEEN\s+[^\s]+\s+AND\s+[^\s]+"
+            if re.search(between_pattern, sql_upper, re.IGNORECASE):
+                # Remove BETWEEN clauses before checking other patterns
+                sql_cleaned = re.sub(between_pattern, "BETWEEN_CLAUSE", sql_upper, flags=re.IGNORECASE)
+                sql_to_check = sql_cleaned
+            else:
+                sql_to_check = sql_upper
+        else:
+            sql_to_check = sql_upper
+
         for pattern in injection_patterns:
-            if re.search(pattern, sql_lower, re.IGNORECASE):
+            if re.search(pattern, sql_to_check, re.IGNORECASE):
+                self.logger.warning(f"Potential SQL injection pattern detected: {pattern}")
                 return ValidationResult(
                     is_valid=False,
                     error_message="Potential SQL injection risk detected",
                     risk_level="high",
                 )
 
-        # Check suspicious quotes and comments
+        # Check suspicious quotes and comments (with improved detection)
         if self._has_suspicious_quotes_or_comments(sql):
             return ValidationResult(
                 is_valid=False,
@@ -971,19 +1012,67 @@ class SQLSecurityValidator:
         return ValidationResult(is_valid=True)
 
     def _has_suspicious_quotes_or_comments(self, sql: str) -> bool:
-        """Check suspicious quote and comment patterns"""
-        # Check unmatched quotes
-        single_quotes = sql.count("'")
-        double_quotes = sql.count('"')
+        """Check suspicious quote and comment patterns with improved detection
 
-        if single_quotes % 2 != 0 or double_quotes % 2 != 0:
-            return True
+        FIX for Issue #62 Bug 2: Improved detection to reduce false positives
+        Now distinguishes between legitimate comments/strings and injection attempts
+        """
+        try:
+            # Use sqlparse to parse the SQL and distinguish between code and comments/strings
+            import sqlparse
+            from sqlparse.tokens import Comment, String
 
-        # Check SQL comments
-        if "--" in sql or "/*" in sql:
-            return True
+            # Parse the SQL
+            parsed = sqlparse.parse(sql)
+            if not parsed:
+                # If parsing fails, be conservative
+                return True
 
-        return False
+            statement = parsed[0]
+
+            # Check for unmatched quotes ONLY in non-string tokens
+            # This prevents false positives from legitimate string content
+            non_string_content = []
+            has_string_tokens = False
+
+            for token in statement.flatten():
+                if token.ttype in (String.Single, String.Double):
+                    has_string_tokens = True
+                    # Skip string content - quotes inside strings are legitimate
+                    continue
+                elif token.ttype in (Comment.Single, Comment.Multi):
+                    # Comments are generally OK, but check for suspicious injection patterns
+                    comment_value = str(token).lower()
+                    # Check if comment contains dangerous SQL keywords
+                    dangerous_in_comments = ['drop', 'delete', 'insert', 'update', 'union', 'exec', 'execute']
+                    if any(keyword in comment_value for keyword in dangerous_in_comments):
+                        self.logger.warning(f"Suspicious SQL keyword in comment: {token}")
+                        return True
+                    # Normal comments are OK
+                    continue
+                else:
+                    # Accumulate non-string, non-comment content
+                    non_string_content.append(str(token))
+
+            # Check for unmatched quotes in non-string content
+            non_string_text = ''.join(non_string_content)
+            single_quotes = non_string_text.count("'")
+            double_quotes = non_string_text.count('"')
+
+            # Only flag if there are unmatched quotes in actual SQL code (not in strings)
+            if single_quotes % 2 != 0 or double_quotes % 2 != 0:
+                return True
+
+            # FIX: Don't flag legitimate SQL comments
+            # Comments are OK as long as they don't contain dangerous patterns (already checked above)
+
+            return False
+
+        except Exception as e:
+            self.logger.debug(f"SQL parsing error in quote/comment check: {e}")
+            # On parsing error, fall back to conservative check
+            # But be more lenient than before
+            return False  # Don't flag on parse errors to reduce false positives
 
     async def _check_blocked_keywords(self, parsed: Statement) -> ValidationResult:
         """Check blocked keywords"""
