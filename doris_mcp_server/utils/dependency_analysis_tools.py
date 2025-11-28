@@ -27,6 +27,13 @@ from collections import defaultdict, deque
 
 from .db import DorisConnectionManager
 from .logger import get_logger
+from .sql_security_utils import (
+    SQLSecurityError,
+    validate_identifier,
+    quote_identifier,
+    build_table_reference,
+    get_auth_context
+)
 
 logger = get_logger(__name__)
 
@@ -122,10 +129,19 @@ class DependencyAnalysisTools:
     async def _get_tables_metadata(self, connection, catalog_name: Optional[str], db_name: Optional[str], include_views: bool) -> List[Dict]:
         """Get metadata for all tables and views"""
         try:
-            # Build conditions for query
+            # Build conditions for query with parameterized values
             where_conditions = []
+            params = []
+            
             if db_name:
-                where_conditions.append(f"table_schema = '{db_name}'")
+                # SECURITY FIX: Validate identifier and use parameterized query
+                try:
+                    validate_identifier(db_name, "database name")
+                except SQLSecurityError as e:
+                    logger.warning(f"Invalid database name rejected: {e}")
+                    return []
+                where_conditions.append("table_schema = %s")
+                params.append(db_name)
             else:
                 where_conditions.append("table_schema = DATABASE()")
             
@@ -148,9 +164,18 @@ class DependencyAnalysisTools:
             ORDER BY table_schema, table_name
             """
             
-            result = await connection.execute(metadata_sql)
+            # SECURITY FIX: Get auth_context and pass to execute for security validation
+            auth_context = get_auth_context()
+            result = await connection.execute(
+                metadata_sql, 
+                params=tuple(params) if params else None,
+                auth_context=auth_context
+            )
             return result.data if result.data else []
             
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed in _get_tables_metadata: {str(e)}")
+            return []
         except Exception as e:
             logger.warning(f"Failed to get tables metadata: {str(e)}")
             return []
@@ -186,17 +211,31 @@ class DependencyAnalysisTools:
     
     async def _analyze_view_dependencies(self, connection, dependency_graph: Dict, tables_metadata: List[Dict]) -> None:
         """Analyze view definitions to extract table dependencies"""
+        # Get auth_context once for all operations in this method
+        auth_context = get_auth_context()
+        
         try:
             for table in tables_metadata:
                 if table["table_type"] == "VIEW":
                     table_name = table["table_name"]
                     schema_name = table.get("schema_name", "")
                     
-                    # Get view definition
-                    view_def_sql = f"SHOW CREATE VIEW {schema_name}.{table_name}" if schema_name else f"SHOW CREATE VIEW {table_name}"
+                    # SECURITY FIX: Validate identifiers before using in SQL
+                    try:
+                        validate_identifier(table_name, "table name")
+                        if schema_name:
+                            validate_identifier(schema_name, "schema name")
+                    except SQLSecurityError as e:
+                        logger.warning(f"Invalid identifier rejected in view analysis: {e}")
+                        continue
+                    
+                    # Build safe view reference using quoted identifiers
+                    view_ref = build_table_reference(table_name, schema_name) if schema_name else quote_identifier(table_name, "table name")
+                    view_def_sql = f"SHOW CREATE VIEW {view_ref}"
                     
                     try:
-                        result = await connection.execute(view_def_sql)
+                        # SECURITY FIX: Pass auth_context to execute
+                        result = await connection.execute(view_def_sql, auth_context=auth_context)
                         if result.data and len(result.data) > 0:
                             # Extract view definition from result
                             view_definition = ""
@@ -235,6 +274,9 @@ class DependencyAnalysisTools:
     
     async def _analyze_runtime_dependencies(self, connection, dependency_graph: Dict, analysis_depth: int) -> None:
         """Analyze audit logs to discover runtime table dependencies"""
+        # Get auth_context for security validation
+        auth_context = get_auth_context()
+        
         try:
             # Get recent SQL statements from audit logs
             audit_sql = """
@@ -252,7 +294,8 @@ class DependencyAnalysisTools:
             LIMIT 1000
             """
             
-            result = await connection.execute(audit_sql)
+            # SECURITY FIX: Pass auth_context to execute
+            result = await connection.execute(audit_sql, auth_context=auth_context)
             
             if result.data:
                 for row in result.data:
@@ -274,6 +317,9 @@ class DependencyAnalysisTools:
     
     async def _analyze_foreign_key_dependencies(self, connection, dependency_graph: Dict, tables_metadata: List[Dict]) -> None:
         """Analyze foreign key constraints for explicit dependencies"""
+        # Get auth_context for security validation
+        auth_context = get_auth_context()
+        
         try:
             # Get foreign key information
             fk_sql = """
@@ -288,7 +334,8 @@ class DependencyAnalysisTools:
             WHERE REFERENCED_TABLE_NAME IS NOT NULL
             """
             
-            result = await connection.execute(fk_sql)
+            # SECURITY FIX: Pass auth_context to execute
+            result = await connection.execute(fk_sql, auth_context=auth_context)
             
             if result.data:
                 for row in result.data:

@@ -27,6 +27,13 @@ from collections import defaultdict, Counter
 
 from .db import DorisConnectionManager
 from .logger import get_logger
+from .sql_security_utils import (
+    SQLSecurityError,
+    validate_identifier,
+    quote_identifier,
+    build_table_reference,
+    get_auth_context
+)
 
 logger = get_logger(__name__)
 
@@ -229,7 +236,8 @@ class PerformanceAnalyticsTools:
             ORDER BY query_date
             """
             
-            result = await connection.execute(query_volume_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(query_volume_sql, auth_context=auth_context)
             daily_data = result.data if result.data else []
             
             if not daily_data:
@@ -304,7 +312,8 @@ class PerformanceAnalyticsTools:
             ORDER BY activity_date
             """
             
-            result = await connection.execute(user_activity_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(user_activity_sql, auth_context=auth_context)
             daily_data = result.data if result.data else []
             
             if not daily_data:
@@ -383,7 +392,8 @@ class PerformanceAnalyticsTools:
             LIMIT 5000
             """
             
-            result = await connection.execute(slow_query_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(slow_query_sql, auth_context=auth_context)
             return result.data if result.data else []
             
         except Exception as e:
@@ -705,7 +715,8 @@ class PerformanceAnalyticsTools:
             ORDER BY size_mb DESC
             """
             
-            db_result = await connection.execute(db_sizes_sql)
+            auth_context = get_auth_context()
+            db_result = await connection.execute(db_sizes_sql, auth_context=auth_context)
             
             if not db_result.data:
                 logger.warning("No database size information available")
@@ -805,7 +816,16 @@ class PerformanceAnalyticsTools:
     async def _get_database_table_details_from_schema(self, connection, db_name: str) -> List[Dict]:
         """Get table details for a specific database using information_schema"""
         try:
-            table_details_sql = f"""
+            # SECURITY FIX: Validate db_name and use parameterized query
+            auth_context = get_auth_context()
+            
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid database name rejected: {e}")
+                return []
+            
+            table_details_sql = """
             SELECT 
                 TABLE_SCHEMA as schema_name,
                 TABLE_NAME as table_name,
@@ -814,13 +834,13 @@ class PerformanceAnalyticsTools:
                 CREATE_TIME as create_time,
                 UPDATE_TIME as update_time
             FROM information_schema.tables 
-            WHERE TABLE_SCHEMA = '{db_name}'
+            WHERE TABLE_SCHEMA = %s
                 AND TABLE_TYPE = 'BASE TABLE'
                 AND (COALESCE(DATA_LENGTH, 0) + COALESCE(INDEX_LENGTH, 0)) > 0
             ORDER BY size_mb DESC
             """
             
-            result = await connection.execute(table_details_sql)
+            result = await connection.execute(table_details_sql, params=(db_name,), auth_context=auth_context)
             
             if not result.data:
                 logger.warning(f"No table details found for database {db_name}")
@@ -867,6 +887,13 @@ class PerformanceAnalyticsTools:
     async def _get_database_table_details(self, connection, db_name: str) -> List[Dict]:
         """Get table details for a specific database using session-consistent queries"""
         try:
+            # SECURITY FIX: Validate db_name before using in SQL
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid database name rejected: {e}")
+                return []
+            
             # Method 1: Try to use session-consistent approach with raw connection
             # This requires accessing the underlying connection to maintain session state
             
@@ -877,8 +904,9 @@ class PerformanceAnalyticsTools:
                 # Use raw connection to maintain session state
                 cursor = await raw_conn.cursor()
                 try:
-                    # Execute USE and SHOW DATA in the same session
-                    await cursor.execute(f"USE {db_name}")
+                    # SECURITY FIX: Use quoted identifier for USE statement
+                    quoted_db = quote_identifier(db_name, "database name")
+                    await cursor.execute(f"USE {quoted_db}")
                     await cursor.execute("SHOW DATA")
                     
                     result = await cursor.fetchall()
@@ -922,9 +950,19 @@ class PerformanceAnalyticsTools:
     async def _get_database_table_details_fallback(self, connection, db_name: str) -> List[Dict]:
         """Fallback method to get table details using individual queries"""
         try:
-            # Get all tables in the database
-            tables_sql = f"SHOW TABLES FROM {db_name}"
-            tables_result = await connection.execute(tables_sql)
+            # SECURITY FIX: Validate db_name and get auth_context
+            auth_context = get_auth_context()
+            
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid database name rejected: {e}")
+                return []
+            
+            # Get all tables in the database using quoted identifier
+            quoted_db = quote_identifier(db_name, "database name")
+            tables_sql = f"SHOW TABLES FROM {quoted_db}"
+            tables_result = await connection.execute(tables_sql, auth_context=auth_context)
             
             if not tables_result.data:
                 return []
@@ -934,9 +972,11 @@ class PerformanceAnalyticsTools:
                 table_name = table_row.get(f"Tables_in_{db_name}", "") or table_row.get("table_name", "")
                 if table_name:
                     try:
-                        # Use SHOW DATA FROM db.table for each table
-                        data_sql = f"SHOW DATA FROM {db_name}.{table_name}"
-                        data_result = await connection.execute(data_sql)
+                        # SECURITY FIX: Validate table_name and use safe reference
+                        validate_identifier(table_name, "table name")
+                        safe_table_ref = build_table_reference(table_name, db_name)
+                        data_sql = f"SHOW DATA FROM {safe_table_ref}"
+                        data_result = await connection.execute(data_sql, auth_context=auth_context)
                         
                         if data_result.data:
                             for row in data_result.data:
@@ -1036,6 +1076,7 @@ class PerformanceAnalyticsTools:
     async def _get_all_tables_info(self, connection) -> List[Dict]:
         """Get basic information for all tables (fallback method)"""
         try:
+            auth_context = get_auth_context()
             tables_sql = """
             SELECT 
                 table_schema,
@@ -1053,7 +1094,7 @@ class PerformanceAnalyticsTools:
             ORDER BY (data_length + index_length) DESC
             """
             
-            result = await connection.execute(tables_sql)
+            result = await connection.execute(tables_sql, auth_context=auth_context)
             return result.data if result.data else []
             
         except Exception as e:
@@ -1120,23 +1161,37 @@ class PerformanceAnalyticsTools:
     async def _get_current_table_size(self, connection, full_table_name: str) -> Optional[Dict]:
         """Get current table size"""
         try:
-            # Try to query table size directly
-            size_sql = f"""
+            # SECURITY FIX: Get auth_context and use parameterized query
+            auth_context = get_auth_context()
+            
+            # Extract table name for parameterized query
+            table_name_only = full_table_name.split('.')[-1] if '.' in full_table_name else full_table_name
+            
+            # Validate identifiers
+            try:
+                validate_identifier(table_name_only, "table name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid table name rejected: {e}")
+                return None
+            
+            # Use parameterized query for safety
+            size_sql = """
             SELECT 
                 COALESCE(ROUND((COALESCE(data_length, 0) + COALESCE(index_length, 0)) / 1024 / 1024, 2), 0) as size_mb,
                 COALESCE(table_rows, 0) as `rows`
             FROM information_schema.tables
-            WHERE CONCAT(table_schema, '.', table_name) = '{full_table_name}'
-                OR table_name = '{full_table_name.split('.')[-1]}'
+            WHERE CONCAT(table_schema, '.', table_name) = %s
+                OR table_name = %s
             """
             
-            result = await connection.execute(size_sql)
+            result = await connection.execute(size_sql, params=(full_table_name, table_name_only), auth_context=auth_context)
             if result.data and result.data[0]:
                 return result.data[0]
             
             # If information_schema has no data, try COUNT query
+            # full_table_name should already be validated by caller using build_table_reference
             count_sql = f"SELECT COUNT(*) as rows FROM {full_table_name}"
-            count_result = await connection.execute(count_sql)
+            count_result = await connection.execute(count_sql, auth_context=auth_context)
             if count_result.data:
                 return {
                     "size_mb": 0,  # Cannot get exact size
@@ -1145,6 +1200,9 @@ class PerformanceAnalyticsTools:
             
             return None
             
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed for {full_table_name}: {str(e)}")
+            return None
         except Exception as e:
             logger.warning(f"Failed to get current size for {full_table_name}: {str(e)}")
             return None
@@ -1154,8 +1212,19 @@ class PerformanceAnalyticsTools:
     ) -> List[Dict]:
         """Get historical growth data based on partitions"""
         try:
-            # Query partition information
-            partition_sql = f"""
+            # SECURITY FIX: Validate identifiers and use parameterized query
+            auth_context = get_auth_context()
+            
+            try:
+                validate_identifier(table_name, "table name")
+                if schema_name:
+                    validate_identifier(schema_name, "schema name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            # Use parameterized query for safety
+            partition_sql = """
             SELECT 
                 partition_name,
                 partition_description,
@@ -1163,15 +1232,19 @@ class PerformanceAnalyticsTools:
                 data_length,
                 create_time
             FROM information_schema.partitions
-            WHERE table_schema = '{schema_name or ""}'
-                AND table_name = '{table_name}'
+            WHERE table_schema = %s
+                AND table_name = %s
                 AND partition_name IS NOT NULL
                 AND create_time IS NOT NULL
-                AND create_time >= DATE_SUB(NOW(), INTERVAL {days} DAY)
+                AND create_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
             ORDER BY create_time DESC
             """
             
-            result = await connection.execute(partition_sql)
+            result = await connection.execute(
+                partition_sql, 
+                params=(schema_name or "", table_name, days),
+                auth_context=auth_context
+            )
             if not result.data:
                 return []
             
@@ -1210,6 +1283,9 @@ class PerformanceAnalyticsTools:
     ) -> List[Dict]:
         """Get historical growth data based on timestamp fields"""
         try:
+            # SECURITY FIX: Get auth_context
+            auth_context = get_auth_context()
+            
             # Find possible timestamp fields
             timestamp_columns = await self._find_timestamp_columns(connection, table_name, schema_name)
             if not timestamp_columns:
@@ -1218,20 +1294,29 @@ class PerformanceAnalyticsTools:
             # Use best timestamp field for analysis
             time_column = timestamp_columns[0]
             
-            # Aggregate data by date
+            # SECURITY FIX: Validate time_column before using in SQL
+            try:
+                validate_identifier(time_column, "column name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid column name rejected: {e}")
+                return []
+            
+            quoted_time_column = quote_identifier(time_column, "column name")
+            
+            # Aggregate data by date (full_table_name should be validated by caller)
             growth_sql = f"""
             SELECT 
-                DATE({time_column}) as date,
+                DATE({quoted_time_column}) as date,
                 COUNT(*) as daily_records,
                 COUNT(*) / SUM(COUNT(*)) OVER() * 100 as percentage
             FROM {full_table_name}
-            WHERE {time_column} >= DATE_SUB(NOW(), INTERVAL {days} DAY)
-                AND {time_column} IS NOT NULL
-            GROUP BY DATE({time_column})
+            WHERE {quoted_time_column} >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                AND {quoted_time_column} IS NOT NULL
+            GROUP BY DATE({quoted_time_column})
             ORDER BY date DESC
             """
             
-            result = await connection.execute(growth_sql)
+            result = await connection.execute(growth_sql, params=(days,), auth_context=auth_context)
             if not result.data:
                 return []
             
@@ -1257,11 +1342,22 @@ class PerformanceAnalyticsTools:
     async def _find_timestamp_columns(self, connection, table_name: str, schema_name: str) -> List[str]:
         """Find timestamp fields in table"""
         try:
-            timestamp_sql = f"""
+            # SECURITY FIX: Validate identifiers and use parameterized query
+            auth_context = get_auth_context()
+            
+            try:
+                validate_identifier(table_name, "table name")
+                if schema_name:
+                    validate_identifier(schema_name, "schema name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            timestamp_sql = """
             SELECT column_name, data_type
             FROM information_schema.columns
-            WHERE table_schema = '{schema_name or ""}'
-                AND table_name = '{table_name}'
+            WHERE table_schema = %s
+                AND table_name = %s
                 AND (
                     data_type IN ('datetime', 'timestamp', 'date')
                     OR column_name REGEXP '(create|insert|update|modify).*time'
@@ -1278,9 +1374,16 @@ class PerformanceAnalyticsTools:
                 END
             """
             
-            result = await connection.execute(timestamp_sql)
+            result = await connection.execute(
+                timestamp_sql, 
+                params=(schema_name or "", table_name),
+                auth_context=auth_context
+            )
             return [row["column_name"] for row in result.data] if result.data else []
             
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed: {str(e)}")
+            return []
         except Exception as e:
             logger.warning(f"Failed to find timestamp columns: {str(e)}")
             return []
@@ -1290,8 +1393,22 @@ class PerformanceAnalyticsTools:
     ) -> List[Dict]:
         """Estimate growth data based on audit logs"""
         try:
+            # SECURITY FIX: Validate table_name and use parameterized query
+            auth_context = get_auth_context()
+            
+            try:
+                validate_identifier(table_name.split(".")[-1], "table name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid table name rejected: {e}")
+                return []
+            
+            # Extract just the table name for LIKE pattern
+            table_name_only = table_name.split(".")[-1]
+            like_pattern_full = f"%{table_name}%"
+            like_pattern_short = f"%{table_name_only}%"
+            
             # Analyze operation history for this table
-            audit_sql = f"""
+            audit_sql = """
             SELECT 
                 DATE(`time`) as operation_date,
                 COUNT(*) as operation_count,
@@ -1299,17 +1416,21 @@ class PerformanceAnalyticsTools:
                 SUM(CASE WHEN stmt LIKE 'UPDATE%' THEN 1 ELSE 0 END) as update_count,
                 SUM(CASE WHEN stmt LIKE 'DELETE%' THEN 1 ELSE 0 END) as delete_count
             FROM internal.__internal_schema.audit_log
-            WHERE `time` >= DATE_SUB(NOW(), INTERVAL {days} DAY)
+            WHERE `time` >= DATE_SUB(NOW(), INTERVAL %s DAY)
                 AND stmt IS NOT NULL
                 AND (
-                    stmt LIKE '%{table_name}%'
-                    OR stmt LIKE '%{table_name.split(".")[-1]}%'
+                    stmt LIKE %s
+                    OR stmt LIKE %s
                 )
             GROUP BY DATE(`time`)
             ORDER BY operation_date DESC
             """
             
-            result = await connection.execute(audit_sql)
+            result = await connection.execute(
+                audit_sql, 
+                params=(days, like_pattern_full, like_pattern_short),
+                auth_context=auth_context
+            )
             if not result.data:
                 return []
             

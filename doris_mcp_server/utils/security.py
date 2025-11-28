@@ -901,30 +901,50 @@ class SQLSecurityValidator:
         if not self.enable_security_check:
             self.logger.debug("SQL security check is disabled, allowing all queries")
             return ValidationResult(is_valid=True)
-            
+
         try:
-            # Parse SQL statement
-            parsed = sqlparse.parse(sql)[0]
+            # SECURITY FIX: Parse ALL SQL statements, not just the first one
+            # This prevents bypassing security checks by injecting additional statements
+            all_statements = sqlparse.parse(sql)
 
-            # Check blocked operations first (more specific)
-            keyword_result = await self._check_blocked_keywords(parsed)
-            if not keyword_result.is_valid:
-                return keyword_result
+            if not all_statements:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message="Empty or invalid SQL statement",
+                    risk_level="medium"
+                )
 
-            # Check SQL injection risks
-            injection_result = await self._check_sql_injection(sql, parsed)
-            if not injection_result.is_valid:
-                return injection_result
+            # SECURITY FIX: Validate each statement individually
+            for idx, parsed in enumerate(all_statements):
+                # Skip empty statements (e.g., from trailing semicolons)
+                if not parsed.tokens or str(parsed).strip() == '':
+                    continue
 
-            # Check query complexity
-            complexity_result = await self._check_query_complexity(parsed)
-            if not complexity_result.is_valid:
-                return complexity_result
+                self.logger.debug(f"Validating SQL statement {idx + 1}/{len(all_statements)}: {str(parsed)[:100]}...")
 
-            # Check table access permissions
-            table_result = await self._check_table_access(parsed, auth_context)
-            if not table_result.is_valid:
-                return table_result
+                # Check blocked operations first (more specific)
+                keyword_result = await self._check_blocked_keywords(parsed)
+                if not keyword_result.is_valid:
+                    keyword_result.error_message = f"Statement {idx + 1}: {keyword_result.error_message}"
+                    return keyword_result
+
+                # Check SQL injection risks
+                injection_result = await self._check_sql_injection(sql, parsed)
+                if not injection_result.is_valid:
+                    injection_result.error_message = f"Statement {idx + 1}: {injection_result.error_message}"
+                    return injection_result
+
+                # Check query complexity
+                complexity_result = await self._check_query_complexity(parsed)
+                if not complexity_result.is_valid:
+                    complexity_result.error_message = f"Statement {idx + 1}: {complexity_result.error_message}"
+                    return complexity_result
+
+                # Check table access permissions
+                table_result = await self._check_table_access(parsed, auth_context)
+                if not table_result.is_valid:
+                    table_result.error_message = f"Statement {idx + 1}: {table_result.error_message}"
+                    return table_result
 
             return ValidationResult(is_valid=True)
 
@@ -1134,6 +1154,10 @@ class SQLSecurityValidator:
         self, parsed: Statement, auth_context: AuthContext
     ) -> ValidationResult:
         """Check table access permissions"""
+        # If no auth_context, skip table access checks (rely on other security checks)
+        if auth_context is None:
+            return ValidationResult(is_valid=True)
+        
         # Extract table names from query
         tables = self._extract_table_names(parsed)
 

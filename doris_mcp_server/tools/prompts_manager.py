@@ -31,6 +31,7 @@ from mcp.types import (
 )
 
 from ..utils.db import DorisConnectionManager
+from ..utils.sql_security_utils import get_auth_context
 
 
 class PromptTemplate:
@@ -422,7 +423,8 @@ Please generate accurate and efficient SQL queries based on the above requiremen
             AND table_type = 'BASE TABLE'
             """
 
-            db_result = await connection.execute(db_info_sql)
+            auth_context = get_auth_context()
+            db_result = await connection.execute(db_info_sql, auth_context=auth_context)
             db_info = db_result.data[0] if db_result.data else {}
 
             # Get main table list
@@ -438,7 +440,7 @@ Please generate accurate and efficient SQL queries based on the above requiremen
             LIMIT 10
             """
 
-            tables_result = await connection.execute(tables_sql)
+            tables_result = await connection.execute(tables_sql, auth_context=auth_context)
 
             context = f"""Current database statistics:
 - Total number of tables: {db_info.get("table_count", 0)}

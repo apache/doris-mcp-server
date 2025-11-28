@@ -26,6 +26,13 @@ from typing import Any, Dict, List, Optional, Union
 
 from .db import DorisConnectionManager
 from .logger import get_logger
+from .sql_security_utils import (
+    SQLSecurityError,
+    validate_identifier,
+    quote_identifier,
+    build_table_reference,
+    get_auth_context
+)
 
 logger = get_logger(__name__)
 
@@ -43,24 +50,30 @@ class DataExplorationTools:
     
     def _build_full_table_name(self, table_name: str, catalog_name: Optional[str], db_name: Optional[str]) -> str:
         """Build full table name with catalog and database using three-part naming convention"""
-        # Default catalog for internal tables
+        # SECURITY FIX: Use build_table_reference for safe identifier handling
         effective_catalog = catalog_name if catalog_name else "internal"
         
         if db_name:
-            return f"{effective_catalog}.{db_name}.{table_name}"
+            return build_table_reference(table_name, db_name, effective_catalog)
         else:
-            # If no db_name provided, need to determine the current database
-            return f"{effective_catalog}.{table_name}"
+            return build_table_reference(table_name, catalog_name=effective_catalog)
     
     async def _get_table_basic_info(self, connection, table_name: str) -> Optional[Dict]:
         """Get basic table information including row count"""
         try:
+            # SECURITY FIX: Get auth_context for security validation
+            # table_name should already be validated by _build_full_table_name
+            auth_context = get_auth_context()
+            
             count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"
-            result = await connection.execute(count_sql)
+            result = await connection.execute(count_sql, auth_context=auth_context)
             
             if result.data:
                 return {"row_count": result.data[0]["row_count"]}
             return None
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed for table {table_name}: {str(e)}")
+            return {"row_count": 0}
         except Exception as e:
             logger.warning(f"Failed to get basic info for table {table_name}: {str(e)}")
             return {"row_count": 0}
@@ -68,10 +81,24 @@ class DataExplorationTools:
     async def _get_table_columns_info(self, connection, table_name: str, catalog_name: Optional[str], db_name: Optional[str]) -> List[Dict]:
         """Get detailed column information"""
         try:
-            where_conditions = [f"table_name = '{table_name}'"]
+            # SECURITY FIX: Validate identifiers and use parameterized query
+            auth_context = get_auth_context()
+            
+            try:
+                validate_identifier(table_name, "table name")
+                if db_name:
+                    validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            # Build parameterized query
+            params = [table_name]
+            where_conditions = ["table_name = %s"]
             
             if db_name:
-                where_conditions.append(f"table_schema = '{db_name}'")
+                where_conditions.append("table_schema = %s")
+                params.append(db_name)
             else:
                 where_conditions.append("table_schema = DATABASE()")
             
@@ -87,9 +114,12 @@ class DataExplorationTools:
             ORDER BY ordinal_position
             """
             
-            result = await connection.execute(columns_sql)
+            result = await connection.execute(columns_sql, params=tuple(params), auth_context=auth_context)
             return result.data if result.data else []
             
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed: {str(e)}")
+            return []
         except Exception as e:
             logger.warning(f"Failed to get columns info for table {table_name}: {str(e)}")
             return []
@@ -177,7 +207,8 @@ class DataExplorationTools:
                 WHERE {col_name} IS NOT NULL
                 """
                 
-                stats_result = await connection.execute(stats_sql)
+                auth_context = get_auth_context()
+                stats_result = await connection.execute(stats_sql, auth_context=auth_context)
                 
                 if stats_result.data and stats_result.data[0]["count"] > 0:
                     stats = stats_result.data[0]
@@ -229,7 +260,8 @@ class DataExplorationTools:
             WHERE {col_name} IS NOT NULL
             """
             
-            result = await connection.execute(percentile_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(percentile_sql, auth_context=auth_context)
             
             if result.data:
                 data = result.data[0]
@@ -268,7 +300,8 @@ class DataExplorationTools:
             WHERE {col_name} IS NOT NULL
             """
             
-            result = await connection.execute(outlier_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(outlier_sql, auth_context=auth_context)
             
             if result.data:
                 data = result.data[0]
@@ -359,7 +392,8 @@ class DataExplorationTools:
                 {sampling_info.get('sample_query_suffix', '')}
                 """
                 
-                cardinality_result = await connection.execute(cardinality_sql)
+                auth_context = get_auth_context()
+                cardinality_result = await connection.execute(cardinality_sql, auth_context=auth_context)
                 
                 if cardinality_result.data:
                     cardinality_data = cardinality_result.data[0]
@@ -408,7 +442,8 @@ class DataExplorationTools:
             LIMIT 20
             """
             
-            result = await connection.execute(distribution_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(distribution_sql, auth_context=auth_context)
             
             if result.data:
                 distribution = []
@@ -458,7 +493,8 @@ class DataExplorationTools:
                 WHERE {col_name} IS NOT NULL
                 """
                 
-                range_result = await connection.execute(range_sql)
+                auth_context = get_auth_context()
+                range_result = await connection.execute(range_sql, auth_context=auth_context)
                 
                 if range_result.data and range_result.data[0]["non_null_count"] > 0:
                     range_data = range_result.data[0]
@@ -539,7 +575,8 @@ class DataExplorationTools:
             ORDER BY day_of_week
             """
             
-            weekly_result = await connection.execute(weekly_pattern_sql)
+            auth_context = get_auth_context()
+            weekly_result = await connection.execute(weekly_pattern_sql, auth_context=auth_context)
             
             weekly_pattern = []
             if weekly_result.data:
@@ -561,7 +598,7 @@ class DataExplorationTools:
             LIMIT 12
             """
             
-            monthly_result = await connection.execute(monthly_trend_sql)
+            monthly_result = await connection.execute(monthly_trend_sql, auth_context=auth_context)
             monthly_trend = "stable"  # Simplified trend analysis
             
             if monthly_result.data and len(monthly_result.data) > 3:
@@ -646,7 +683,8 @@ class DataExplorationTools:
                 FROM {table_expr}
                 """
                 
-                result = await connection.execute(null_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(null_sql, auth_context=auth_context)
                 if result.data:
                     data = result.data[0]
                     total_count = data["total_count"]
