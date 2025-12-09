@@ -1644,15 +1644,14 @@ class MetadataExtractor:
 
             # FIX: Try to get auth_context from context variable (set by HTTP middleware)
             # This allows token-bound database configuration to work
+            # CRITICAL: Use the global ContextVar from security.py to ensure same instance is used everywhere
             auth_context = None
             try:
-                from contextvars import ContextVar
-                from .security import AuthContext
+                from .security import mcp_auth_context_var
 
-                # Try to get auth_context from context variable
+                # Get auth_context from the global context variable
                 # This will be set by the HTTP request handler in main.py
-                auth_context_var: ContextVar = ContextVar('mcp_auth_context', default=None)
-                auth_context = auth_context_var.get()
+                auth_context = mcp_auth_context_var.get()
 
                 if auth_context:
                     logger.debug(f"Retrieved auth_context from context variable with token: {bool(hasattr(auth_context, 'token') and auth_context.token)}")
