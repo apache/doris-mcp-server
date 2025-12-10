@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 from ..utils.logger import get_logger
 from ..utils.db import DorisConnectionManager
+from ..utils.sql_security_utils import get_auth_context
 
 logger = get_logger(__name__)
 
@@ -277,7 +278,8 @@ class DorisADBCQueryTools:
             # Get BE nodes via SHOW BACKENDS
             logger.info("No BE hosts configured, getting BE node information via SHOW BACKENDS")
             connection = await self.connection_manager.get_connection("query")
-            result = await connection.execute("SHOW BACKENDS")
+            auth_context = get_auth_context()
+            result = await connection.execute("SHOW BACKENDS", auth_context=auth_context)
             
             be_hosts = []
             for row in result.data:
@@ -382,6 +384,20 @@ class DorisADBCQueryTools:
                     "error": "ADBC connection not established",
                     "error_type": "no_connection"
                 }
+            
+            # SECURITY FIX: Perform SQL security validation before executing
+            auth_context = get_auth_context()
+            if self.connection_manager.security_manager:
+                # Always perform security validation, even without auth_context
+                # Use a default context for basic SQL security checks
+                validation_result = await self.connection_manager.security_manager.validate_sql_security(sql, auth_context)
+                if not validation_result.is_valid:
+                    return {
+                        "success": False,
+                        "error": f"SQL security validation failed: {validation_result.error_message}",
+                        "error_type": "security_violation",
+                        "risk_level": validation_result.risk_level
+                    }
             
             cursor = self.adbc_client.cursor()
             start_time = time.time()

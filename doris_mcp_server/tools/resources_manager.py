@@ -26,6 +26,7 @@ from typing import Any
 from mcp.types import Resource
 
 from ..utils.db import DorisConnectionManager
+from ..utils.sql_security_utils import get_auth_context
 
 
 class TableMetadata:
@@ -169,7 +170,8 @@ class DorisResourcesManager:
         ORDER BY table_name
         """
 
-        result = await connection.execute(tables_query)
+        auth_context = get_auth_context()
+        result = await connection.execute(tables_query, auth_context=auth_context)
         tables = []
 
         for row in result.data:
@@ -204,7 +206,8 @@ class DorisResourcesManager:
         ORDER BY ordinal_position
         """
 
-        result = await connection.execute(columns_query, (table_name,))
+        auth_context = get_auth_context()
+        result = await connection.execute(columns_query, params=(table_name,), auth_context=auth_context)
         return [dict(row) for row in result.data]
 
     async def _get_view_metadata(self) -> list[ViewMetadata]:
@@ -226,7 +229,8 @@ class DorisResourcesManager:
         ORDER BY table_name
         """
 
-        result = await connection.execute(views_query)
+        auth_context = get_auth_context()
+        result = await connection.execute(views_query, auth_context=auth_context)
         views = []
 
         for row in result.data:
@@ -257,7 +261,8 @@ class DorisResourcesManager:
         AND table_name = %s
         """
 
-        table_result = await connection.execute(table_info_query, (table_name,))
+        auth_context = get_auth_context()
+        table_result = await connection.execute(table_info_query, params=(table_name,), auth_context=auth_context)
         if not table_result.data:
             raise ValueError(f"Table {table_name} does not exist")
 
@@ -295,7 +300,8 @@ class DorisResourcesManager:
         ORDER BY index_name, seq_in_index
         """
 
-        result = await connection.execute(indexes_query, (table_name,))
+        auth_context = get_auth_context()
+        result = await connection.execute(indexes_query, params=(table_name,), auth_context=auth_context)
         return [dict(row) for row in result.data]
 
     async def _get_view_definition(self, view_name: str) -> str:
@@ -312,7 +318,8 @@ class DorisResourcesManager:
         AND table_name = %s
         """
 
-        result = await connection.execute(view_query, (view_name,))
+        auth_context = get_auth_context()
+        result = await connection.execute(view_query, params=(view_name,), auth_context=auth_context)
         if not result.data:
             raise ValueError(f"View {view_name} does not exist")
 
@@ -340,7 +347,8 @@ class DorisResourcesManager:
         AND table_type = 'BASE TABLE'
         """
 
-        table_result = await connection.execute(table_stats_query)
+        auth_context = get_auth_context()
+        table_result = await connection.execute(table_stats_query, auth_context=auth_context)
         table_stats = table_result.data[0] if table_result.data else {}
 
         # Get view statistics
@@ -350,7 +358,7 @@ class DorisResourcesManager:
         WHERE table_schema = DATABASE()
         """
 
-        view_result = await connection.execute(view_stats_query)
+        view_result = await connection.execute(view_stats_query, auth_context=auth_context)
         view_stats = view_result.data[0] if view_result.data else {}
 
         stats_info = {

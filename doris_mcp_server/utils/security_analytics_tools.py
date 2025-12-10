@@ -26,6 +26,7 @@ from collections import Counter, defaultdict
 
 from .db import DorisConnectionManager
 from .logger import get_logger
+from .sql_security_utils import get_auth_context
 
 logger = get_logger(__name__)
 
@@ -192,7 +193,9 @@ class SecurityAnalyticsTools:
             LIMIT 10000
             """
             
-            result = await connection.execute(audit_sql)
+            # SECURITY FIX: Pass auth_context to execute
+            auth_context = get_auth_context()
+            result = await connection.execute(audit_sql, auth_context=auth_context)
             return result.data if result.data else []
             
         except Exception as e:
@@ -215,7 +218,8 @@ class SecurityAnalyticsTools:
                 LIMIT 10000
                 """
                 
-                result = await connection.execute(simple_audit_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(simple_audit_sql, auth_context=auth_context)
                 return result.data if result.data else []
                 
             except Exception as e2:
@@ -498,7 +502,8 @@ class SecurityAnalyticsTools:
             FROM mysql.user
             """
             
-            result = await connection.execute(roles_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(roles_sql, auth_context=auth_context)
             
             user_roles = defaultdict(list)
             if result.data:

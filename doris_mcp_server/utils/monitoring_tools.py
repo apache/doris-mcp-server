@@ -28,6 +28,7 @@ from datetime import datetime
 
 from .db import DorisConnectionManager
 from .logger import get_logger
+from .sql_security_utils import get_auth_context
 
 logger = get_logger(__name__)
 
@@ -713,7 +714,8 @@ class DorisMonitoringTools:
             # Fallback to SHOW BACKENDS if no BE hosts configured
             logger.info("No BE hosts configured, using SHOW BACKENDS to discover BE nodes")
             connection = await self.connection_manager.get_connection("query")
-            result = await connection.execute("SHOW BACKENDS")
+            auth_context = get_auth_context()
+            result = await connection.execute("SHOW BACKENDS", auth_context=auth_context)
             
             be_nodes = []
             for row in result.data:

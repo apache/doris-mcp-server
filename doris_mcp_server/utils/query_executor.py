@@ -35,6 +35,7 @@ from decimal import Decimal
 
 from .db import DorisConnectionManager, QueryResult
 from .logger import get_logger
+from .sql_security_utils import get_auth_context
 
 
 @dataclass
@@ -497,7 +498,8 @@ class DorisQueryExecutor:
         explain_sql = f"EXPLAIN {sql}"
 
         connection = await self.connection_manager.get_connection(session_id)
-        result = await connection.execute(explain_sql)
+        auth_context = get_auth_context()
+        result = await connection.execute(explain_sql, auth_context=auth_context)
 
         return {
             "query": sql,

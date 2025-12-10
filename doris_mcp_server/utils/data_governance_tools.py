@@ -26,6 +26,13 @@ from typing import Any, Dict, List, Optional
 
 from .db import DorisConnectionManager
 from .logger import get_logger
+from .sql_security_utils import (
+    SQLSecurityError,
+    validate_identifier,
+    quote_identifier,
+    build_table_reference,
+    get_auth_context
+)
 
 logger = get_logger(__name__)
 
@@ -216,26 +223,34 @@ class DataGovernanceTools:
     # ==================== Private Helper Methods ====================
     
     def _build_full_table_name(self, table_name: str, catalog_name: Optional[str], db_name: Optional[str]) -> str:
-        """Build full table name - use three-level naming convention"""
+        """Build full table name - use three-level naming convention with security validation"""
+        # SECURITY FIX: Use build_table_reference for safe identifier handling
         # Default catalog is internal for internal tables
         effective_catalog = catalog_name if catalog_name else "internal"
         
         if db_name:
-            return f"{effective_catalog}.{db_name}.{table_name}"
+            return build_table_reference(table_name, db_name, effective_catalog)
         else:
             # If db_name is not provided, need to determine current database
-            return f"{effective_catalog}.{table_name}"
+            return build_table_reference(table_name, catalog_name=effective_catalog)
     
     async def _get_table_basic_info(self, connection, table_name: str) -> Optional[Dict]:
         """Get table basic information"""
         try:
+            # SECURITY FIX: Get auth_context for security validation
+            # table_name should already be validated by _build_full_table_name
+            auth_context = get_auth_context()
+            
             # Try to get table row count
             count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"
-            result = await connection.execute(count_sql)
+            result = await connection.execute(count_sql, auth_context=auth_context)
             
             if result.data:
                 return {"row_count": result.data[0]["row_count"]}
             return None
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed for table {table_name}: {str(e)}")
+            return {"row_count": 0}
         except Exception as e:
             logger.warning(f"Failed to get basic info for table {table_name}: {str(e)}")
             return {"row_count": 0}
@@ -243,11 +258,24 @@ class DataGovernanceTools:
     async def _get_table_columns_info(self, connection, table_name: str, catalog_name: Optional[str], db_name: Optional[str]) -> List[Dict]:
         """Get table column information"""
         try:
-            # Build query conditions
-            where_conditions = [f"table_name = '{table_name}'"]
+            # SECURITY FIX: Validate identifiers and use parameterized query
+            auth_context = get_auth_context()
+            
+            try:
+                validate_identifier(table_name, "table name")
+                if db_name:
+                    validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            # Build parameterized query conditions
+            params = [table_name]
+            where_conditions = ["table_name = %s"]
             
             if db_name:
-                where_conditions.append(f"table_schema = '{db_name}'")
+                where_conditions.append("table_schema = %s")
+                params.append(db_name)
             else:
                 where_conditions.append("table_schema = DATABASE()")
             
@@ -263,30 +291,49 @@ class DataGovernanceTools:
             ORDER BY ordinal_position
             """
             
-            result = await connection.execute(columns_sql)
+            result = await connection.execute(columns_sql, params=tuple(params), auth_context=auth_context)
             return result.data if result.data else []
             
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed: {str(e)}")
+            return []
         except Exception as e:
             logger.warning(f"Failed to get columns info for table {table_name}: {str(e)}")
             return []
     
     async def _analyze_column_completeness(self, connection, table_name: str, columns_info: List[Dict]) -> Dict[str, Any]:
         """Analyze column completeness"""
+        # SECURITY FIX: Get auth_context for security validation
+        auth_context = get_auth_context()
         column_completeness = {}
         
         for column in columns_info:
             column_name = column["column_name"]
             try:
+                # SECURITY FIX: Validate column name before using in SQL
+                try:
+                    validate_identifier(column_name, "column name")
+                except SQLSecurityError as e:
+                    logger.warning(f"Invalid column name rejected: {e}")
+                    column_completeness[column_name] = {
+                        "error": f"Invalid column name: {e}",
+                        "completeness_score": 0.0
+                    }
+                    continue
+                
+                # Use quoted identifier for column name
+                quoted_column = quote_identifier(column_name, "column name")
+                
                 # Calculate null value statistics
                 null_sql = f"""
                 SELECT 
                     COUNT(*) as total_count,
-                    COUNT({column_name}) as non_null_count,
-                    COUNT(*) - COUNT({column_name}) as null_count
+                    COUNT({quoted_column}) as non_null_count,
+                    COUNT(*) - COUNT({quoted_column}) as null_count
                 FROM {table_name}
                 """
                 
-                result = await connection.execute(null_sql)
+                result = await connection.execute(null_sql, auth_context=auth_context)
                 if result.data:
                     stats = result.data[0]
                     total_count = stats["total_count"]
@@ -304,6 +351,12 @@ class DataGovernanceTools:
                         "completeness_score": round(completeness_score, 4)
                     }
                     
+            except SQLSecurityError as e:
+                logger.warning(f"Security validation failed for column {column_name}: {str(e)}")
+                column_completeness[column_name] = {
+                    "error": str(e),
+                    "completeness_score": 0.0
+                }
             except Exception as e:
                 logger.warning(f"Failed to analyze completeness for column {column_name}: {str(e)}")
                 column_completeness[column_name] = {
@@ -333,7 +386,8 @@ class DataGovernanceTools:
                 FROM {table_name}
                 """
                 
-                result = await connection.execute(compliance_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(compliance_sql, auth_context=auth_context)
                 if result.data:
                     stats = result.data[0]
                     pass_count = stats["pass_count"] or 0
@@ -378,7 +432,8 @@ class DataGovernanceTools:
                 ) t
                 """
                 
-                result = await connection.execute(duplicate_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(duplicate_sql, auth_context=auth_context)
                 if result.data and result.data[0]["duplicate_count"] > 0:
                     issues.append({
                         "type": "duplicate_primary_keys",
@@ -456,10 +511,21 @@ class DataGovernanceTools:
     async def _verify_column_exists(self, connection, table_name: str, column_name: str) -> bool:
         """Verify if column exists"""
         try:
-            # Simple verification method: try to query the column
-            verify_sql = f"SELECT {column_name} FROM {table_name} LIMIT 1"
-            await connection.execute(verify_sql)
+            # SECURITY FIX: Validate and quote column name
+            try:
+                validate_identifier(column_name, "column name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid column name rejected: {e}")
+                return False
+            
+            safe_column = quote_identifier(column_name, "column name")
+            # table_name is already safe (from _build_full_table_name)
+            verify_sql = f"SELECT {safe_column} FROM {table_name} LIMIT 1"
+            auth_context = get_auth_context()
+            await connection.execute(verify_sql, auth_context=auth_context)
             return True
+        except SQLSecurityError:
+            return False
         except Exception:
             return False
     
@@ -469,21 +535,34 @@ class DataGovernanceTools:
         source_chain = []
         
         try:
+            # SECURITY FIX: Validate table name and use parameterized-like approach
+            table_name_part = table_name.split('.')[-1]
+            try:
+                validate_identifier(table_name_part, "table name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid table name rejected: {e}")
+                return []
+            
+            # Escape special characters for LIKE pattern
+            safe_pattern = table_name_part.replace('%', r'\%').replace('_', r'\_')
+            like_pattern = f"%{safe_pattern}%"
+            
             # Try to find related INSERT/CREATE TABLE AS SELECT statements from audit logs (one year range)
+            auth_context = get_auth_context()
             audit_sql = """
             SELECT 
                 stmt as sql_statement,
                 `time` as execution_time,
                 `user` as user_name
             FROM internal.__internal_schema.audit_log 
-            WHERE stmt LIKE '%{}%' 
+            WHERE stmt LIKE %s 
                 AND (stmt LIKE '%INSERT%' OR stmt LIKE '%CREATE%' OR stmt LIKE '%SELECT%')
                 AND `time` >= DATE_SUB(NOW(), INTERVAL 1 YEAR)
             ORDER BY `time` DESC 
             LIMIT 50
-            """.format(table_name.split('.')[-1])  # Use the last part of table name
+            """
             
-            result = await connection.execute(audit_sql)
+            result = await connection.execute(audit_sql, params=(like_pattern,), auth_context=auth_context)
             
             if result.data:
                 for i, log_entry in enumerate(result.data[:depth]):
@@ -556,19 +635,33 @@ class DataGovernanceTools:
         downstream_usage = []
         
         try:
+            # SECURITY FIX: Validate inputs and use parameterized-like approach
+            table_name_part = table_name.split('.')[-1]
+            try:
+                validate_identifier(table_name_part, "table name")
+                validate_identifier(column_name, "column name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            # Escape special characters for LIKE pattern
+            safe_table_pattern = f"%{table_name_part.replace('%', r'\\%').replace('_', r'\\_')}%"
+            safe_column_pattern = f"%{column_name.replace('%', r'\\%').replace('_', r'\\_')}%"
+            
             # Find other tables that might use this field (through audit logs, one year range)
+            auth_context = get_auth_context()
             usage_sql = """
             SELECT DISTINCT
                 stmt as sql_statement
             FROM internal.__internal_schema.audit_log 
-            WHERE stmt LIKE '%{}%' 
-                AND stmt LIKE '%{}%'
+            WHERE stmt LIKE %s 
+                AND stmt LIKE %s
                 AND stmt LIKE '%SELECT%'
                 AND `time` >= DATE_SUB(NOW(), INTERVAL 1 YEAR)
             LIMIT 20
-            """.format(table_name.split('.')[-1], column_name)
+            """
             
-            result = await connection.execute(usage_sql)
+            result = await connection.execute(usage_sql, params=(safe_table_pattern, safe_column_pattern), auth_context=auth_context)
             
             if result.data:
                 for entry in result.data:
@@ -634,14 +727,20 @@ class DataGovernanceTools:
     async def _get_all_tables(self, connection, catalog_name: Optional[str], db_name: Optional[str]) -> List[str]:
         """Get list of all tables"""
         try:
-            where_conditions = []
+            auth_context = get_auth_context()
+            params = []
             
+            # SECURITY FIX: Use parameterized query
             if db_name:
-                where_conditions.append(f"table_schema = '{db_name}'")
+                try:
+                    validate_identifier(db_name, "database name")
+                except SQLSecurityError as e:
+                    logger.warning(f"Invalid database name rejected: {e}")
+                    return []
+                where_clause = "table_schema = %s"
+                params.append(db_name)
             else:
-                where_conditions.append("table_schema = DATABASE()")
-            
-            where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
+                where_clause = "table_schema = DATABASE()"
             
             tables_sql = f"""
             SELECT table_name 
@@ -651,7 +750,7 @@ class DataGovernanceTools:
             ORDER BY table_name
             """
             
-            result = await connection.execute(tables_sql)
+            result = await connection.execute(tables_sql, params=tuple(params) if params else None, auth_context=auth_context)
             return [row["table_name"] for row in result.data] if result.data else []
             
         except Exception as e:
@@ -728,15 +827,23 @@ class DataGovernanceTools:
     async def _get_freshness_from_partition_info(self, connection, table_name: str) -> Optional[Dict]:
         """Get freshness from partition information"""
         try:
-            # Query partition information (if table has partitions)
-            partition_sql = f"""
+            # SECURITY FIX: Validate and use parameterized query
+            table_name_part = table_name.split('.')[-1]
+            try:
+                validate_identifier(table_name_part, "table name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid table name rejected: {e}")
+                return None
+            
+            auth_context = get_auth_context()
+            partition_sql = """
             SELECT MAX(CREATE_TIME) as last_update
             FROM information_schema.partitions 
-            WHERE table_name = '{table_name.split('.')[-1]}'
+            WHERE table_name = %s
                 AND CREATE_TIME IS NOT NULL
             """
             
-            result = await connection.execute(partition_sql)
+            result = await connection.execute(partition_sql, params=(table_name_part,), auth_context=auth_context)
             if result.data and result.data[0]["last_update"]:
                 return {
                     "last_update": result.data[0]["last_update"],
@@ -759,7 +866,8 @@ class DataGovernanceTools:
                 FROM {table_name}
                 """
                 
-                result = await connection.execute(max_time_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(max_time_sql, auth_context=auth_context)
                 if result.data and result.data[0]["last_update"]:
                     return {
                         "last_update": result.data[0]["last_update"],
@@ -773,15 +881,23 @@ class DataGovernanceTools:
     async def _get_freshness_from_table_metadata(self, connection, table_name: str) -> Optional[Dict]:
         """Get freshness from table metadata"""
         try:
-            # Query table's update time
-            metadata_sql = f"""
+            # SECURITY FIX: Validate and use parameterized query
+            table_name_part = table_name.split('.')[-1]
+            try:
+                validate_identifier(table_name_part, "table name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid table name rejected: {e}")
+                return None
+            
+            auth_context = get_auth_context()
+            metadata_sql = """
             SELECT UPDATE_TIME as last_update
             FROM information_schema.tables 
-            WHERE table_name = '{table_name.split('.')[-1]}'
+            WHERE table_name = %s
                 AND UPDATE_TIME IS NOT NULL
             """
             
-            result = await connection.execute(metadata_sql)
+            result = await connection.execute(metadata_sql, params=(table_name_part,), auth_context=auth_context)
             if result.data and result.data[0]["last_update"]:
                 return {
                     "last_update": result.data[0]["last_update"],
@@ -795,10 +911,19 @@ class DataGovernanceTools:
     async def _find_timestamp_columns(self, connection, table_name: str) -> List[str]:
         """Find possible timestamp fields"""
         try:
-            timestamp_sql = f"""
+            # SECURITY FIX: Validate and use parameterized query
+            table_name_part = table_name.split('.')[-1]
+            try:
+                validate_identifier(table_name_part, "table name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid table name rejected: {e}")
+                return []
+            
+            auth_context = get_auth_context()
+            timestamp_sql = """
             SELECT column_name 
             FROM information_schema.columns 
-            WHERE table_name = '{table_name.split('.')[-1]}'
+            WHERE table_name = %s
                 AND (
                     data_type IN ('datetime', 'timestamp', 'date') 
                     OR column_name LIKE '%time%' 
@@ -815,7 +940,7 @@ class DataGovernanceTools:
                 END
             """
             
-            result = await connection.execute(timestamp_sql)
+            result = await connection.execute(timestamp_sql, params=(table_name_part,), auth_context=auth_context)
             return [row["column_name"] for row in result.data] if result.data else []
             
         except Exception:

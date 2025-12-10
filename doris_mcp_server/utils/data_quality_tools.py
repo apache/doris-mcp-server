@@ -31,6 +31,12 @@ from collections import Counter, defaultdict
 from .db import DorisConnectionManager
 from .logger import get_logger
 from .config import DorisConfig
+from .sql_security_utils import (
+    SQLSecurityError,
+    validate_identifier,
+    build_table_reference,
+    get_auth_context
+)
 
 logger = get_logger(__name__)
 
@@ -299,22 +305,25 @@ class DataQualityTools:
     # ===========================================
     
     def _build_full_table_name(self, table_name: str, catalog_name: Optional[str], db_name: Optional[str]) -> str:
-        """Build full table name"""
-        if catalog_name and db_name:
-            return f"{catalog_name}.{db_name}.{table_name}"
-        elif db_name:
-            return f"{db_name}.{table_name}"
-        else:
-            return table_name
+        """Build full table name with security validation"""
+        # SECURITY FIX: Use build_table_reference for safe identifier handling
+        return build_table_reference(table_name, db_name, catalog_name)
     
     async def _get_table_basic_info(self, connection, table_name: str) -> Optional[Dict]:
         """Get basic table information"""
         try:
+            # SECURITY FIX: table_name should already be validated by _build_full_table_name
+            # But we add auth_context for security validation
+            auth_context = get_auth_context()
+            
             # Try to get row count
             count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"
-            result = await connection.execute(count_sql)
+            result = await connection.execute(count_sql, auth_context=auth_context)
             if result.data:
                 return {"row_count": result.data[0]["row_count"]}
+            return None
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed: {str(e)}")
             return None
         except Exception as e:
             logger.warning(f"Failed to get table basic info: {str(e)}")
@@ -323,9 +332,13 @@ class DataQualityTools:
     async def _get_table_columns_info(self, connection, table_name: str, catalog_name: Optional[str], db_name: Optional[str]) -> List[Dict]:
         """Get table column information"""
         try:
-            # Build DESCRIBE query
-            describe_sql = f"DESCRIBE {self._build_full_table_name(table_name, catalog_name, db_name)}"
-            result = await connection.execute(describe_sql)
+            # SECURITY FIX: Build safe table reference and pass auth_context
+            auth_context = get_auth_context()
+            
+            # Build DESCRIBE query with safe table reference
+            safe_table_ref = self._build_full_table_name(table_name, catalog_name, db_name)
+            describe_sql = f"DESCRIBE {safe_table_ref}"
+            result = await connection.execute(describe_sql, auth_context=auth_context)
             
             columns_info = []
             if result.data:
@@ -339,6 +352,9 @@ class DataQualityTools:
                     })
             
             return columns_info
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed: {str(e)}")
+            return []
         except Exception as e:
             logger.warning(f"Failed to get table columns info: {str(e)}")
             return []
@@ -346,7 +362,32 @@ class DataQualityTools:
     async def _get_table_partitions(self, connection, table_name: str, db_name: Optional[str] = None) -> List[Dict]:
         """Get table partition information"""
         try:
-            # Query partition information
+            # SECURITY FIX: Validate identifiers and use parameterized query
+            auth_context = get_auth_context()
+            
+            # Validate table_name
+            try:
+                validate_identifier(table_name, "table name")
+                if db_name:
+                    validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            # Build parameterized query
+            params = []
+            where_conditions = []
+            
+            if db_name:
+                where_conditions.append("TABLE_SCHEMA = %s")
+                params.append(db_name)
+            else:
+                where_conditions.append("TABLE_SCHEMA = ''")
+            
+            where_conditions.append("TABLE_NAME = %s")
+            params.append(table_name)
+            where_conditions.append("PARTITION_NAME IS NOT NULL")
+            
             partition_sql = f"""
             SELECT 
                 PARTITION_NAME,
@@ -355,12 +396,10 @@ class DataQualityTools:
                 DATA_LENGTH,
                 INDEX_LENGTH
             FROM information_schema.PARTITIONS 
-            WHERE TABLE_SCHEMA = '{db_name or ""}' 
-            AND TABLE_NAME = '{table_name}'
-            AND PARTITION_NAME IS NOT NULL
+            WHERE {' AND '.join(where_conditions)}
             """
             
-            result = await connection.execute(partition_sql)
+            result = await connection.execute(partition_sql, params=tuple(params), auth_context=auth_context)
             partitions = []
             if result.data:
                 for row in result.data:
@@ -373,6 +412,9 @@ class DataQualityTools:
                     })
             
             return partitions
+        except SQLSecurityError as e:
+            logger.warning(f"Security validation failed: {str(e)}")
+            return []
         except Exception as e:
             logger.warning(f"Failed to get table partitions: {str(e)}")
             return []
@@ -417,7 +459,8 @@ class DataQualityTools:
                 if db_name
                 else f"SHOW CREATE TABLE {table_name}"
             )
-            result = await connection.execute(query)
+            auth_context = get_auth_context()
+            result = await connection.execute(query, auth_context=auth_context)
             if result.data:
                 return result.data[0].get("Create Table")
             return None
@@ -428,8 +471,16 @@ class DataQualityTools:
     async def _get_table_size_info(self, connection, table_name: str) -> Dict[str, Any]:
         """Get table size information"""
         try:
-            # Query table size information
-            size_sql = f"""
+            # SECURITY FIX: Validate and use parameterized query
+            table_name_part = table_name.split('.')[-1]
+            try:
+                validate_identifier(table_name_part, "table name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid table name rejected: {e}")
+                return {"engine": "Unknown", "estimated_rows": 0, "data_length": 0, "index_length": 0, "total_size": 0}
+            
+            auth_context = get_auth_context()
+            size_sql = """
             SELECT 
                 table_name,
                 engine,
@@ -438,10 +489,10 @@ class DataQualityTools:
                 index_length,
                 (data_length + index_length) as total_size
             FROM information_schema.tables 
-            WHERE table_name = '{table_name.split('.')[-1]}'
+            WHERE table_name = %s
             """
             
-            result = await connection.execute(size_sql)
+            result = await connection.execute(size_sql, params=(table_name_part,), auth_context=auth_context)
             if result.data and result.data[0]:
                 row = result.data[0]
                 return {
@@ -582,7 +633,8 @@ class DataQualityTools:
             
             batch_sql = f"SELECT {', '.join(select_clauses)} FROM {table_expr}"
             
-            result = await connection.execute(batch_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(batch_sql, auth_context=auth_context)
             if not result.data:
                 return {"error": "No data returned from batch completeness query"}
             
@@ -664,7 +716,8 @@ class DataQualityTools:
             
             batch_sql = f"SELECT {', '.join(select_clauses)} FROM {table_expr}"
             
-            result = await connection.execute(batch_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(batch_sql, auth_context=auth_context)
             if not result.data:
                 return {}
             
@@ -705,7 +758,8 @@ class DataQualityTools:
                 LIMIT 10
                 """
                 
-                result = await connection.execute(freq_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(freq_sql, auth_context=auth_context)
                 frequencies = result.data if result.data else []
                 
                 categorical_results[col_name] = {
@@ -738,7 +792,8 @@ class DataQualityTools:
             
             batch_sql = f"SELECT {', '.join(select_clauses)} FROM {table_expr}"
             
-            result = await connection.execute(batch_sql)
+            auth_context = get_auth_context()
+            result = await connection.execute(batch_sql, auth_context=auth_context)
             if not result.data:
                 return {}
             
@@ -780,7 +835,8 @@ class DataQualityTools:
                 FROM {table_expr}
                 """
                 
-                result = await connection.execute(completeness_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(completeness_sql, auth_context=auth_context)
                 if result.data:
                     stats = result.data[0]
                     total_count = stats["total_count"]
@@ -906,7 +962,8 @@ class DataQualityTools:
                 WHERE {col_name} IS NOT NULL
                 """
                 
-                result = await connection.execute(stats_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(stats_sql, auth_context=auth_context)
                 if result.data and result.data[0]["non_null_count"] > 0:
                     stats = result.data[0]
                     numeric_analysis[col_name] = {
@@ -945,7 +1002,8 @@ class DataQualityTools:
                 WHERE {col_name} IS NOT NULL
                 """
                 
-                cardinality_result = await connection.execute(cardinality_sql)
+                auth_context = get_auth_context()
+                cardinality_result = await connection.execute(cardinality_sql, auth_context=auth_context)
                 
                 if cardinality_result.data:
                     stats = cardinality_result.data[0]
@@ -969,7 +1027,7 @@ class DataQualityTools:
                         LIMIT 10
                         """
                         
-                        top_values_result = await connection.execute(top_values_sql)
+                        top_values_result = await connection.execute(top_values_sql, auth_context=auth_context)
                         if top_values_result.data:
                             categorical_analysis[col_name]["top_values"] = [
                                 {"value": row[col_name], "count": row["count"]}
@@ -998,7 +1056,8 @@ class DataQualityTools:
                 WHERE {col_name} IS NOT NULL
                 """
                 
-                result = await connection.execute(stats_sql)
+                auth_context = get_auth_context()
+                result = await connection.execute(stats_sql, auth_context=auth_context)
                 if result.data and result.data[0]["non_null_count"] > 0:
                     stats = result.data[0]
                     temporal_analysis[col_name] = {

@@ -32,6 +32,11 @@ from datetime import datetime, timedelta
 
 # Import unified logging configuration
 from .logger import get_logger
+from .sql_security_utils import (
+    SQLSecurityError,
+    validate_identifier,
+    quote_identifier
+)
 
 # Configure logging
 logger = get_logger(__name__)
@@ -431,6 +436,16 @@ class MetadataExtractor:
             logger.warning("Database name not specified")
             return {}
         
+        # SECURITY FIX: Validate identifiers to prevent SQL injection
+        try:
+            validate_identifier(table_name, "table name")
+            validate_identifier(db_name, "database name")
+            if effective_catalog:
+                validate_identifier(effective_catalog, "catalog name")
+        except SQLSecurityError as e:
+            logger.warning(f"Invalid identifier rejected in get_table_schema: {e}")
+            return {}
+        
         cache_key = f"schema_{effective_catalog or 'default'}_{db_name}_{table_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
@@ -536,6 +551,16 @@ class MetadataExtractor:
             logger.warning("Database name not specified")
             return ""
         
+        # SECURITY FIX: Validate identifiers
+        try:
+            validate_identifier(table_name, "table name")
+            validate_identifier(db_name, "database name")
+            if effective_catalog:
+                validate_identifier(effective_catalog, "catalog name")
+        except SQLSecurityError as e:
+            logger.warning(f"Invalid identifier rejected: {e}")
+            return ""
+        
         cache_key = f"table_comment_{effective_catalog or 'default'}_{db_name}_{table_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
@@ -585,6 +610,16 @@ class MetadataExtractor:
         effective_catalog = catalog_name or self.catalog_name
         if not db_name:
             logger.warning("Database name not specified")
+            return {}
+        
+        # SECURITY FIX: Validate identifiers
+        try:
+            validate_identifier(table_name, "table name")
+            validate_identifier(db_name, "database name")
+            if effective_catalog:
+                validate_identifier(effective_catalog, "catalog name")
+        except SQLSecurityError as e:
+            logger.warning(f"Invalid identifier rejected: {e}")
             return {}
         
         cache_key = f"column_comments_{effective_catalog or 'default'}_{db_name}_{table_name}"
@@ -643,17 +678,30 @@ class MetadataExtractor:
             logger.error("Database name not specified")
             return []
         
+        # SECURITY FIX: Validate identifiers
+        try:
+            validate_identifier(table_name, "table name")
+            validate_identifier(db_name, "database name")
+            if effective_catalog:
+                validate_identifier(effective_catalog, "catalog name")
+        except SQLSecurityError as e:
+            logger.warning(f"Invalid identifier rejected: {e}")
+            return []
+        
         cache_key = f"indexes_{effective_catalog or 'default'}_{db_name}_{table_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
         
         try:
-            # Build query with catalog prefix if specified
+            # Build query with catalog prefix if specified (identifiers already validated)
+            safe_table = quote_identifier(table_name, "table name")
+            safe_db = quote_identifier(db_name, "database name")
             if effective_catalog:
-                query = f"SHOW INDEX FROM `{effective_catalog}`.`{db_name}`.`{table_name}`"
+                safe_catalog = quote_identifier(effective_catalog, "catalog name")
+                query = f"SHOW INDEX FROM {safe_catalog}.{safe_db}.{safe_table}"
                 logger.info(f"Using three-part naming for index query: {query}")
             else:
-                query = f"SHOW INDEX FROM `{db_name}`.`{table_name}`"
+                query = f"SHOW INDEX FROM {safe_db}.{safe_table}"
             
             try:
                 # NOTE: Deprecated sync path retained for compatibility; use async variant instead.
@@ -1188,12 +1236,28 @@ class MetadataExtractor:
         try:
             # Use async query method
             effective_catalog = catalog_name or self.catalog_name
+            effective_db = db_name or self.db_name
             
-            # Build query statement
+            # SECURITY FIX: Validate identifiers
+            try:
+                validate_identifier(table_name, "table name")
+                if effective_db:
+                    validate_identifier(effective_db, "database name")
+                if effective_catalog and effective_catalog != "internal":
+                    validate_identifier(effective_catalog, "catalog name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            # Build query statement using safe identifiers
+            safe_table = quote_identifier(table_name, "table name")
+            safe_db = quote_identifier(effective_db, "database name") if effective_db else None
+            
             if effective_catalog and effective_catalog != "internal":
-                query = f"DESCRIBE `{effective_catalog}`.`{db_name or self.db_name}`.`{table_name}`"
+                safe_catalog = quote_identifier(effective_catalog, "catalog name")
+                query = f"DESCRIBE {safe_catalog}.{safe_db}.{safe_table}"
             else:
-                query = f"DESCRIBE `{db_name or self.db_name}`.`{table_name}`"
+                query = f"DESCRIBE {safe_db}.{safe_table}"
             
             # Execute async query
             result = await self._execute_query_async(query, db_name)
@@ -1226,8 +1290,15 @@ class MetadataExtractor:
         try:
             effective_catalog = catalog_name or self.catalog_name
             
+            # SECURITY FIX: Validate catalog name if provided
             if effective_catalog and effective_catalog != "internal":
-                query = f"SHOW DATABASES FROM `{effective_catalog}`"
+                try:
+                    validate_identifier(effective_catalog, "catalog name")
+                except SQLSecurityError as e:
+                    logger.warning(f"Invalid catalog name rejected: {e}")
+                    return []
+                safe_catalog = quote_identifier(effective_catalog, "catalog name")
+                query = f"SHOW DATABASES FROM {safe_catalog}"
             else:
                 query = "SHOW DATABASES"
             
@@ -1257,10 +1328,23 @@ class MetadataExtractor:
             effective_catalog = catalog_name or self.catalog_name
             effective_db = db_name or self.db_name
             
+            # SECURITY FIX: Validate identifiers
+            try:
+                if effective_db:
+                    validate_identifier(effective_db, "database name")
+                if effective_catalog and effective_catalog != "internal":
+                    validate_identifier(effective_catalog, "catalog name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+            
+            safe_db = quote_identifier(effective_db, "database name") if effective_db else None
+            
             if effective_catalog and effective_catalog != "internal":
-                query = f"SHOW TABLES FROM `{effective_catalog}`.`{effective_db}`"
+                safe_catalog = quote_identifier(effective_catalog, "catalog name")
+                query = f"SHOW TABLES FROM {safe_catalog}.{safe_db}"
             else:
-                query = f"SHOW TABLES FROM `{effective_db}`"
+                query = f"SHOW TABLES FROM {safe_db}"
             
             result = await self._execute_query_async(query, effective_db)
             
@@ -1319,6 +1403,15 @@ class MetadataExtractor:
             effective_db = db_name or self.db_name
             effective_catalog = catalog_name or self.catalog_name
 
+            # SECURITY FIX: Validate identifiers
+            try:
+                validate_identifier(table_name, "table name")
+                if effective_db:
+                    validate_identifier(effective_db, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return ""
+
             query = f"""
             SELECT 
                 TABLE_COMMENT 
@@ -1342,6 +1435,15 @@ class MetadataExtractor:
         try:
             effective_db = db_name or self.db_name
             effective_catalog = catalog_name or self.catalog_name
+
+            # SECURITY FIX: Validate identifiers
+            try:
+                validate_identifier(table_name, "table name")
+                if effective_db:
+                    validate_identifier(effective_db, "database name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return {}
 
             query = f"""
             SELECT 
@@ -1373,12 +1475,27 @@ class MetadataExtractor:
             effective_db = db_name or self.db_name
             effective_catalog = catalog_name or self.catalog_name
 
-            # Build query with catalog prefix if specified
+            # SECURITY FIX: Validate identifiers
+            try:
+                validate_identifier(table_name, "table name")
+                if effective_db:
+                    validate_identifier(effective_db, "database name")
+                if effective_catalog:
+                    validate_identifier(effective_catalog, "catalog name")
+            except SQLSecurityError as e:
+                logger.warning(f"Invalid identifier rejected: {e}")
+                return []
+
+            # Build query with catalog prefix if specified (using safe identifiers)
+            safe_table = quote_identifier(table_name, "table name")
+            safe_db = quote_identifier(effective_db, "database name") if effective_db else None
+            
             if effective_catalog:
-                query = f"SHOW INDEX FROM `{effective_catalog}`.`{effective_db}`.`{table_name}`"
+                safe_catalog = quote_identifier(effective_catalog, "catalog name")
+                query = f"SHOW INDEX FROM {safe_catalog}.{safe_db}.{safe_table}"
                 logger.info(f"Using three-part naming for async index query: {query}")
             else:
-                query = f"SHOW INDEX FROM `{effective_db}`.`{table_name}`"
+                query = f"SHOW INDEX FROM {safe_db}.{safe_table}"
 
             rows = await self._execute_query_async(query, effective_db)
             indexes: List[Dict[str, Any]] = []
@@ -1475,21 +1592,45 @@ class MetadataExtractor:
                 return self._format_response(success=False, error="No SQL statement provided", message="Please provide SQL statement to execute")
 
             # FIX for Issue #62 Bug 3: Build context switching SQL if db_name or catalog_name is specified
+            # SECURITY FIX: Validate catalog_name and db_name to prevent SQL injection
             final_sql = sql
             if catalog_name or db_name:
                 context_statements = []
 
+                # Validate and sanitize catalog_name
                 if catalog_name:
-                    # Switch to specified catalog
-                    context_statements.append(f"USE CATALOG `{catalog_name}`")
+                    try:
+                        validate_identifier(catalog_name, "catalog name")
+                    except SQLSecurityError as e:
+                        logger.warning(f"Invalid catalog name rejected: {e}")
+                        return self._format_response(
+                            success=False, 
+                            error=f"Invalid catalog name: {catalog_name}", 
+                            message="Catalog name contains invalid characters"
+                        )
+                    # Use quote_identifier to safely escape the catalog name
+                    safe_catalog = quote_identifier(catalog_name, "catalog name")
+                    context_statements.append(f"USE CATALOG {safe_catalog}")
                     logger.debug(f"Switching to catalog: {catalog_name}")
 
+                # Validate and sanitize db_name
                 if db_name:
-                    # Switch to specified database
+                    try:
+                        validate_identifier(db_name, "database name")
+                    except SQLSecurityError as e:
+                        logger.warning(f"Invalid database name rejected: {e}")
+                        return self._format_response(
+                            success=False, 
+                            error=f"Invalid database name: {db_name}", 
+                            message="Database name contains invalid characters"
+                        )
+                    # Use quote_identifier to safely escape the database name
+                    safe_db = quote_identifier(db_name, "database name")
                     if catalog_name:
-                        context_statements.append(f"USE `{catalog_name}`.`{db_name}`")
+                        safe_catalog = quote_identifier(catalog_name, "catalog name")
+                        context_statements.append(f"USE {safe_catalog}.{safe_db}")
                     else:
-                        context_statements.append(f"USE `{db_name}`")
+                        context_statements.append(f"USE {safe_db}")
                     logger.debug(f"Switching to database: {db_name}")
 
                 # Combine context switching with original SQL
@@ -1551,6 +1692,36 @@ class MetadataExtractor:
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
         
+        # SECURITY: Validate identifiers before processing
+        try:
+            validate_identifier(table_name, "table name")
+        except SQLSecurityError as e:
+            return self._format_response(
+                success=False, 
+                error=f"Invalid table name: {table_name}",
+                message="Table name contains invalid characters"
+            )
+        
+        if db_name:
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid database name: {db_name}",
+                    message="Database name contains invalid characters"
+                )
+        
+        if catalog_name and catalog_name != "internal":
+            try:
+                validate_identifier(catalog_name, "catalog name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid catalog name: {catalog_name}",
+                    message="Catalog name contains invalid characters"
+                )
+        
         try:
             schema = await self.get_table_schema_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
             
@@ -1573,6 +1744,27 @@ class MetadataExtractor:
     ) -> Dict[str, Any]:
         """Get list of all table names in specified database - MCP interface"""
         logger.info(f"Getting database table list: DB: {db_name}, Catalog: {catalog_name}")
+        
+        # SECURITY: Validate identifiers
+        if db_name:
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid database name: {db_name}",
+                    message="Database name contains invalid characters"
+                )
+        
+        if catalog_name and catalog_name != "internal":
+            try:
+                validate_identifier(catalog_name, "catalog name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid catalog name: {catalog_name}",
+                    message="Catalog name contains invalid characters"
+                )
         
         try:
             tables = await self.get_database_tables_async(db_name=db_name, catalog_name=catalog_name)
@@ -1604,6 +1796,36 @@ class MetadataExtractor:
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
         
+        # SECURITY: Validate identifiers
+        try:
+            validate_identifier(table_name, "table name")
+        except SQLSecurityError as e:
+            return self._format_response(
+                success=False,
+                error=f"Invalid table name: {table_name}",
+                message="Table name contains invalid characters"
+            )
+        
+        if db_name:
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid database name: {db_name}",
+                    message="Database name contains invalid characters"
+                )
+        
+        if catalog_name and catalog_name != "internal":
+            try:
+                validate_identifier(catalog_name, "catalog name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid catalog name: {catalog_name}",
+                    message="Catalog name contains invalid characters"
+                )
+        
         try:
             comment = await self.get_table_comment_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
             return self._format_response(success=True, result=comment)
@@ -1623,6 +1845,36 @@ class MetadataExtractor:
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
         
+        # SECURITY: Validate identifiers
+        try:
+            validate_identifier(table_name, "table name")
+        except SQLSecurityError as e:
+            return self._format_response(
+                success=False,
+                error=f"Invalid table name: {table_name}",
+                message="Table name contains invalid characters"
+            )
+        
+        if db_name:
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid database name: {db_name}",
+                    message="Database name contains invalid characters"
+                )
+        
+        if catalog_name and catalog_name != "internal":
+            try:
+                validate_identifier(catalog_name, "catalog name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid catalog name: {catalog_name}",
+                    message="Catalog name contains invalid characters"
+                )
+        
         try:
             comments = await self.get_column_comments_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
             return self._format_response(success=True, result=comments)
@@ -1641,6 +1893,36 @@ class MetadataExtractor:
         
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
+        
+        # SECURITY: Validate identifiers
+        try:
+            validate_identifier(table_name, "table name")
+        except SQLSecurityError as e:
+            return self._format_response(
+                success=False,
+                error=f"Invalid table name: {table_name}",
+                message="Table name contains invalid characters"
+            )
+        
+        if db_name:
+            try:
+                validate_identifier(db_name, "database name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid database name: {db_name}",
+                    message="Database name contains invalid characters"
+                )
+        
+        if catalog_name and catalog_name != "internal":
+            try:
+                validate_identifier(catalog_name, "catalog name")
+            except SQLSecurityError as e:
+                return self._format_response(
+                    success=False,
+                    error=f"Invalid catalog name: {catalog_name}",
+                    message="Catalog name contains invalid characters"
+                )
         
         try:
             indexes = await self.get_table_indexes_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
