@@ -370,11 +370,45 @@ class DorisConnectionManager:
         import hashlib
         return hashlib.sha256(token.encode()).hexdigest()[:16]
     
+    def _get_current_token_db_config(self, token: str) -> dict | None:
+        """Get current database config for token from TokenManager
+        
+        This is used to check if config has changed for hot reload support.
+        """
+        if not self.token_manager:
+            return None
+        
+        token_db_config = self.token_manager.get_database_config_by_token(token)
+        if token_db_config:
+            return {
+                'host': token_db_config.host,
+                'port': token_db_config.port,
+                'user': token_db_config.user,
+                'password': token_db_config.password,
+                'database': token_db_config.database,
+                'charset': token_db_config.charset
+            }
+        return None
+    
+    def _config_changed(self, old_config: dict, new_config: dict) -> bool:
+        """Check if database configuration has changed"""
+        if old_config is None or new_config is None:
+            return old_config != new_config
+        
+        # Compare key fields
+        for key in ['host', 'port', 'user', 'password', 'database']:
+            if old_config.get(key) != new_config.get(key):
+                return True
+        return False
+    
     async def get_pool_for_token(self, token: str) -> tuple[Pool, dict]:
         """Get or create a dedicated connection pool for a specific token
         
         This method implements per-token connection pool isolation to prevent
         concurrent requests from different tokens interfering with each other.
+        
+        🔧 FIX: Supports hot reload - if tokens.json config changes,
+        the old pool is closed and a new one is created automatically.
         
         Args:
             token: Authentication token
@@ -390,8 +424,26 @@ class DorisConnectionManager:
         # Fast path: pool already exists
         if token_hash in self.token_pools:
             pool = self.token_pools[token_hash]
-            if pool and not pool.closed:
-                return pool, self.token_configs[token_hash]
+            cached_config = self.token_configs.get(token_hash)
+            
+            # 🔧 FIX: Check if config has changed (hot reload support)
+            current_config = self._get_current_token_db_config(token)
+            if current_config and cached_config and self._config_changed(cached_config, current_config):
+                self.logger.info(f"Token config changed (hash: {token_hash[:8]}...), recreating pool...")
+                # Config changed, need to recreate pool
+                async with self._token_pools_lock:
+                    # Close old pool
+                    old_pool = self.token_pools.pop(token_hash, None)
+                    if old_pool and not old_pool.closed:
+                        try:
+                            old_pool.close()
+                            await asyncio.wait_for(old_pool.wait_closed(), timeout=2.0)
+                        except Exception as e:
+                            self.logger.warning(f"Error closing old pool during hot reload: {e}")
+                    self.token_configs.pop(token_hash, None)
+                # Continue to slow path to create new pool
+            elif pool and not pool.closed:
+                return pool, cached_config
         
         # Slow path: need to create pool (with lock to prevent race conditions)
         async with self._token_pools_lock:
@@ -458,21 +510,33 @@ class DorisConnectionManager:
         charset_map = {"UTF8": "utf8", "UTF8MB4": "utf8mb4"}
         charset = charset_map.get(db_config['charset'].upper(), db_config['charset'].lower())
         
-        pool = await aiomysql.create_pool(
-            host=db_config['host'],
-            port=db_config['port'],
-            user=db_config['user'],
-            password=db_config['password'],
-            db=db_config['database'],
-            charset=charset,
-            minsize=0,  # Don't pre-create connections
-            maxsize=self.maxsize,
-            connect_timeout=self.connect_timeout,
-            autocommit=True,
-            pool_recycle=self.pool_recycle
-        )
+        self.logger.debug(f"Creating pool for {db_config['user']}@{db_config['host']}:{db_config['port']}/{db_config['database']}")
         
-        return pool
+        try:
+            pool = await asyncio.wait_for(
+                aiomysql.create_pool(
+                    host=db_config['host'],
+                    port=db_config['port'],
+                    user=db_config['user'],
+                    password=db_config['password'],
+                    db=db_config['database'],
+                    charset=charset,
+                    minsize=0,  # Don't pre-create connections
+                    maxsize=self.maxsize,
+                    connect_timeout=self.connect_timeout,
+                    autocommit=True,
+                    pool_recycle=self.pool_recycle
+                ),
+                timeout=self.connect_timeout + 5  # Give extra time for pool creation
+            )
+            self.logger.info(f"Successfully created pool for {db_config['user']}@{db_config['host']}:{db_config['port']}")
+            return pool
+        except asyncio.TimeoutError:
+            self.logger.error(f"Timeout creating pool for {db_config['user']}@{db_config['host']}:{db_config['port']}")
+            raise RuntimeError(f"Timeout creating connection pool for {db_config['user']}@{db_config['host']}:{db_config['port']}")
+        except Exception as e:
+            self.logger.error(f"Failed to create pool for {db_config['user']}@{db_config['host']}:{db_config['port']}: {type(e).__name__}: {e}")
+            raise
     
     async def get_connection_for_token(self, token: str, session_id: str) -> 'DorisConnection':
         """Get a connection from the token's dedicated pool
@@ -549,16 +613,29 @@ class DorisConnectionManager:
     
     async def close_all_token_pools(self):
         """Close all token connection pools (for shutdown)"""
-        async with self._token_pools_lock:
-            for token_hash, pool in self.token_pools.items():
-                try:
-                    if pool and not pool.closed:
-                        pool.close()
-                        await pool.wait_closed()
-                        self.logger.info(f"Closed token pool (hash: {token_hash[:8]}...)")
-                except Exception as e:
-                    self.logger.warning(f"Error closing token pool: {e}")
-            
+        # Use timeout to prevent blocking on lock acquisition during shutdown
+        try:
+            async with asyncio.timeout(5):  # 5 second timeout for lock
+                async with self._token_pools_lock:
+                    for token_hash, pool in list(self.token_pools.items()):
+                        try:
+                            if pool and not pool.closed:
+                                pool.close()
+                                # Use timeout for wait_closed to prevent hanging
+                                try:
+                                    await asyncio.wait_for(pool.wait_closed(), timeout=2.0)
+                                except asyncio.TimeoutError:
+                                    self.logger.warning(f"Timeout waiting for token pool to close (hash: {token_hash[:8]}...)")
+                                self.logger.info(f"Closed token pool (hash: {token_hash[:8]}...)")
+                        except Exception as e:
+                            self.logger.warning(f"Error closing token pool: {e}")
+                    
+                    self.token_pools.clear()
+                    self.token_configs.clear()
+                    self._token_pool_locks.clear()
+        except asyncio.TimeoutError:
+            self.logger.warning("Timeout acquiring lock for token pool cleanup, forcing clear")
+            # Force clear without lock
             self.token_pools.clear()
             self.token_configs.clear()
             self._token_pool_locks.clear()
@@ -1296,7 +1373,26 @@ class DorisConnectionManager:
         
         Uses only semaphore to prevent too many concurrent acquisitions.
         If the connection is successfully obtained, it will be added to the connection pool cache.
+        
+        🔧 FIX for token isolation: Now automatically checks for auth_context from ContextVar
+        and uses token-specific connection pool if available.
         """
+        # 🔧 FIX: Check for auth_context from global ContextVar
+        # This ensures all tools using get_connection respect token-bound database configuration
+        auth_context = None
+        try:
+            from .security import mcp_auth_context_var
+            auth_context = mcp_auth_context_var.get()
+        except Exception as e:
+            self.logger.debug(f"get_connection: Could not get auth_context: {e}")
+        
+        if auth_context and hasattr(auth_context, 'token') and auth_context.token:
+            # Use token-specific connection pool
+            # SECURITY: Do NOT catch exceptions here - if token pool fails, don't fallback to global pool
+            # This prevents privilege escalation
+            self.logger.debug(f"get_connection: Using token-specific pool for session {session_id}")
+            return await self.get_connection_for_token(auth_context.token, session_id)
+        
         cached_conn = self.session_cache.get(session_id)
         if cached_conn:
             return cached_conn
@@ -1446,10 +1542,13 @@ class DorisConnectionManager:
             # 🔧 FIX: Close all per-token connection pools
             await self.close_all_token_pools()
 
-            # Close global connection pool
+            # Close global connection pool with timeout
             if self.pool:
                 self.pool.close()
-                await self.pool.wait_closed()
+                try:
+                    await asyncio.wait_for(self.pool.wait_closed(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    self.logger.warning("Timeout waiting for global pool to close")
 
             self.logger.info("Connection manager closed successfully")
 

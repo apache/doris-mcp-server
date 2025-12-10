@@ -1194,8 +1194,17 @@ class MetadataExtractor:
         """
         try:
             if self.connection_manager:
+                # FIX: Get auth_context from global ContextVar for token-bound database configuration
+                # This ensures all query methods use the correct user's connection pool
+                auth_context = None
+                try:
+                    from .security import mcp_auth_context_var
+                    auth_context = mcp_auth_context_var.get()
+                except Exception:
+                    pass
+                
                 # Use the injected connection manager directly (async)
-                result = await self.connection_manager.execute_query(self._session_id, query, None)
+                result = await self.connection_manager.execute_query(self._session_id, query, None, auth_context)
                 
                 # Extract data from QueryResult
                 if hasattr(result, 'data'):
