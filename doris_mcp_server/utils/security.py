@@ -22,6 +22,7 @@ Implements enterprise-level authentication, authorization, SQL security validati
 
 import logging
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -33,6 +34,10 @@ from sqlparse.tokens import Keyword, Name
 
 from .logger import get_logger
 from .config import DatabaseConfig
+
+# Global ContextVar for auth_context - must be a single instance shared across all modules
+# This allows token-bound database configuration to work correctly in concurrent requests
+mcp_auth_context_var: ContextVar['AuthContext'] = ContextVar('mcp_auth_context', default=None)
 
 
 class SecurityLevel(Enum):

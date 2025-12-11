@@ -397,6 +397,14 @@ class SQLAnalyzer:
             
             logger.info(f"Generating SQL explain for query ID: {query_id}")
             
+            # 🔧 FIX: Get auth_context for token-bound database configuration
+            auth_context = None
+            try:
+                from .security import mcp_auth_context_var
+                auth_context = mcp_auth_context_var.get()
+            except Exception:
+                pass
+            
             # Switch database if specified
             # SECURITY FIX: Validate and quote db_name
             if db_name:
@@ -405,7 +413,7 @@ class SQLAnalyzer:
                 except SQLSecurityError as e:
                     return {"success": False, "error": f"Invalid database name: {e}"}
                 safe_db = quote_identifier(db_name, "database name")
-                await self.connection_manager.execute_query("explain_session", f"USE {safe_db}")
+                await self.connection_manager.execute_query("explain_session", f"USE {safe_db}", None, auth_context)
             
             # Construct EXPLAIN query
             explain_type = "EXPLAIN VERBOSE" if verbose else "EXPLAIN"
@@ -414,7 +422,7 @@ class SQLAnalyzer:
             logger.info(f"Executing explain query: {explain_sql}")
             
             # Execute explain query
-            result = await self.connection_manager.execute_query("explain_session", explain_sql)
+            result = await self.connection_manager.execute_query("explain_session", explain_sql, None, auth_context)
             
             # Format explain output
             explain_content = []

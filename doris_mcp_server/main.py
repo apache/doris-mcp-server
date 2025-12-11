@@ -644,10 +644,10 @@ class DorisServer:
 
                                 # FIX for Issue #62 Bug 1: Set auth_context in context variable
                                 # This allows tools to access token information for token-bound database configuration
+                                # CRITICAL: Use the global ContextVar from security.py to ensure same instance is used everywhere
                                 try:
-                                    from contextvars import ContextVar
-                                    auth_context_var: ContextVar = ContextVar('mcp_auth_context', default=None)
-                                    auth_context_var.set(auth_context)
+                                    from .utils.security import mcp_auth_context_var
+                                    mcp_auth_context_var.set(auth_context)
                                     self.logger.debug(f"Set auth_context in context variable with token: {bool(hasattr(auth_context, 'token') and auth_context.token)}")
                                 except Exception as ctx_error:
                                     self.logger.warning(f"Failed to set auth_context in context variable: {ctx_error}")
