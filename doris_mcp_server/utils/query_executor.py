@@ -639,7 +639,13 @@ class DorisQueryExecutor:
                 if hasattr(self.connection_manager, 'config') and hasattr(self.connection_manager.config, 'security'):
                     if self.connection_manager.config.security.enable_security_check:
                         try:
-                            security_manager = DorisSecurityManager(self.connection_manager.config)
+                            # 🔧 FIX: Use existing security_manager to avoid creating multiple TokenManager instances
+                            # Creating new DorisSecurityManager each time causes multiple hot reload monitors
+                            security_manager = getattr(self.connection_manager, 'security_manager', None)
+                            if not security_manager:
+                                # Fallback: create new one only if not available (should rarely happen)
+                                self.logger.warning("No existing security_manager, creating new instance")
+                                security_manager = DorisSecurityManager(self.connection_manager.config)
                             validation_result = await security_manager.validate_sql_security(sql, auth_context)
 
                             if not validation_result.is_valid:
