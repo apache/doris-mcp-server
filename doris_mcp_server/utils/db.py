@@ -59,6 +59,7 @@ class QueryResult:
     metadata: dict[str, Any]
     execution_time: float
     row_count: int
+    sql: str
 
 
 class DorisConnection:
@@ -132,6 +133,7 @@ class DorisConnection:
                     metadata=metadata,
                     execution_time=execution_time,
                     row_count=row_count,
+                    sql=sql
                 )
 
         except Exception as e:
