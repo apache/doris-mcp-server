@@ -201,3 +201,73 @@ class TestDorisQueryExecutor:
             if result["success"]:
                 assert "data" in result
                 assert "row_count" in result 
+
+    @pytest.mark.asyncio
+    async def test_execute_multi_sql_statements(self, query_executor):
+        """Test execution of multiple SQL statements"""
+        from doris_mcp_server.utils.query_executor import QueryResult
+        
+        # Disable security check for this test
+        query_executor.connection_manager.config.security.enable_security_check = False
+        
+        with patch.object(query_executor, 'execute_query') as mock_execute:
+            # Mock results for three SQL statements
+            mock_execute.side_effect = [
+                QueryResult(
+                    data=[{"id": 1, "name": "张三"}],
+                    row_count=1,
+                    execution_time=0.1,
+                    sql="SELECT id, name FROM users WHERE id = 1",
+                    metadata={"columns": ["id", "name"]}
+                ),
+                QueryResult(
+                    data=[{"id": 2, "name": "李四"}],
+                    row_count=1,
+                    execution_time=0.12,
+                    sql="SELECT id, name FROM users WHERE id = 2",
+                    metadata={"columns": ["id", "name"]}
+                ),
+                QueryResult(
+                    data=[{"count": 100}],
+                    row_count=1,
+                    execution_time=0.08,
+                    sql="SELECT COUNT(*) as count FROM users",
+                    metadata={"columns": ["count"]}
+                )
+            ]
+            
+            # Execute multiple SQL statements separated by semicolons
+            multi_sql = """
+                SELECT id, name FROM users WHERE id = 1;
+                SELECT id, name FROM users WHERE id = 2;
+                SELECT COUNT(*) as count FROM users;
+            """
+            
+            result = await query_executor.execute_sql_for_mcp(multi_sql)
+            
+            # Verify the result structure for multiple statements
+            assert result["success"] is True
+            assert result["multiple_results"] is True
+            assert "results" in result
+            assert len(result["results"]) == 3
+            
+            # Verify first query result
+            assert result["results"][0]["data"] == [{"id": 1, "name": "张三"}]
+            assert result["results"][0]["row_count"] == 1
+            assert result["results"][0]["metadata"]["columns"] == ["id", "name"]
+            assert result["results"][0]["metadata"]["query"] == "SELECT id, name FROM users WHERE id = 1"
+            
+            # Verify second query result
+            assert result["results"][1]["data"] == [{"id": 2, "name": "李四"}]
+            assert result["results"][1]["row_count"] == 1
+            assert result["results"][1]["metadata"]["columns"] == ["id", "name"]
+            assert result["results"][1]["metadata"]["query"] == "SELECT id, name FROM users WHERE id = 2"
+            
+            # Verify third query result
+            assert result["results"][2]["data"] == [{"count": 100}]
+            assert result["results"][2]["row_count"] == 1
+            assert result["results"][2]["metadata"]["columns"] == ["count"]
+            assert result["results"][2]["metadata"]["query"] == "SELECT COUNT(*) as count FROM users"
+            
+            # Verify execute_query was called three times
+            assert mock_execute.call_count == 3
