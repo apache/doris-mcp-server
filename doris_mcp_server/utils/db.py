@@ -95,15 +95,9 @@ class DorisConnection:
             async with self.connection.cursor(aiomysql.DictCursor) as cursor:
                 await cursor.execute(sql, params)
 
-                # Check if it's a query statement (statement that returns result set)
-                # FIX for Issue #62 Bug 5: Added WITH support for Common Table Expressions (CTE)
-                sql_upper = sql.strip().upper()
-                if (sql_upper.startswith("SELECT") or
-                    sql_upper.startswith("SHOW") or
-                    sql_upper.startswith("DESCRIBE") or
-                    sql_upper.startswith("DESC") or
-                    sql_upper.startswith("EXPLAIN") or
-                    sql_upper.startswith("WITH")):  # FIX: Support CTE queries
+                # cursor.description is set by the DB driver for any statement that returns rows,
+                # avoiding a brittle hardcoded keyword list (e.g. missing WITH/CTE, comments before keywords).
+                if cursor.description:
                     data = await cursor.fetchall()
                     row_count = len(data)
                 else:
