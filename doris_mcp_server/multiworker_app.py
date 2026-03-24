@@ -212,6 +212,7 @@ if not _import_mcp_with_compatibility():
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.responses import JSONResponse, Response
+from starlette.middleware.cors import CORSMiddleware
 
 # Import Doris MCP components
 from .tools.tools_manager import DorisToolsManager
@@ -612,6 +613,15 @@ basic_app = Starlette(
         Route("/token/management", token_management, methods=["GET"]),
     ],
     lifespan=lifespan
+)
+
+# Add CORS middleware allowing all origins
+basic_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Create main ASGI app that routes between basic app and MCP
