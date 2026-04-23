@@ -825,6 +825,29 @@ Streamable HTTP mode requires you to run the MCP server independently first, and
 
 After configuring either mode in Cursor, you should be able to select the server (e.g., `doris-stdio` or `doris-http`) and use its tools.
 
+## Connecting with Kiro
+
+[![Add to Kiro](https://kiro.dev/images/add-to-kiro.svg)](https://kiro.dev/launch/mcp/add?name=doris-mcp&config=%7B%22command%22%3A%22doris-mcp-server%22%2C%22args%22%3A%5B%22--transport%22%2C%22stdio%22%5D%2C%22env%22%3A%7B%22DORIS_HOST%22%3A%22127.0.0.1%22%2C%22DORIS_PORT%22%3A%229030%22%2C%22DORIS_USER%22%3A%22root%22%2C%22DORIS_PASSWORD%22%3A%22your_db_password%22%7D%7D)
+
+Or add the following to your Kiro MCP config file (`~/.kiro/settings/mcp.json` for global, or `.kiro/settings/mcp.json` for project-scoped). See the [Kiro MCP documentation](https://kiro.dev/docs/mcp/) for more details.
+
+```json
+{
+  "mcpServers": {
+    "doris-stdio": {
+      "command": "doris-mcp-server",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "DORIS_HOST": "127.0.0.1",
+        "DORIS_PORT": "9030",
+        "DORIS_USER": "root",
+        "DORIS_PASSWORD": "your_db_password"
+      }
+    }
+  }
+}
+```
+
 ## Directory Structure
 
 ```
