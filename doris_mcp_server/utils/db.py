@@ -24,6 +24,7 @@ Supports asynchronous operations and concurrent connection management, ensuring 
 
 import asyncio
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -36,6 +37,22 @@ from aiomysql import Connection, Pool
 from .logger import get_logger
 
 
+_SQL_COMMENT_RE = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
+
+
+def get_first_sql_keyword(sql: str) -> str:
+    """Return the first SQL keyword (uppercase), ignoring leading comments/whitespace.
+
+    Strips `--` line comments and `/* */` block comments before extracting
+    the first token. A leading comment must not change how a statement is
+    classified (e.g. `-- note\\nSELECT 1` is still a SELECT).
+    """
+    if not sql:
+        return ""
+    stripped = _SQL_COMMENT_RE.sub("", sql).strip()
+    if not stripped:
+        return ""
+    return stripped.split(None, 1)[0].upper()
 
 
 @dataclass

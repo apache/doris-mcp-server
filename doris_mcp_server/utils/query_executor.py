@@ -35,7 +35,7 @@ from decimal import Decimal
 
 import sqlparse
 
-from .db import DorisConnectionManager, QueryResult
+from .db import DorisConnectionManager, QueryResult, get_first_sql_keyword
 from .logger import get_logger
 from .sql_security_utils import get_auth_context
 
@@ -685,8 +685,11 @@ class DorisQueryExecutor:
                 else:
                     self.logger.warning("Security configuration not found, proceeding without validation")
 
-                # Add LIMIT if not present and it's a SELECT query
-                if sql.upper().startswith("SELECT") and "LIMIT" not in sql.upper():
+                # Add LIMIT if not present and it's a SELECT query.
+                # get_first_sql_keyword skips leading comments so `-- note\nSELECT ...`
+                # still gets the LIMIT cap (sql.startswith would silently bypass it).
+                sql_upper = sql.upper()
+                if get_first_sql_keyword(sql) == "SELECT" and "LIMIT" not in sql_upper:
                     if sql.endswith(";"):
                         sql = sql[:-1]
                     sql = f"{sql} LIMIT {limit}"
