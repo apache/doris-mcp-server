@@ -19,6 +19,8 @@ under the License.
 
 # Doris MCP Server
 
+[English](README.md) | [简体中文](docs/zh-CN/README.zh-CN.md)
+
 Doris MCP (Model Context Protocol) Server is a backend service built with Python and FastAPI. It implements the MCP, allowing clients to interact with it through defined "Tools". It's primarily designed to connect to Apache Doris databases, potentially leveraging Large Language Models (LLMs) for tasks like converting natural language queries to SQL (NL2SQL), executing queries, and performing metadata management and analysis.
 
 ## 🚀 What's New in v0.6.0
