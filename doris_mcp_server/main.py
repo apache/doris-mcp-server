@@ -553,6 +553,8 @@ class DorisServer:
             from starlette.routing import Route
             from starlette.responses import JSONResponse, Response
             from starlette.types import Scope
+            from starlette.middleware.cors import CORSMiddleware
+            from .auth.mcp_cors import mcp_cors_preflight_response, send_with_mcp_cors
             
             # Create session manager
             session_manager = StreamableHTTPSessionManager(
@@ -681,6 +683,15 @@ class DorisServer:
                 authenticated_mcp_downstream,
                 effective_auth,
             )
+
+            # Add CORS middleware allowing all origins
+            starlette_app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
             
             # Custom ASGI app that handles both /mcp and /mcp/ without redirects
             async def mcp_app(scope, receive, send):
@@ -714,7 +725,15 @@ class DorisServer:
                         # Handle MCP requests - both /mcp and /mcp/ go to session manager
                         if path == "/mcp" or path.startswith("/mcp/"):
                             self.logger.info(f"Handling MCP request for path: {path}")
-                            await mcp_auth_middleware(scope, receive, send)
+                            method = scope.get("method", "UNKNOWN")
+                            if method == "OPTIONS":
+                                response = mcp_cors_preflight_response(scope)
+                                await response(scope, receive, send)
+                                return
+                            async def send_with_cors(message):
+                                await send_with_mcp_cors(scope, send, message)
+
+                            await mcp_auth_middleware(scope, receive, send_with_cors)
                             return
                         
                         # 404 for other paths

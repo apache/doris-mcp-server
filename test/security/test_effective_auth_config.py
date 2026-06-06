@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 
 from doris_mcp_server.auth.doris_oauth_scope_policy import DorisOAuthScopePolicy
 from doris_mcp_server.utils.config import (
@@ -125,19 +124,37 @@ def test_doris_oauth_query_and_explain_flags_are_supported(field_name):
     normalize_effective_auth_config(config)
 
 
-def _read_env_file(path):
-    values = {}
-    for raw_line in Path(path).read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key] = value.strip().strip('"').strip("'")
-    return values
+def _doris_oauth_smoke_env_values():
+    return {
+        "TRANSPORT": "http",
+        "SERVER_HOST": "127.0.0.1",
+        "SERVER_PORT": "3000",
+        "WORKERS": "1",
+        "DORIS_HOST": "127.0.0.1",
+        "DORIS_PORT": "9030",
+        "DORIS_USER": "root",
+        "DORIS_PASSWORD": "",
+        "DORIS_DATABASE": "doris",
+        "ENABLE_DORIS_OAUTH_AUTH": "true",
+        "DORIS_OAUTH_BASE_URL": "http://127.0.0.1:3000",
+        "ENABLE_TOKEN_AUTH": "false",
+        "ENABLE_JWT_AUTH": "false",
+        "ENABLE_OAUTH_AUTH": "false",
+        "OAUTH_ENABLED": "false",
+        "DORIS_OAUTH_DB_TOOLS_ENABLED": "true",
+        "DORIS_OAUTH_DB_TOOL_ALLOWLIST": (
+            "get_db_list,get_db_table_list,get_table_schema,get_table_comment,"
+            "get_table_column_comments,get_table_indexes,get_catalog_list"
+        ),
+        "DORIS_OAUTH_QUERY_TOOLS_ENABLED": "true",
+        "DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED": "true",
+        "ENABLE_SECURITY_CHECK": "false",
+        "DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE": "auto",
+    }
 
 
 def test_runtime_doris_oauth_smoke_env_matches_rbac_default_scope_model(monkeypatch):
-    env_values = _read_env_file("runtime/doris-oauth-test/.env")
+    env_values = _doris_oauth_smoke_env_values()
     for key in (
         "TRANSPORT",
         "SERVER_HOST",

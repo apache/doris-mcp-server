@@ -212,11 +212,13 @@ if not _import_mcp_with_compatibility():
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.responses import JSONResponse, Response
+from starlette.middleware.cors import CORSMiddleware
 
 # Import Doris MCP components
 from .tools.tools_manager import DorisToolsManager
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
+from .auth.mcp_cors import mcp_cors_preflight_response, send_with_mcp_cors
 from .auth.operation_policy import OperationAuthorizationError, authorize_operation
 from .utils.config import DorisConfig, get_effective_auth_config, normalize_effective_auth_config
 from .utils.db import DorisConnectionManager
@@ -231,6 +233,7 @@ _worker_session_manager_context = None
 _worker_initialized = False
 _worker_effective_auth = None
 _doris_oauth_handlers = None
+
 
 def get_mcp_capabilities():
     """Get MCP capabilities for worker - use the same logic as main.py"""
@@ -726,14 +729,31 @@ basic_app = Starlette(
     lifespan=lifespan
 )
 
+# Add CORS middleware allowing all origins
+basic_app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Create main ASGI app that routes between basic app and MCP
 async def app(scope, receive, send):
     """Main ASGI app that routes requests"""
     path = scope.get('path', '/')
     
     if path == "/mcp" or path.startswith('/mcp/'):
+        if scope.get("type") == "http" and scope.get("method", "UNKNOWN") == "OPTIONS":
+            response = mcp_cors_preflight_response(scope)
+            await response(scope, receive, send)
+            return
+
+        async def send_with_cors(message):
+            await send_with_mcp_cors(scope, send, message)
+
         # Handle MCP requests with session manager
-        await mcp_asgi_app(scope, receive, send)
+        await mcp_asgi_app(scope, receive, send_with_cors)
     elif path.startswith("/auth/") and _worker_effective_auth and not _worker_effective_auth.enable_external_oauth_auth:
         response = JSONResponse({"error": "external_oauth_disabled"}, status_code=404)
         await response(scope, receive, send)
