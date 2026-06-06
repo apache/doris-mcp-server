@@ -34,7 +34,7 @@ from typing import Dict, List, Optional, Any
 from pathlib import Path
 
 from ..utils.logger import get_logger
-from ..utils.security import SecurityLevel
+from ..utils.security import RESERVED_DORIS_OAUTH_TOKEN_PREFIX, SecurityLevel
 
 
 @dataclass
@@ -114,6 +114,13 @@ class TokenManager:
             self._start_hot_reload()
         
         self.logger.info(f"TokenManager initialized with {len(self._tokens)} tokens, hot reload: {self.enable_hot_reload}")
+
+    def _validate_static_token_prefix(self, token: str):
+        if token.startswith(RESERVED_DORIS_OAUTH_TOKEN_PREFIX):
+            raise ValueError(
+                f"Static tokens cannot use reserved Doris OAuth prefix "
+                f"'{RESERVED_DORIS_OAUTH_TOKEN_PREFIX}'"
+            )
     
     def _initialize_default_tokens(self):
         """Initialize default tokens for basic authentication (configurable via environment)"""
@@ -208,6 +215,7 @@ class TokenManager:
             
             # Hash the token
             raw_token = token_config['token']
+            self._validate_static_token_prefix(raw_token)
             token_hash = self._hash_token(raw_token)
             
             # Store token
@@ -284,6 +292,8 @@ class TokenManager:
                 
                 self._add_token_from_config(token_config)
                 
+            except ValueError:
+                raise
             except Exception as e:
                 self.logger.error(f"Failed to load token {token_id} from environment: {e}")
     
@@ -306,6 +316,8 @@ class TokenManager:
             
             self.logger.info(f"Loaded {len(tokens_list)} tokens from file: {self.token_file_path}")
             
+        except ValueError:
+            raise
         except Exception as e:
             self.logger.error(f"Failed to load tokens from file {self.token_file_path}: {e}")
     
@@ -385,6 +397,7 @@ class TokenManager:
                 raw_token = custom_token
             else:
                 raw_token = self.generate_token()
+            self._validate_static_token_prefix(raw_token)
             
             # Calculate expiration
             expires_at = None

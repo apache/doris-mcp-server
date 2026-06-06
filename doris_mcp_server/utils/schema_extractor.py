@@ -48,6 +48,16 @@ MULTI_DATABASE_NAMES=os.getenv("MULTI_DATABASE_NAMES","")
 # Import local modules
 from .db import DorisConnectionManager
 
+
+class DorisOAuthMetadataError(RuntimeError):
+    """Structured metadata failure for Doris OAuth MCP tool responses."""
+
+    def __init__(self, message: str, *, error_code: str, status_code: int):
+        super().__init__(message)
+        self.error_code = error_code
+        self.status_code = status_code
+
+
 class MetadataExtractor:
     """Apache Doris Metadata Extractor"""
     
@@ -89,6 +99,112 @@ class MetadataExtractor:
         
         # Session ID for database queries
         self._session_id = f"metadata_extractor_{uuid.uuid4().hex[:8]}"
+
+    def _current_auth_context(self):
+        try:
+            from .security import mcp_auth_context_var
+            return mcp_auth_context_var.get()
+        except Exception:
+            return None
+
+    def _is_doris_oauth_context(self, auth_context=None) -> bool:
+        context = auth_context if auth_context is not None else self._current_auth_context()
+        return getattr(context, "auth_method", "") == "doris_oauth"
+
+    def _metadata_error_from_exception(self, exc: Exception) -> DorisOAuthMetadataError:
+        error_code = getattr(exc, "error_code", None)
+        status_code = getattr(exc, "status_code", None)
+        message = str(exc) or exc.__class__.__name__
+        if error_code:
+            return DorisOAuthMetadataError(
+                message,
+                error_code=str(error_code),
+                status_code=int(status_code or 500),
+            )
+
+        mysql_error_code = None
+        if getattr(exc, "args", None):
+            try:
+                mysql_error_code = int(exc.args[0])
+            except (TypeError, ValueError):
+                mysql_error_code = None
+        if mysql_error_code in {1044, 1045, 1049, 1142, 1227}:
+            return DorisOAuthMetadataError(
+                message,
+                error_code="DORIS_OAUTH_METADATA_PERMISSION_DENIED",
+                status_code=403,
+            )
+
+        lowered = message.lower()
+        if any(marker in lowered for marker in ("permission denied", "access denied", "not authorized", "privilege")):
+            return DorisOAuthMetadataError(
+                message,
+                error_code="DORIS_OAUTH_METADATA_PERMISSION_DENIED",
+                status_code=403,
+            )
+        return DorisOAuthMetadataError(
+            message,
+            error_code="DORIS_OAUTH_METADATA_BACKEND_ERROR",
+            status_code=502,
+        )
+
+    def _reraise_if_doris_oauth_metadata_error(self, exc: Exception) -> None:
+        if isinstance(exc, DorisOAuthMetadataError):
+            raise exc
+        if self._is_doris_oauth_context():
+            raise self._metadata_error_from_exception(exc) from exc
+
+    def _doris_oauth_table_not_visible_error(
+        self,
+        table_name: str,
+        db_name: str | None = None,
+        catalog_name: str | None = None,
+    ) -> DorisOAuthMetadataError:
+        qualified_name = ".".join(
+            part
+            for part in (
+                catalog_name or self.catalog_name,
+                db_name or self.db_name,
+                table_name,
+            )
+            if part
+        )
+        return DorisOAuthMetadataError(
+            f"Doris OAuth metadata table is not visible or does not exist: {qualified_name or table_name}",
+            error_code="DORIS_OAUTH_METADATA_NOT_VISIBLE",
+            status_code=404,
+        )
+
+    def _raise_if_doris_oauth_table_not_visible(
+        self,
+        table_name: str,
+        db_name: str | None = None,
+        catalog_name: str | None = None,
+    ) -> None:
+        if self._is_doris_oauth_context():
+            raise self._doris_oauth_table_not_visible_error(table_name, db_name, catalog_name)
+
+    async def _ensure_table_visible_for_doris_oauth_metadata(
+        self,
+        table_name: str,
+        db_name: str | None = None,
+        catalog_name: str | None = None,
+    ) -> None:
+        if not self._is_doris_oauth_context():
+            return
+
+        effective_db = db_name or self.db_name
+        effective_catalog = catalog_name or self.catalog_name
+        query = f"""
+        SELECT 1 AS TABLE_VISIBLE
+        FROM information_schema.tables
+        WHERE TABLE_SCHEMA = '{effective_db}'
+          AND TABLE_NAME = '{table_name}'
+        LIMIT 1
+        """
+        result = await self._execute_query_with_catalog_async(query, effective_db, effective_catalog)
+        if not result or not result[0]:
+            raise self._doris_oauth_table_not_visible_error(table_name, effective_db, effective_catalog)
         
     def _load_excluded_databases(self) -> List[str]:
         """
@@ -1192,17 +1308,9 @@ class MetadataExtractor:
         Returns:
             Query result data (list of dictionaries or pandas DataFrame)
         """
+        auth_context = self._current_auth_context()
         try:
             if self.connection_manager:
-                # FIX: Get auth_context from global ContextVar for token-bound database configuration
-                # This ensures all query methods use the correct user's connection pool
-                auth_context = None
-                try:
-                    from .security import mcp_auth_context_var
-                    auth_context = mcp_auth_context_var.get()
-                except Exception:
-                    pass
-                
                 # Use the injected connection manager directly (async)
                 result = await self.connection_manager.execute_query(self._session_id, query, None, auth_context)
                 
@@ -1222,6 +1330,12 @@ class MetadataExtractor:
                 else:
                     return data
             else:
+                if self._is_doris_oauth_context(auth_context):
+                    raise DorisOAuthMetadataError(
+                        "Doris OAuth metadata connection manager is unavailable",
+                        error_code="DORIS_OAUTH_POOL_MISSING",
+                        status_code=401,
+                    )
                 # Fallback: Return empty result
                 logger.warning("No connection manager provided, returning empty result")
                 if return_dataframe:
@@ -1231,6 +1345,8 @@ class MetadataExtractor:
                     return []
         except Exception as e:
             logger.error(f"Error executing query: {str(e)}")
+            if self._is_doris_oauth_context(auth_context):
+                raise self._metadata_error_from_exception(e) from e
             # Return empty result instead of raising exception to prevent cascade failures
             if return_dataframe:
                 import pandas as pd
@@ -1272,6 +1388,7 @@ class MetadataExtractor:
             result = await self._execute_query_async(query, db_name)
             
             if not result:
+                self._raise_if_doris_oauth_table_not_visible(table_name, effective_db, effective_catalog)
                 return []
             
             # Process results
@@ -1292,6 +1409,7 @@ class MetadataExtractor:
             
         except Exception as e:
             logger.error(f"Failed to get table schema: {e}")
+            self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
     async def get_all_databases_async(self, catalog_name: str = None) -> List[str]:
@@ -1329,6 +1447,7 @@ class MetadataExtractor:
             
         except Exception as e:
             logger.error(f"Failed to get database list: {e}")
+            self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
     async def get_database_tables_async(self, db_name: str = None, catalog_name: str = None) -> List[str]:
@@ -1373,6 +1492,7 @@ class MetadataExtractor:
             
         except Exception as e:
             logger.error(f"Failed to get table list: {e}")
+            self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
     async def get_catalog_list_async(self) -> List[str]:
@@ -1404,6 +1524,7 @@ class MetadataExtractor:
             
         except Exception as e:
             logger.error(f"Failed to get catalog list: {e}")
+            self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
     async def get_table_comment_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> str:
@@ -1433,10 +1554,12 @@ class MetadataExtractor:
 
             result = await self._execute_query_with_catalog_async(query, effective_db, effective_catalog)
             if not result or not result[0]:
+                self._raise_if_doris_oauth_table_not_visible(table_name, effective_db, effective_catalog)
                 return ""
             return result[0].get("TABLE_COMMENT", "") or ""
         except Exception as e:
             logger.error(f"Failed to get table comment asynchronously: {e}")
+            self._reraise_if_doris_oauth_metadata_error(e)
             return ""
 
     async def get_column_comments_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> Dict[str, str]:
@@ -1468,14 +1591,22 @@ class MetadataExtractor:
             """
 
             rows = await self._execute_query_with_catalog_async(query, effective_db, effective_catalog)
+            if not rows:
+                await self._ensure_table_visible_for_doris_oauth_metadata(
+                    table_name,
+                    effective_db,
+                    effective_catalog,
+                )
+                return {}
             comments: Dict[str, str] = {}
-            for col in rows or []:
+            for col in rows:
                 name = col.get("COLUMN_NAME", "")
                 if name:
                     comments[name] = col.get("COLUMN_COMMENT", "") or ""
             return comments
         except Exception as e:
             logger.error(f"Failed to get column comments asynchronously: {e}")
+            self._reraise_if_doris_oauth_metadata_error(e)
             return {}
 
     async def get_table_indexes_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> List[Dict[str, Any]]:
@@ -1532,10 +1663,17 @@ class MetadataExtractor:
                         continue
                 if current_index is not None:
                     indexes.append(current_index)
+            else:
+                await self._ensure_table_visible_for_doris_oauth_metadata(
+                    table_name,
+                    effective_db,
+                    effective_catalog,
+                )
 
             return indexes
         except Exception as e:
             logger.error(f"Error getting index information asynchronously: {str(e)}")
+            self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
     async def get_recent_audit_logs_async(self, days: int = 7, limit: int = 100):
@@ -1564,7 +1702,15 @@ class MetadataExtractor:
 
     # ==================== Business layer methods (original metadata_tools.py functionality) ====================
     
-    def _format_response(self, success: bool, result: Any = None, error: str = None, message: str = "") -> Dict[str, Any]:
+    def _format_response(
+        self,
+        success: bool,
+        result: Any = None,
+        error: str = None,
+        message: str = "",
+        error_code: str | None = None,
+        status_code: int | None = None,
+    ) -> Dict[str, Any]:
         """Format response result"""
         response_data = {
             "success": success,
@@ -1576,8 +1722,21 @@ class MetadataExtractor:
         elif not success:
             response_data["error"] = error or "Unknown error"
             response_data["message"] = message or "Operation failed"
+            if error_code:
+                response_data["error_code"] = error_code
+            if status_code:
+                response_data["status_code"] = status_code
         
         return response_data
+
+    def _format_metadata_error_response(self, exc: Exception, message: str) -> Dict[str, Any]:
+        return self._format_response(
+            success=False,
+            error=str(exc),
+            message=message,
+            error_code=getattr(exc, "error_code", None),
+            status_code=getattr(exc, "status_code", None),
+        )
 
     async def exec_query_for_mcp(
         self,
@@ -1600,56 +1759,30 @@ class MetadataExtractor:
             if not sql:
                 return self._format_response(success=False, error="No SQL statement provided", message="Please provide SQL statement to execute")
 
-            # FIX for Issue #62 Bug 3: Build context switching SQL if db_name or catalog_name is specified
-            # SECURITY FIX: Validate catalog_name and db_name to prevent SQL injection
-            final_sql = sql
-            if catalog_name or db_name:
-                context_statements = []
+            # SECURITY FIX: Validate catalog_name and db_name to prevent SQL injection.
+            # The query executor performs context switching and the target SQL on
+            # the same routed connection when either context parameter is supplied.
+            if catalog_name:
+                try:
+                    validate_identifier(catalog_name, "catalog name")
+                except SQLSecurityError as e:
+                    logger.warning(f"Invalid catalog name rejected: {e}")
+                    return self._format_response(
+                        success=False,
+                        error=f"Invalid catalog name: {catalog_name}",
+                        message="Catalog name contains invalid characters",
+                    )
 
-                # Validate and sanitize catalog_name
-                if catalog_name:
-                    try:
-                        validate_identifier(catalog_name, "catalog name")
-                    except SQLSecurityError as e:
-                        logger.warning(f"Invalid catalog name rejected: {e}")
-                        return self._format_response(
-                            success=False, 
-                            error=f"Invalid catalog name: {catalog_name}", 
-                            message="Catalog name contains invalid characters"
-                        )
-                    # Use quote_identifier to safely escape the catalog name
-                    safe_catalog = quote_identifier(catalog_name, "catalog name")
-                    context_statements.append(f"USE CATALOG {safe_catalog}")
-                    logger.debug(f"Switching to catalog: {catalog_name}")
-
-                # Validate and sanitize db_name
-                if db_name:
-                    try:
-                        validate_identifier(db_name, "database name")
-                    except SQLSecurityError as e:
-                        logger.warning(f"Invalid database name rejected: {e}")
-                        return self._format_response(
-                            success=False, 
-                            error=f"Invalid database name: {db_name}", 
-                            message="Database name contains invalid characters"
-                        )
-                    # Use quote_identifier to safely escape the database name
-                    safe_db = quote_identifier(db_name, "database name")
-                    if catalog_name:
-                        safe_catalog = quote_identifier(catalog_name, "catalog name")
-                        context_statements.append(f"USE {safe_catalog}.{safe_db}")
-                    else:
-                        context_statements.append(f"USE {safe_db}")
-                    logger.debug(f"Switching to database: {db_name}")
-
-                # Combine context switching with original SQL
-                if context_statements:
-                    # Remove trailing semicolon from context statements if present
-                    context_sql = "; ".join(context_statements)
-                    # Ensure original SQL doesn't start with semicolon
-                    sql_clean = sql.lstrip(";").strip()
-                    final_sql = f"{context_sql}; {sql_clean}"
-                    logger.debug(f"Modified SQL with context switching: {final_sql[:200]}...")
+            if db_name:
+                try:
+                    validate_identifier(db_name, "database name")
+                except SQLSecurityError as e:
+                    logger.warning(f"Invalid database name rejected: {e}")
+                    return self._format_response(
+                        success=False,
+                        error=f"Invalid database name: {db_name}",
+                        message="Database name contains invalid characters",
+                    )
 
             # FIX: Try to get auth_context from context variable (set by HTTP middleware)
             # This allows token-bound database configuration to work
@@ -1675,10 +1808,12 @@ class MetadataExtractor:
 
             # Call execute_sql_query to execute query with auth_context
             exec_result = await execute_sql_query(
-                sql=final_sql,  # Use modified SQL with context switching
+                sql=sql,
                 connection_manager=self.connection_manager,
                 limit=max_rows,
                 timeout=timeout,
+                db_name=db_name,
+                catalog_name=catalog_name,
                 auth_context=auth_context  # FIX: Pass auth_context with token
             )
 
@@ -1743,7 +1878,7 @@ class MetadataExtractor:
             return self._format_response(success=True, result=schema)
         except Exception as e:
             logger.error(f"Failed to get table schema: {str(e)}", exc_info=True)
-            return self._format_response(success=False, error=str(e), message="Error occurred while getting table schema")
+            return self._format_metadata_error_response(e, "Error occurred while getting table schema")
 
     async def get_db_table_list_for_mcp(
         self, 
@@ -1779,7 +1914,7 @@ class MetadataExtractor:
             return self._format_response(success=True, result=tables)
         except Exception as e:
             logger.error(f"Failed to get database table list: {str(e)}", exc_info=True)
-            return self._format_response(success=False, error=str(e), message="Error occurred while getting database table list")
+            return self._format_metadata_error_response(e, "Error occurred while getting database table list")
 
     async def get_db_list_for_mcp(self, catalog_name: str = None) -> Dict[str, Any]:
         """Get list of all database names on server - MCP interface"""
@@ -1790,7 +1925,7 @@ class MetadataExtractor:
             return self._format_response(success=True, result=databases)
         except Exception as e:
             logger.error(f"Failed to get database list: {str(e)}", exc_info=True)
-            return self._format_response(success=False, error=str(e), message="Error occurred while getting database list")
+            return self._format_metadata_error_response(e, "Error occurred while getting database list")
 
     async def get_table_comment_for_mcp(
         self, 
@@ -1839,7 +1974,7 @@ class MetadataExtractor:
             return self._format_response(success=True, result=comment)
         except Exception as e:
             logger.error(f"Failed to get table comment: {str(e)}", exc_info=True)
-            return self._format_response(success=False, error=str(e), message="Error occurred while getting table comment")
+            return self._format_metadata_error_response(e, "Error occurred while getting table comment")
 
     async def get_table_column_comments_for_mcp(
         self, 
@@ -1888,7 +2023,7 @@ class MetadataExtractor:
             return self._format_response(success=True, result=comments)
         except Exception as e:
             logger.error(f"Failed to get table column comments: {str(e)}", exc_info=True)
-            return self._format_response(success=False, error=str(e), message="Error occurred while getting table column comments")
+            return self._format_metadata_error_response(e, "Error occurred while getting table column comments")
 
     async def get_table_indexes_for_mcp(
         self, 
@@ -1937,7 +2072,7 @@ class MetadataExtractor:
             return self._format_response(success=True, result=indexes)
         except Exception as e:
             logger.error(f"Failed to get table indexes: {str(e)}", exc_info=True)
-            return self._format_response(success=False, error=str(e), message="Error occurred while getting table indexes")
+            return self._format_metadata_error_response(e, "Error occurred while getting table indexes")
 
     def _serialize_datetime_objects(self, data):
         """Serialize datetime objects to JSON compatible format"""
@@ -1989,7 +2124,7 @@ class MetadataExtractor:
             return self._format_response(success=True, result=catalogs, message="Successfully retrieved catalog list")
         except Exception as e:
             logger.error(f"Failed to get catalog list: {str(e)}", exc_info=True)
-            return self._format_response(success=False, error=str(e), message="Error occurred while getting catalog list")
+            return self._format_metadata_error_response(e, "Error occurred while getting catalog list")
 
 
 # ==================== Compatibility aliases ====================

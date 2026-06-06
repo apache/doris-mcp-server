@@ -23,9 +23,13 @@ Supports asynchronous operations and concurrent connection management, ensuring 
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import re
+import secrets
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -79,10 +83,57 @@ class QueryResult:
     sql: str
 
 
+@dataclass
+class DorisUserPoolMeta:
+    """Metadata for an active Doris-user-owned pool."""
+
+    user: str
+    pool_key: str
+    owner_id: str
+    created_at: datetime
+    last_used: datetime
+    maxsize: int
+    database: str
+    charset: str
+    credential_fingerprint: str
+    generation: int = 0
+
+
+class DorisUserPoolMissingError(RuntimeError):
+    """Raised when a Doris OAuth request has no local Doris user pool."""
+
+    error_code = "DORIS_OAUTH_POOL_MISSING"
+    status_code = 401
+
+    def __init__(self, message: str = "Doris OAuth user pool is missing"):
+        super().__init__(message)
+
+
+class DorisUserAuthenticationError(RuntimeError):
+    """Raised when Doris username/password authentication fails."""
+
+    error_code = "DORIS_AUTHENTICATION_FAILED"
+    status_code = 401
+
+    def __init__(self, message: str = "Doris user authentication failed"):
+        super().__init__(message)
+
+
 class DorisConnection:
     """Doris database connection wrapper class"""
 
-    def __init__(self, connection: Connection, session_id: str, security_manager=None):
+    def __init__(
+        self,
+        connection: Connection,
+        session_id: str,
+        security_manager=None,
+        *,
+        pool_kind: str = "global",
+        route_key: str = "global",
+        owner_id: str = "global:0",
+        generation: int = 0,
+        owner_pool: Any | None = None,
+    ):
         self.connection = connection
         self.session_id = session_id
         self.created_at = datetime.utcnow()
@@ -90,6 +141,11 @@ class DorisConnection:
         self.query_count = 0
         self.is_healthy = True
         self.security_manager = security_manager
+        self.pool_kind = pool_kind
+        self.route_key = route_key
+        self.owner_id = owner_id
+        self.generation = generation
+        self.owner_pool = owner_pool
         self.logger = get_logger(__name__)
 
     async def execute(self, sql: str, params: tuple | None = None, auth_context=None) -> QueryResult:
@@ -272,6 +328,18 @@ class DorisConnectionManager:
         self.token_configs: Dict[str, dict] = {}  # token_hash -> db_config
         self._token_pool_locks: Dict[str, asyncio.Lock] = {}  # token_hash -> lock
         self._token_pools_lock = asyncio.Lock()  # Lock for managing token_pools dict
+        self._token_pool_owner_ids: Dict[str, str] = {}  # token_hash -> owner id
+        self._token_pool_generations: Dict[str, int] = {}  # token_hash -> physical pool generation
+
+        # Doris OAuth user-owned pool state. Raw Doris passwords are never stored.
+        self.doris_user_pools: Dict[str, Pool] = {}  # normalized Doris user -> active pool
+        self.doris_user_pool_meta: Dict[str, DorisUserPoolMeta] = {}
+        self._retired_doris_user_pools: Dict[str, Pool] = {}  # owner_id -> retired pool
+        self._doris_user_pool_locks: Dict[str, asyncio.Lock] = {}
+        self._doris_user_pools_lock = asyncio.Lock()
+        self._doris_user_pool_secret = secrets.token_bytes(32)
+        self._global_pool_owner_id = "global:0"
+        self._global_pool_generation = 0
 
         # FIX for Issue #58 Problem 1: Disable session caching to prevent connection sharing
         # Session caching causes multiple threads to share the same MySQL connection,
@@ -413,6 +481,354 @@ class DorisConnectionManager:
             if old_config.get(key) != new_config.get(key):
                 return True
         return False
+
+    def _validate_doris_user(self, user: str) -> str:
+        """Validate and normalize a Doris username for pool routing."""
+        if not isinstance(user, str) or not user:
+            raise DorisUserAuthenticationError("Doris user must be a non-empty string")
+        if user != user.strip():
+            raise DorisUserAuthenticationError("Doris user must not contain leading or trailing whitespace")
+        if len(user) > 256:
+            raise DorisUserAuthenticationError("Doris user is too long")
+        if any(ch in user for ch in ("\x00", "\n", "\r")):
+            raise DorisUserAuthenticationError("Doris user contains invalid characters")
+        return user
+
+    def _validate_doris_password(self, password: str) -> None:
+        """Validate a Doris password without logging or storing it."""
+        if not isinstance(password, str) or not password:
+            raise DorisUserAuthenticationError("Doris password must be a non-empty string")
+        if len(password) > 256:
+            raise DorisUserAuthenticationError("Doris password is too long")
+        if any(ch in password for ch in ("\x00", "\n", "\r")):
+            raise DorisUserAuthenticationError("Doris password contains invalid characters")
+
+    def _validate_doris_auth_retries(self, max_retries: int) -> int:
+        if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 1:
+            raise DorisUserAuthenticationError("max_retries must be a positive integer")
+        return max_retries
+
+    def _doris_user_route_key(self, user: str) -> str:
+        return f"doris_user:{user}"
+
+    def _credential_fingerprint(self, password: str) -> str:
+        return hmac.new(
+            self._doris_user_pool_secret,
+            password.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _get_doris_user_pool_maxsize(self) -> int:
+        return max(1, min(5, int(self.maxsize or 1)))
+
+    def _build_doris_user_db_config(self, user: str, password: str) -> dict:
+        return {
+            "host": self.original_db_config["host"],
+            "port": self.original_db_config["port"],
+            "user": user,
+            "password": password,
+            # Per-user pools must not depend on the service/global default DB:
+            # low-privilege Doris RBAC users may lack access to it. Queries can
+            # still use fully qualified names or select a DB later.
+            "database": "information_schema",
+            "charset": self.original_db_config["charset"],
+            "maxsize": self._get_doris_user_pool_maxsize(),
+        }
+
+    async def _get_doris_user_lock(self, user: str) -> asyncio.Lock:
+        async with self._doris_user_pools_lock:
+            lock = self._doris_user_pool_locks.get(user)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._doris_user_pool_locks[user] = lock
+            return lock
+
+    async def _close_pool_safely(self, pool: Pool | None, label: str, timeout: float = 2.0) -> None:
+        """Close a pool without letting one failure block broader cleanup."""
+        if not pool:
+            return
+        try:
+            if getattr(pool, "closed", False) is not True:
+                pool.close()
+            wait_closed = getattr(pool, "wait_closed", None)
+            if wait_closed:
+                try:
+                    await asyncio.wait_for(wait_closed(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    self.logger.warning(f"Timeout waiting for {label} pool to close")
+        except Exception as e:
+            self.logger.warning(f"Error closing {label} pool: {e}")
+
+    async def _force_close_raw_connection(self, raw_connection: Any, reason: str) -> None:
+        """Force-close a raw connection when owner-based release is impossible."""
+        if not raw_connection:
+            return
+        try:
+            if getattr(raw_connection, "closed", False) is True:
+                return
+            ensure_closed = getattr(raw_connection, "ensure_closed", None)
+            if ensure_closed:
+                result = ensure_closed()
+                if asyncio.iscoroutine(result):
+                    await result
+                return
+            close = getattr(raw_connection, "close", None)
+            if close:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+        except Exception as e:
+            self.logger.debug(f"Error force closing connection after {reason}: {e}")
+
+    async def _close_auth_connection(self, conn: Any) -> None:
+        if not conn:
+            return
+        try:
+            close = getattr(conn, "close", None)
+            if close:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
+                return
+            ensure_closed = getattr(conn, "ensure_closed", None)
+            if ensure_closed:
+                result = ensure_closed()
+                if asyncio.iscoroutine(result):
+                    await result
+        except Exception as e:
+            self.logger.debug(f"Error closing Doris auth connection: {e}")
+
+    def _mark_global_pool_created(self) -> None:
+        self._global_pool_generation += 1
+        self._global_pool_owner_id = f"global:gen:{self._global_pool_generation}:{uuid.uuid4().hex}"
+
+    async def authenticate_doris_user(
+        self,
+        user: str,
+        password: str,
+        *,
+        max_retries: int = 1,
+    ) -> None:
+        """Validate Doris username/password against FE MySQL without creating a pool."""
+        normalized_user = self._validate_doris_user(user)
+        self._validate_doris_password(password)
+        retries = self._validate_doris_auth_retries(max_retries)
+
+        last_error: Exception | None = None
+        for attempt in range(1, retries + 1):
+            conn = None
+            try:
+                conn = await aiomysql.connect(
+                    host=self.original_db_config["host"],
+                    port=self.original_db_config["port"],
+                    user=normalized_user,
+                    password=password,
+                    db="information_schema",
+                    charset=self.charset,
+                    connect_timeout=self.connect_timeout,
+                    autocommit=True,
+                )
+                return
+            except DorisUserAuthenticationError:
+                raise
+            except Exception as e:
+                last_error = e
+                self.logger.warning(
+                    "Doris user authentication failed for %s@%s:%s on attempt %s/%s: %s",
+                    normalized_user,
+                    self.original_db_config["host"],
+                    self.original_db_config["port"],
+                    attempt,
+                    retries,
+                    type(e).__name__,
+                )
+            finally:
+                await self._close_auth_connection(conn)
+
+        raise DorisUserAuthenticationError(
+            f"Doris user authentication failed for {normalized_user}: {type(last_error).__name__}"
+        )
+
+    async def create_or_replace_doris_user_pool(
+        self,
+        user: str,
+        password: str,
+        *,
+        max_retries: int = 1,
+    ) -> None:
+        """Authenticate a Doris user, then create/reuse/soft-replace its pool."""
+        normalized_user = self._validate_doris_user(user)
+        self._validate_doris_password(password)
+        self._validate_doris_auth_retries(max_retries)
+
+        await self.authenticate_doris_user(normalized_user, password, max_retries=max_retries)
+        fingerprint = self._credential_fingerprint(password)
+        lock = await self._get_doris_user_lock(normalized_user)
+        old_pool = None
+        old_owner_id = ""
+
+        async with lock:
+            existing = self.doris_user_pools.get(normalized_user)
+            meta = self.doris_user_pool_meta.get(normalized_user)
+            if (
+                existing
+                and getattr(existing, "closed", False) is not True
+                and meta
+                and meta.credential_fingerprint == fingerprint
+            ):
+                meta.last_used = datetime.utcnow()
+                self.logger.debug("Reusing Doris user pool for %s", normalized_user)
+                return
+
+            db_config = self._build_doris_user_db_config(normalized_user, password)
+            new_pool = await self._create_pool_with_config(db_config)
+
+            old_pool = existing
+            old_meta = meta
+            generation = (old_meta.generation + 1) if old_meta else 1
+            owner_id = f"doris_user:{normalized_user}:gen:{generation}:{uuid.uuid4().hex}"
+            now = datetime.utcnow()
+            new_meta = DorisUserPoolMeta(
+                user=normalized_user,
+                pool_key=self._doris_user_route_key(normalized_user),
+                owner_id=owner_id,
+                created_at=now,
+                last_used=now,
+                maxsize=db_config["maxsize"],
+                database=db_config["database"],
+                charset=db_config["charset"],
+                credential_fingerprint=fingerprint,
+                generation=generation,
+            )
+
+            self.doris_user_pools[normalized_user] = new_pool
+            self.doris_user_pool_meta[normalized_user] = new_meta
+            if old_pool:
+                old_owner_id = old_meta.owner_id if old_meta else f"doris_user:{normalized_user}:retired:{uuid.uuid4().hex}"
+                self._retired_doris_user_pools[old_owner_id] = old_pool
+
+        if old_pool:
+            await self._close_pool_safely(old_pool, f"retired Doris user {old_owner_id}")
+
+    def has_doris_user_pool(self, user: str) -> bool:
+        try:
+            normalized_user = self._validate_doris_user(user)
+        except DorisUserAuthenticationError:
+            return False
+        pool = self.doris_user_pools.get(normalized_user)
+        return bool(pool and getattr(pool, "closed", False) is not True)
+
+    async def get_connection_for_doris_user(self, user: str, session_id: str) -> "DorisConnection":
+        """Acquire a connection from an existing Doris-user pool, fail-closed if absent."""
+        try:
+            normalized_user = self._validate_doris_user(user)
+        except DorisUserAuthenticationError as e:
+            raise DorisUserPoolMissingError(str(e)) from e
+
+        lock = await self._get_doris_user_lock(normalized_user)
+        async with lock:
+            pool = self.doris_user_pools.get(normalized_user)
+            meta = self.doris_user_pool_meta.get(normalized_user)
+            if not pool or getattr(pool, "closed", False) is True or not meta:
+                raise DorisUserPoolMissingError(f"Doris user pool missing for {normalized_user}")
+
+            raw_conn = await asyncio.wait_for(pool.acquire(), timeout=self.connect_timeout)
+            meta.last_used = datetime.utcnow()
+            return DorisConnection(
+                raw_conn,
+                session_id,
+                self.security_manager,
+                pool_kind="doris_user",
+                route_key=meta.pool_key,
+                owner_id=meta.owner_id,
+                generation=meta.generation,
+                owner_pool=pool,
+            )
+
+    async def release_connection_for_doris_user(self, user: str, connection: "DorisConnection") -> None:
+        """Release a Doris-user connection to its captured owner pool."""
+        try:
+            normalized_user = self._validate_doris_user(user)
+            expected_route_key = self._doris_user_route_key(normalized_user)
+        except DorisUserAuthenticationError:
+            expected_route_key = ""
+
+        if connection and (
+            getattr(connection, "pool_kind", "") != "doris_user"
+            or getattr(connection, "route_key", "") != expected_route_key
+        ):
+            self.logger.warning(
+                "Doris user connection route mismatch on release: expected=%s actual=%s kind=%s",
+                expected_route_key,
+                getattr(connection, "route_key", ""),
+                getattr(connection, "pool_kind", ""),
+            )
+        await self.release_routed_connection(connection)
+
+    async def evict_doris_user_pool(self, user: str) -> None:
+        """Remove and close a Doris-user pool if it exists."""
+        try:
+            normalized_user = self._validate_doris_user(user)
+        except DorisUserAuthenticationError:
+            return
+
+        lock = await self._get_doris_user_lock(normalized_user)
+        pool = None
+        owner_id = ""
+        async with lock:
+            pool = self.doris_user_pools.pop(normalized_user, None)
+            meta = self.doris_user_pool_meta.pop(normalized_user, None)
+            owner_id = meta.owner_id if meta else self._doris_user_route_key(normalized_user)
+            if pool and meta:
+                self._retired_doris_user_pools[meta.owner_id] = pool
+
+        await self._close_pool_safely(pool, f"evicted Doris user {owner_id}")
+
+    async def cleanup_idle_doris_user_pools(
+        self,
+        active_users: set[str] | None = None,
+        max_idle_time: int | None = None,
+    ) -> None:
+        """Close Doris-user pools that are not in active_users and are optionally idle."""
+        active_users = active_users or set()
+        normalized_active_users = {u for u in active_users if isinstance(u, str)}
+        now = datetime.utcnow()
+        users_to_remove: list[str] = []
+
+        async with self._doris_user_pools_lock:
+            for user, pool in list(self.doris_user_pools.items()):
+                meta = self.doris_user_pool_meta.get(user)
+                if user in normalized_active_users:
+                    continue
+                if max_idle_time is not None and meta:
+                    idle_seconds = (now - meta.last_used).total_seconds()
+                    if idle_seconds < max_idle_time:
+                        continue
+                if pool:
+                    users_to_remove.append(user)
+
+        for user in users_to_remove:
+            await self.evict_doris_user_pool(user)
+
+    async def close_all_doris_user_pools(self) -> None:
+        """Close all active and retired Doris-user pools for shutdown."""
+        async with self._doris_user_pools_lock:
+            pools_by_owner: list[tuple[str, Pool]] = []
+            for user, pool in list(self.doris_user_pools.items()):
+                meta = self.doris_user_pool_meta.get(user)
+                pools_by_owner.append((meta.owner_id if meta else self._doris_user_route_key(user), pool))
+            pools_by_owner.extend(list(self._retired_doris_user_pools.items()))
+            self.doris_user_pools.clear()
+            self.doris_user_pool_meta.clear()
+            self._retired_doris_user_pools.clear()
+            self._doris_user_pool_locks.clear()
+
+        seen_pool_ids: set[int] = set()
+        for owner_id, pool in pools_by_owner:
+            if not pool or id(pool) in seen_pool_ids:
+                continue
+            seen_pool_ids.add(id(pool))
+            await self._close_pool_safely(pool, f"Doris user {owner_id}")
     
     async def get_pool_for_token(self, token: str) -> tuple[Pool, dict]:
         """Get or create a dedicated connection pool for a specific token
@@ -454,6 +870,7 @@ class DorisConnectionManager:
                         except Exception as e:
                             self.logger.warning(f"Error closing old pool during hot reload: {e}")
                     self.token_configs.pop(token_hash, None)
+                    self._token_pool_owner_ids.pop(token_hash, None)
                 # Continue to slow path to create new pool
             elif pool and not pool.closed:
                 return pool, cached_config
@@ -503,6 +920,11 @@ class DorisConnectionManager:
             # Store pool and config
             self.token_pools[token_hash] = pool
             self.token_configs[token_hash] = db_config
+            token_generation = self._token_pool_generations.get(token_hash, 0) + 1
+            self._token_pool_generations[token_hash] = token_generation
+            self._token_pool_owner_ids[token_hash] = (
+                f"static_token:{token_hash}:gen:{token_generation}:{uuid.uuid4().hex}"
+            )
             
             # Create lock for this token if not exists
             if token_hash not in self._token_pool_locks:
@@ -535,7 +957,7 @@ class DorisConnectionManager:
                     db=db_config['database'],
                     charset=charset,
                     minsize=0,  # Don't pre-create connections
-                    maxsize=self.maxsize,
+                    maxsize=db_config.get('maxsize', self.maxsize),
                     connect_timeout=self.connect_timeout,
                     autocommit=True,
                     pool_recycle=self.pool_recycle
@@ -572,7 +994,17 @@ class DorisConnectionManager:
             self.logger.debug(f"Session {session_id}: Acquired connection from token pool "
                             f"(user: {db_config['user']}@{db_config['host']})")
             
-            return DorisConnection(connection, session_id, self.security_manager)
+            token_hash = self._get_token_hash(token)
+            return DorisConnection(
+                connection,
+                session_id,
+                self.security_manager,
+                pool_kind="static_token",
+                route_key=f"static_token:{token_hash}",
+                owner_id=self._token_pool_owner_ids.get(token_hash, f"static_token:{token_hash}:0"),
+                generation=self._token_pool_generations.get(token_hash, 0),
+                owner_pool=pool,
+            )
             
         except Exception as e:
             self.logger.error(f"Session {session_id}: Failed to acquire connection from token pool: {e}")
@@ -586,14 +1018,19 @@ class DorisConnectionManager:
             connection: DorisConnection wrapper to release
         """
         token_hash = self._get_token_hash(token)
-        
-        if token_hash in self.token_pools:
-            pool = self.token_pools[token_hash]
-            if pool and not pool.closed:
-                try:
-                    pool.release(connection.connection)
-                except Exception as e:
-                    self.logger.warning(f"Failed to release connection to token pool: {e}")
+        expected_route_key = f"static_token:{token_hash}"
+
+        if connection and (
+            getattr(connection, "pool_kind", "") != "static_token"
+            or getattr(connection, "route_key", "") != expected_route_key
+        ):
+            self.logger.warning(
+                "Static token connection route mismatch on release: expected=%s actual=%s kind=%s",
+                expected_route_key,
+                getattr(connection, "route_key", ""),
+                getattr(connection, "pool_kind", ""),
+            )
+        await self.release_routed_connection(connection)
     
     async def cleanup_token_pools(self, max_idle_time: int = 3600):
         """Clean up idle token connection pools
@@ -620,6 +1057,8 @@ class DorisConnectionManager:
                         await pool.wait_closed()
                     self.token_configs.pop(token_hash, None)
                     self._token_pool_locks.pop(token_hash, None)
+                    self._token_pool_owner_ids.pop(token_hash, None)
+                    self._token_pool_generations.pop(token_hash, None)
                     self.logger.info(f"Cleaned up idle token pool (hash: {token_hash[:8]}...)")
                 except Exception as e:
                     self.logger.warning(f"Error cleaning up token pool: {e}")
@@ -646,12 +1085,16 @@ class DorisConnectionManager:
                     self.token_pools.clear()
                     self.token_configs.clear()
                     self._token_pool_locks.clear()
+                    self._token_pool_owner_ids.clear()
+                    self._token_pool_generations.clear()
         except asyncio.TimeoutError:
             self.logger.warning("Timeout acquiring lock for token pool cleanup, forcing clear")
             # Force clear without lock
             self.token_pools.clear()
             self.token_configs.clear()
             self._token_pool_locks.clear()
+            self._token_pool_owner_ids.clear()
+            self._token_pool_generations.clear()
 
     async def configure_for_token(self, token: str) -> tuple[bool, str]:
         """Configure connection manager for token with new priority logic
@@ -773,6 +1216,7 @@ class DorisConnectionManager:
                 connect_timeout=self.connect_timeout,
                 autocommit=True
             )
+            self._mark_global_pool_created()
             
             # Store the current config for comparison later
             self._last_pool_config = {
@@ -915,6 +1359,7 @@ class DorisConnectionManager:
                 connect_timeout=self.connect_timeout,
                 autocommit=True
             )
+            self._mark_global_pool_created()
             
             # Test initial connection
             if not await self._test_pool_health():
@@ -1130,6 +1575,7 @@ class DorisConnectionManager:
             connect_timeout=self.connect_timeout,
             autocommit=True
         )
+        self._mark_global_pool_created()
         
         # Test pool health
         if not await self._test_pool_health():
@@ -1334,6 +1780,7 @@ class DorisConnectionManager:
                             ),
                             timeout=10.0
                         )
+                        self._mark_global_pool_created()
                         
                         # Test recovered pool with timeout
                         if await asyncio.wait_for(self._test_pool_health(), timeout=5.0):
@@ -1381,31 +1828,49 @@ class DorisConnectionManager:
             if not self.pool_recovering:  # Only recover if not already in progress
                 await self._recover_pool()
 
-    async def get_connection(self, session_id: str) -> DorisConnection:
-        """🔧 FIX: Simplified connection acquisition without double locking
-        
-        Uses only semaphore to prevent too many concurrent acquisitions.
-        If the connection is successfully obtained, it will be added to the connection pool cache.
-        
-        🔧 FIX for token isolation: Now automatically checks for auth_context from ContextVar
-        and uses token-specific connection pool if available.
-        """
-        # 🔧 FIX: Check for auth_context from global ContextVar
-        # This ensures all tools using get_connection respect token-bound database configuration
-        auth_context = None
+    def _get_effective_auth_context(self, auth_context=None):
+        if auth_context is not None:
+            return auth_context
         try:
             from .security import mcp_auth_context_var
-            auth_context = mcp_auth_context_var.get()
+            return mcp_auth_context_var.get()
         except Exception as e:
-            self.logger.debug(f"get_connection: Could not get auth_context: {e}")
-        
-        if auth_context and hasattr(auth_context, 'token') and auth_context.token:
-            # Use token-specific connection pool
-            # SECURITY: Do NOT catch exceptions here - if token pool fails, don't fallback to global pool
-            # This prevents privilege escalation
+            self.logger.debug(f"Could not get auth_context: {e}")
+            return None
+
+    async def _get_connection_for_auth_context(self, session_id: str, auth_context=None) -> DorisConnection:
+        """Resolve the request route with Doris OAuth fail-closed priority."""
+        if auth_context and getattr(auth_context, "auth_method", "") == "doris_oauth":
+            doris_user = getattr(auth_context, "doris_user", "")
+            if not doris_user:
+                raise DorisUserPoolMissingError("Doris OAuth auth context is missing doris_user")
+            try:
+                normalized_user = self._validate_doris_user(doris_user)
+            except DorisUserAuthenticationError as e:
+                raise DorisUserPoolMissingError(str(e)) from e
+            expected_route_key = self._doris_user_route_key(normalized_user)
+            context_pool_key = getattr(auth_context, "pool_key", "")
+            if context_pool_key and context_pool_key != expected_route_key:
+                raise DorisUserPoolMissingError("Doris OAuth pool key does not match doris_user")
+            self.logger.debug("get_connection: Using Doris user pool for session %s", session_id)
+            return await self.get_connection_for_doris_user(normalized_user, session_id)
+
+        if auth_context and getattr(auth_context, "token", ""):
+            # SECURITY: Do not catch token pool errors here; token-bound requests must not fall back.
             self.logger.debug(f"get_connection: Using token-specific pool for session {session_id}")
             return await self.get_connection_for_token(auth_context.token, session_id)
-        
+
+        return await self._get_global_connection(session_id)
+
+    async def get_connection(self, session_id: str) -> DorisConnection:
+        """Acquire a connection using Doris OAuth -> static token -> global priority."""
+        return await self._get_connection_for_auth_context(
+            session_id,
+            self._get_effective_auth_context(),
+        )
+
+    async def _get_global_connection(self, session_id: str) -> DorisConnection:
+        """Acquire a connection from the global pool."""
         cached_conn = self.session_cache.get(session_id)
         if cached_conn:
             return cached_conn
@@ -1470,7 +1935,16 @@ class DorisConnectionManager:
                         raise RuntimeError("Connection acquisition timed out")
                 
                 # Wrap in DorisConnection
-                doris_conn = DorisConnection(raw_conn, session_id, self.security_manager)
+                doris_conn = DorisConnection(
+                    raw_conn,
+                    session_id,
+                    self.security_manager,
+                    pool_kind="global",
+                    route_key="global",
+                    owner_id=self._global_pool_owner_id,
+                    generation=self._global_pool_generation,
+                    owner_pool=self.pool,
+                )
                 
                 # Basic validation - check if connection is open
                 if raw_conn.closed:
@@ -1490,6 +1964,38 @@ class DorisConnectionManager:
                 self.logger.error(f"Failed to get connection for session {session_id}: {e}")
                 raise
 
+    async def release_routed_connection(self, connection: DorisConnection | None) -> None:
+        """Release a DorisConnection to the exact pool captured at acquire time."""
+        if not connection or not getattr(connection, "connection", None):
+            return
+
+        raw_connection = connection.connection
+        owner_pool = getattr(connection, "owner_pool", None)
+        if owner_pool is None:
+            self.logger.warning(
+                "Connection %s has no captured owner pool; force closing raw connection",
+                getattr(connection, "session_id", ""),
+            )
+            await self._force_close_raw_connection(raw_connection, "missing owner pool")
+            return
+
+        try:
+            owner_pool.release(raw_connection)
+            self.logger.debug(
+                "Released %s connection for route=%s owner=%s",
+                getattr(connection, "pool_kind", ""),
+                getattr(connection, "route_key", ""),
+                getattr(connection, "owner_id", ""),
+            )
+        except Exception as release_error:
+            self.logger.warning(
+                "Connection release failed for route=%s owner=%s: %s; force closing",
+                getattr(connection, "route_key", ""),
+                getattr(connection, "owner_id", ""),
+                release_error,
+            )
+            await self._force_close_raw_connection(raw_connection, "owner pool release failure")
+
     async def release_connection(self, session_id: str, connection: DorisConnection):
         """🔧 FIX: Release connection back to pool with proper error handling"""
         cached_conn = self.session_cache.get(session_id)
@@ -1501,6 +2007,14 @@ class DorisConnectionManager:
 
         if not connection or not connection.connection:
             self.logger.debug(f"No connection to release for session {session_id}")
+            return
+
+        if getattr(connection, "owner_pool", None) is not None:
+            await self.release_routed_connection(connection)
+            return
+
+        if getattr(connection, "pool_kind", "global") != "global":
+            await self.release_routed_connection(connection)
             return
             
         try:
@@ -1552,6 +2066,9 @@ class DorisConnectionManager:
                 except asyncio.CancelledError:
                     pass
 
+            # Close Doris OAuth user pools before legacy token/global pools.
+            await self.close_all_doris_user_pools()
+
             # 🔧 FIX: Close all per-token connection pools
             await self.close_all_token_pools()
 
@@ -1590,46 +2107,15 @@ class DorisConnectionManager:
     async def execute_query(
         self, session_id: str, sql: str, params: tuple | None = None, auth_context=None
     ) -> QueryResult:
-        """Execute query - Enhanced Strategy with per-token connection pool isolation
-
-        FIX for multi-tenant concurrency: Each token now uses its own dedicated connection pool
-        to prevent configuration conflicts between concurrent requests from different tokens.
-        """
+        """Execute query using the same routed acquire/release contract as get_connection()."""
         connection = None
-        token = None
+        effective_auth_context = self._get_effective_auth_context(auth_context)
         
         try:
-            # Check if we have a token for per-token pool isolation
-            if auth_context and hasattr(auth_context, 'token') and auth_context.token:
-                token = auth_context.token
-                
-                try:
-                    # 🔧 FIX: Use dedicated connection pool for this token
-                    # This prevents concurrent requests from different tokens interfering
-                    connection = await self.get_connection_for_token(token, session_id)
-                    
-                    # Get the config for logging
-                    token_hash = self._get_token_hash(token)
-                    if token_hash in self.token_configs:
-                        db_config = self.token_configs[token_hash]
-                        self.logger.info(f"Session {session_id}: Using dedicated pool for {db_config['user']}@{db_config['host']}")
-                    
-                except Exception as token_pool_error:
-                    # SECURITY: If token should have pool but creation fails, don't fallback
-                    # This prevents privilege escalation (using high-privilege default user)
-                    self.logger.error(f"Session {session_id}: Token pool error: {token_pool_error}")
-                    raise RuntimeError(
-                        f"Failed to get connection for authenticated token. "
-                        f"This is a security measure to prevent using default high-privilege credentials. "
-                        f"Error: {token_pool_error}"
-                    )
-            else:
-                # No token - use global pool (backward compatibility)
-                self.logger.debug(f"Session {session_id}: No token, using global connection pool")
-                connection = await self.get_connection(session_id)
+            connection = await self._get_connection_for_auth_context(session_id, effective_auth_context)
 
             # Execute query
-            result = await connection.execute(sql, params, auth_context)
+            result = await connection.execute(sql, params, effective_auth_context)
 
             return result
 
@@ -1637,12 +2123,8 @@ class DorisConnectionManager:
             self.logger.error(f"Query execution failed for session {session_id}: {e}")
             raise
         finally:
-            # Always release connection back to the appropriate pool
             if connection:
-                if token:
-                    await self.release_connection_for_token(token, connection)
-                else:
-                    await self.release_connection(session_id, connection)
+                await self.release_connection(session_id, connection)
 
     @asynccontextmanager
     async def get_connection_context(self, session_id: str):

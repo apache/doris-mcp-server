@@ -405,15 +405,24 @@ class SQLAnalyzer:
             except Exception:
                 pass
             
-            # Switch database if specified
-            # SECURITY FIX: Validate and quote db_name
+            context_statements = []
+            if catalog_name:
+                try:
+                    validate_identifier(catalog_name, "catalog name")
+                except SQLSecurityError as e:
+                    return {"success": False, "error": f"Invalid catalog name: {e}"}
+                safe_catalog = quote_identifier(catalog_name, "catalog name")
+                context_statements.append(f"USE CATALOG {safe_catalog}")
+
+            # Switch database if specified.
+            # SECURITY FIX: Validate and quote db_name.
             if db_name:
                 try:
                     validate_identifier(db_name, "database name")
                 except SQLSecurityError as e:
                     return {"success": False, "error": f"Invalid database name: {e}"}
                 safe_db = quote_identifier(db_name, "database name")
-                await self.connection_manager.execute_query("explain_session", f"USE {safe_db}", None, auth_context)
+                context_statements.append(f"USE {safe_db}")
             
             # Construct EXPLAIN query
             explain_type = "EXPLAIN VERBOSE" if verbose else "EXPLAIN"
@@ -421,8 +430,43 @@ class SQLAnalyzer:
             
             logger.info(f"Executing explain query: {explain_sql}")
             
-            # Execute explain query
-            result = await self.connection_manager.execute_query("explain_session", explain_sql, None, auth_context)
+            # Execute context switching and explain query on one routed connection
+            # whenever a database/catalog context is requested.
+            if context_statements:
+                connection = None
+                try:
+                    get_connection_for_auth_context = getattr(
+                        self.connection_manager,
+                        "_get_connection_for_auth_context",
+                        None,
+                    )
+                    if callable(get_connection_for_auth_context):
+                        get_effective_auth_context = getattr(
+                            self.connection_manager,
+                            "_get_effective_auth_context",
+                            None,
+                        )
+                        auth_context = (
+                            get_effective_auth_context(auth_context)
+                            if callable(get_effective_auth_context)
+                            else auth_context
+                        )
+                        connection = await get_connection_for_auth_context(
+                            "explain_session",
+                            auth_context,
+                        )
+                    else:
+                        connection = await self.connection_manager.get_connection("explain_session")
+
+                    for context_sql in context_statements:
+                        await connection.execute(context_sql, auth_context=auth_context)
+                    result = await connection.execute(explain_sql, auth_context=auth_context)
+                finally:
+                    release_connection = getattr(self.connection_manager, "release_connection", None)
+                    if connection is not None and callable(release_connection):
+                        await release_connection("explain_session", connection)
+            else:
+                result = await self.connection_manager.execute_query("explain_session", explain_sql, None, auth_context)
             
             # Format explain output
             explain_content = []

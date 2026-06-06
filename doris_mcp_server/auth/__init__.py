@@ -32,6 +32,8 @@ from .oauth_types import (
     OAuthProvider, OAuthState, OAuthTokens, OAuthUserInfo,
     OIDCDiscovery, OAuthError, OAuthProviderConfig
 )
+from .doris_oauth_provider import DorisOAuthProvider
+from .doris_oauth_store import DorisOAuthStore
 
 __all__ = [
     "JWTManager",
@@ -52,5 +54,7 @@ __all__ = [
     "OAuthUserInfo",
     "OIDCDiscovery",
     "OAuthError",
-    "OAuthProviderConfig"
+    "OAuthProviderConfig",
+    "DorisOAuthProvider",
+    "DorisOAuthStore",
 ]

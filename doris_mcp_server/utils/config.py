@@ -23,9 +23,11 @@ Implements configuration loading, validation and management functionality
 import json
 import logging
 import os
+import multiprocessing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 try:
     from dotenv import load_dotenv
@@ -33,6 +35,153 @@ except ImportError:
     load_dotenv = None
 
 from .logger import get_logger
+
+
+class AuthConfigError(ValueError):
+    """Raised when authentication configuration is inconsistent."""
+
+
+DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT = [
+    "get_db_list",
+    "get_db_table_list",
+    "get_table_schema",
+    "get_table_comment",
+    "get_table_column_comments",
+    "get_table_indexes",
+    "get_catalog_list",
+]
+DORIS_OAUTH_METADATA_TOOL_SET = frozenset(DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT)
+DORIS_OAUTH_QUERY_TOOL_SET = frozenset({"exec_query"})
+DORIS_OAUTH_EXPLAIN_TOOL_SET = frozenset({"get_sql_explain"})
+
+
+@dataclass(frozen=True)
+class ConfigValue:
+    """Configuration value with source metadata."""
+
+    value: Any
+    source: str = "default"
+    explicit: bool = False
+
+
+@dataclass(frozen=True)
+class AuthConfigInputs:
+    """Authentication-related config inputs before normalization."""
+
+    enable_token_auth: ConfigValue
+    enable_jwt_auth: ConfigValue
+    enable_external_oauth_auth: ConfigValue
+    oauth_enabled: ConfigValue
+    enable_doris_oauth_auth: ConfigValue
+    legacy_auth_type: ConfigValue
+    transport: ConfigValue
+    workers: ConfigValue
+
+
+@dataclass(frozen=True)
+class EffectiveAuthConfig:
+    """Normalized authentication configuration used by runtime code."""
+
+    enable_token_auth: bool
+    enable_jwt_auth: bool
+    enable_external_oauth_auth: bool
+    enable_doris_oauth_auth: bool
+    auth_methods: tuple[str, ...]
+    oauth_discovery_mode: str
+    transport: str
+    requested_workers: int
+    effective_workers: int
+    legacy_auth_type: str
+    auth_config_warnings: tuple[str, ...] = ()
+    doris_oauth_base_url: str = ""
+    source_summary: dict[str, str] = field(default_factory=dict)
+
+
+def _str_to_bool(value: Any) -> bool:
+    """Convert common config values to bool."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or str(value).strip() == "":
+        return default
+    return int(value)
+
+
+def _env_optional_int(name: str, default: int | None) -> int | None:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value = str(value).strip()
+    if value == "":
+        return None
+    return int(value)
+
+
+def _env_csv(name: str, default: list[str]) -> list[str]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _coerce_csv_config(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    return [str(part).strip() for part in value if str(part).strip()]
+
+
+def _validate_doris_oauth_metadata_tool_allowlist(tools: Any) -> list[str]:
+    """Validate the Phase 4 metadata-only Doris OAuth tool allowlist."""
+    normalized = []
+    seen = set()
+    invalid = []
+    for tool in _coerce_csv_config(tools):
+        tool_name = str(tool).strip()
+        if not tool_name:
+            continue
+        if tool_name not in DORIS_OAUTH_METADATA_TOOL_SET:
+            invalid.append(tool_name)
+            continue
+        if tool_name not in seen:
+            normalized.append(tool_name)
+            seen.add(tool_name)
+
+    if invalid:
+        invalid_list = ", ".join(sorted(set(invalid)))
+        raise AuthConfigError(
+            "DORIS_OAUTH_DB_TOOL_ALLOWLIST can only contain Phase 4 metadata tools; "
+            f"invalid entries: {invalid_list}"
+        )
+    return normalized
+
+
+def _is_loopback_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
+
+
+def _ensure_source_maps(config: Any) -> None:
+    if not hasattr(config, "_explicit_sources"):
+        config._explicit_sources = {}
+
+
+def _mark_source(config: Any, field_name: str, source: str) -> None:
+    _ensure_source_maps(config)
+    config._explicit_sources[field_name] = source
+
+
+def _config_value(config: Any, field_name: str, value: Any) -> ConfigValue:
+    _ensure_source_maps(config)
+    source = config._explicit_sources.get(field_name, "default")
+    return ConfigValue(value=value, source=source, explicit=source != "default")
 
 
 @dataclass
@@ -81,6 +230,47 @@ class SecurityConfig:
     enable_token_auth: bool = False  # Enable token-based authentication (default: disabled)
     enable_jwt_auth: bool = False    # Enable JWT authentication (default: disabled)
     enable_oauth_auth: bool = False  # Enable OAuth 2.0/OIDC authentication (default: disabled)
+    enable_doris_oauth_auth: bool = False  # Enable Doris-backed OAuth (default: disabled)
+    doris_oauth_base_url: str = ""  # Public base URL for future Doris OAuth metadata
+    doris_oauth_db_tools_enabled: bool = False
+    doris_oauth_db_tool_allowlist: list[str] = field(
+        default_factory=lambda: list(DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT)
+    )
+    doris_oauth_query_tools_enabled: bool = False
+    doris_oauth_query_tool_allowlist: list[str] = field(default_factory=lambda: ["exec_query"])
+    doris_oauth_explain_tools_enabled: bool = False
+    doris_oauth_explain_tool_allowlist: list[str] = field(default_factory=lambda: ["get_sql_explain"])
+    doris_oauth_access_token_expire_seconds: int = 900
+    doris_oauth_refresh_token_expire_seconds: int = 86400
+    doris_oauth_auth_code_expire_seconds: int = 300
+    doris_oauth_gc_interval_seconds: int = 60
+    doris_oauth_idle_timeout_seconds: int | None = None
+    doris_oauth_login_page_title: str = "Doris MCP Login"
+    doris_oauth_allowed_redirect_uris: list[str] = field(default_factory=list)
+    doris_oauth_clients_file: str = ""
+    doris_oauth_dynamic_client_registration_mode: str = "auto"
+    enable_doris_oauth_production_dcr: bool = False
+    enable_doris_oauth_production_wildcard_redirects: bool = False
+    doris_oauth_allow_insecure_http: bool = False
+    doris_oauth_trust_proxy_headers: bool = False
+    doris_oauth_trusted_proxy_cidrs: list[str] = field(default_factory=list)
+    doris_oauth_rate_limit_window_seconds: int = 300
+    doris_oauth_login_rate_limit_per_ip: int = 20
+    doris_oauth_login_rate_limit_per_user: int = 10
+    doris_oauth_login_rate_limit_per_client: int = 30
+    doris_oauth_login_rate_limit_per_txn: int = 5
+    doris_oauth_dcr_rate_limit_per_ip: int = 30
+    doris_oauth_authorize_rate_limit_per_ip: int = 120
+    doris_oauth_token_rate_limit_per_ip: int = 120
+    doris_oauth_token_rate_limit_per_client: int = 240
+    doris_oauth_revoke_rate_limit_per_ip: int = 120
+    doris_oauth_revoke_rate_limit_per_client: int = 240
+    doris_oauth_api_auth_token_rate_limit_per_ip: int = 20
+    doris_oauth_api_auth_token_rate_limit_per_user: int = 10
+    doris_oauth_api_auth_refresh_rate_limit_per_ip: int = 120
+    doris_oauth_api_auth_refresh_rate_limit_per_client: int = 240
+    doris_oauth_dcr_max_clients: int = 1000
+    doris_oauth_dcr_client_ttl_seconds: int = 86400
     
     # Legacy configuration (kept for backward compatibility)
     auth_type: str = "token"  # jwt, token, basic, oauth (deprecated: use individual switches)
@@ -432,10 +622,146 @@ class DorisConfig:
 
         # Security configuration
         # Independent authentication switches
-        config.security.enable_token_auth = os.getenv("ENABLE_TOKEN_AUTH", str(config.security.enable_token_auth)).lower() == "true"
-        config.security.enable_jwt_auth = os.getenv("ENABLE_JWT_AUTH", str(config.security.enable_jwt_auth)).lower() == "true"
-        config.security.enable_oauth_auth = os.getenv("ENABLE_OAUTH_AUTH", str(config.security.enable_oauth_auth)).lower() == "true"
-        config.security.auth_type = os.getenv("AUTH_TYPE", config.security.auth_type)
+        if "ENABLE_TOKEN_AUTH" in os.environ:
+            config.security.enable_token_auth = _str_to_bool(os.getenv("ENABLE_TOKEN_AUTH"))
+            _mark_source(config, "enable_token_auth", "env")
+        if "ENABLE_JWT_AUTH" in os.environ:
+            config.security.enable_jwt_auth = _str_to_bool(os.getenv("ENABLE_JWT_AUTH"))
+            _mark_source(config, "enable_jwt_auth", "env")
+        if "ENABLE_OAUTH_AUTH" in os.environ:
+            config.security.enable_oauth_auth = _str_to_bool(os.getenv("ENABLE_OAUTH_AUTH"))
+            _mark_source(config, "enable_oauth_auth", "env")
+        if "OAUTH_ENABLED" in os.environ:
+            config.security.oauth_enabled = _str_to_bool(os.getenv("OAUTH_ENABLED"))
+            _mark_source(config, "oauth_enabled", "env")
+        if "ENABLE_DORIS_OAUTH_AUTH" in os.environ:
+            config.security.enable_doris_oauth_auth = _str_to_bool(os.getenv("ENABLE_DORIS_OAUTH_AUTH"))
+            _mark_source(config, "enable_doris_oauth_auth", "env")
+        if "DORIS_OAUTH_BASE_URL" in os.environ:
+            config.security.doris_oauth_base_url = os.getenv("DORIS_OAUTH_BASE_URL", "").strip()
+            _mark_source(config, "doris_oauth_base_url", "env")
+        if "DORIS_OAUTH_DB_TOOLS_ENABLED" in os.environ:
+            config.security.doris_oauth_db_tools_enabled = _str_to_bool(os.getenv("DORIS_OAUTH_DB_TOOLS_ENABLED"))
+            _mark_source(config, "doris_oauth_db_tools_enabled", "env")
+        if "DORIS_OAUTH_DB_TOOL_ALLOWLIST" in os.environ:
+            config.security.doris_oauth_db_tool_allowlist = _env_csv(
+                "DORIS_OAUTH_DB_TOOL_ALLOWLIST",
+                config.security.doris_oauth_db_tool_allowlist,
+            )
+            _mark_source(config, "doris_oauth_db_tool_allowlist", "env")
+        if "DORIS_OAUTH_QUERY_TOOLS_ENABLED" in os.environ:
+            config.security.doris_oauth_query_tools_enabled = _str_to_bool(
+                os.getenv("DORIS_OAUTH_QUERY_TOOLS_ENABLED")
+            )
+            _mark_source(config, "doris_oauth_query_tools_enabled", "env")
+        if "DORIS_OAUTH_QUERY_TOOL_ALLOWLIST" in os.environ:
+            config.security.doris_oauth_query_tool_allowlist = _env_csv(
+                "DORIS_OAUTH_QUERY_TOOL_ALLOWLIST",
+                config.security.doris_oauth_query_tool_allowlist,
+            )
+            _mark_source(config, "doris_oauth_query_tool_allowlist", "env")
+        if "DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED" in os.environ:
+            config.security.doris_oauth_explain_tools_enabled = _str_to_bool(
+                os.getenv("DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED")
+            )
+            _mark_source(config, "doris_oauth_explain_tools_enabled", "env")
+        if "DORIS_OAUTH_EXPLAIN_TOOL_ALLOWLIST" in os.environ:
+            config.security.doris_oauth_explain_tool_allowlist = _env_csv(
+                "DORIS_OAUTH_EXPLAIN_TOOL_ALLOWLIST",
+                config.security.doris_oauth_explain_tool_allowlist,
+            )
+            _mark_source(config, "doris_oauth_explain_tool_allowlist", "env")
+        config.security.doris_oauth_access_token_expire_seconds = _env_int(
+            "DORIS_OAUTH_ACCESS_TOKEN_EXPIRE_SECONDS",
+            config.security.doris_oauth_access_token_expire_seconds,
+        )
+        config.security.doris_oauth_refresh_token_expire_seconds = _env_int(
+            "DORIS_OAUTH_REFRESH_TOKEN_EXPIRE_SECONDS",
+            config.security.doris_oauth_refresh_token_expire_seconds,
+        )
+        config.security.doris_oauth_auth_code_expire_seconds = _env_int(
+            "DORIS_OAUTH_AUTH_CODE_EXPIRE_SECONDS",
+            config.security.doris_oauth_auth_code_expire_seconds,
+        )
+        config.security.doris_oauth_gc_interval_seconds = _env_int(
+            "DORIS_OAUTH_GC_INTERVAL_SECONDS",
+            config.security.doris_oauth_gc_interval_seconds,
+        )
+        config.security.doris_oauth_idle_timeout_seconds = _env_optional_int(
+            "DORIS_OAUTH_IDLE_TIMEOUT_SECONDS",
+            config.security.doris_oauth_idle_timeout_seconds,
+        )
+        config.security.doris_oauth_login_page_title = os.getenv(
+            "DORIS_OAUTH_LOGIN_PAGE_TITLE",
+            config.security.doris_oauth_login_page_title,
+        )
+        config.security.doris_oauth_allowed_redirect_uris = _env_csv(
+            "DORIS_OAUTH_ALLOWED_REDIRECT_URIS",
+            config.security.doris_oauth_allowed_redirect_uris,
+        )
+        config.security.doris_oauth_clients_file = os.getenv(
+            "DORIS_OAUTH_CLIENTS_FILE",
+            config.security.doris_oauth_clients_file,
+        )
+        config.security.doris_oauth_dynamic_client_registration_mode = os.getenv(
+            "DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE",
+            config.security.doris_oauth_dynamic_client_registration_mode,
+        )
+        config.security.enable_doris_oauth_production_dcr = _str_to_bool(
+            os.getenv(
+                "ENABLE_DORIS_OAUTH_PRODUCTION_DCR",
+                config.security.enable_doris_oauth_production_dcr,
+            )
+        )
+        config.security.enable_doris_oauth_production_wildcard_redirects = _str_to_bool(
+            os.getenv(
+                "ENABLE_DORIS_OAUTH_PRODUCTION_WILDCARD_REDIRECTS",
+                config.security.enable_doris_oauth_production_wildcard_redirects,
+            )
+        )
+        config.security.doris_oauth_allow_insecure_http = _str_to_bool(
+            os.getenv(
+                "DORIS_OAUTH_ALLOW_INSECURE_HTTP",
+                config.security.doris_oauth_allow_insecure_http,
+            )
+        )
+        config.security.doris_oauth_trust_proxy_headers = _str_to_bool(
+            os.getenv(
+                "DORIS_OAUTH_TRUST_PROXY_HEADERS",
+                config.security.doris_oauth_trust_proxy_headers,
+            )
+        )
+        config.security.doris_oauth_trusted_proxy_cidrs = _env_csv(
+            "DORIS_OAUTH_TRUSTED_PROXY_CIDRS",
+            config.security.doris_oauth_trusted_proxy_cidrs,
+        )
+        for env_name, field_name in {
+            "DORIS_OAUTH_RATE_LIMIT_WINDOW_SECONDS": "doris_oauth_rate_limit_window_seconds",
+            "DORIS_OAUTH_LOGIN_RATE_LIMIT_PER_IP": "doris_oauth_login_rate_limit_per_ip",
+            "DORIS_OAUTH_LOGIN_RATE_LIMIT_PER_USER": "doris_oauth_login_rate_limit_per_user",
+            "DORIS_OAUTH_LOGIN_RATE_LIMIT_PER_CLIENT": "doris_oauth_login_rate_limit_per_client",
+            "DORIS_OAUTH_LOGIN_RATE_LIMIT_PER_TXN": "doris_oauth_login_rate_limit_per_txn",
+            "DORIS_OAUTH_DCR_RATE_LIMIT_PER_IP": "doris_oauth_dcr_rate_limit_per_ip",
+            "DORIS_OAUTH_AUTHORIZE_RATE_LIMIT_PER_IP": "doris_oauth_authorize_rate_limit_per_ip",
+            "DORIS_OAUTH_TOKEN_RATE_LIMIT_PER_IP": "doris_oauth_token_rate_limit_per_ip",
+            "DORIS_OAUTH_TOKEN_RATE_LIMIT_PER_CLIENT": "doris_oauth_token_rate_limit_per_client",
+            "DORIS_OAUTH_REVOKE_RATE_LIMIT_PER_IP": "doris_oauth_revoke_rate_limit_per_ip",
+            "DORIS_OAUTH_REVOKE_RATE_LIMIT_PER_CLIENT": "doris_oauth_revoke_rate_limit_per_client",
+            "DORIS_OAUTH_API_AUTH_TOKEN_RATE_LIMIT_PER_IP": "doris_oauth_api_auth_token_rate_limit_per_ip",
+            "DORIS_OAUTH_API_AUTH_TOKEN_RATE_LIMIT_PER_USER": "doris_oauth_api_auth_token_rate_limit_per_user",
+            "DORIS_OAUTH_API_AUTH_REFRESH_RATE_LIMIT_PER_IP": "doris_oauth_api_auth_refresh_rate_limit_per_ip",
+            "DORIS_OAUTH_API_AUTH_REFRESH_RATE_LIMIT_PER_CLIENT": "doris_oauth_api_auth_refresh_rate_limit_per_client",
+            "DORIS_OAUTH_DCR_MAX_CLIENTS": "doris_oauth_dcr_max_clients",
+            "DORIS_OAUTH_DCR_CLIENT_TTL_SECONDS": "doris_oauth_dcr_client_ttl_seconds",
+        }.items():
+            setattr(config.security, field_name, _env_int(env_name, getattr(config.security, field_name)))
+        config.security.doris_oauth_rate_limit_window_seconds = _env_int(
+            "DORIS_OAUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS",
+            config.security.doris_oauth_rate_limit_window_seconds,
+        )
+        if "AUTH_TYPE" in os.environ:
+            config.security.auth_type = os.getenv("AUTH_TYPE", config.security.auth_type)
+            _mark_source(config, "auth_type", "env")
         config.security.token_secret = os.getenv("TOKEN_SECRET", config.security.token_secret)
         config.security.token_expiry = int(
             os.getenv("TOKEN_EXPIRY", str(config.security.token_expiry))
@@ -593,6 +919,12 @@ class DorisConfig:
         # Server configuration
         config.server_name = os.getenv("SERVER_NAME", config.server_name)
         config.server_version = os.getenv("SERVER_VERSION", config.server_version)
+        if "TRANSPORT" in os.environ:
+            config.transport = os.getenv("TRANSPORT", config.transport)
+            _mark_source(config, "transport", "env")
+        if "WORKERS" in os.environ:
+            config.workers = int(os.getenv("WORKERS", "1"))
+            _mark_source(config, "workers", "env")
         server_port = os.getenv("SERVER_PORT", "").strip()
         if server_port and server_port.isdigit():
             config.server_port = int(server_port)
@@ -606,9 +938,10 @@ class DorisConfig:
         config = cls()
 
         # Update basic configuration
-        for key in ["server_name", "server_version", "server_port", "temp_files_dir"]:
+        for key in ["server_name", "server_version", "server_port", "temp_files_dir", "transport", "workers"]:
             if key in config_data:
                 setattr(config, key, config_data[key])
+                _mark_source(config, key, "config_file")
 
         # Update database configuration
         if "database" in config_data:
@@ -623,6 +956,8 @@ class DorisConfig:
             for key, value in sec_config.items():
                 if hasattr(config.security, key):
                     setattr(config.security, key, value)
+                    source_key = "auth_type" if key == "auth_type" else key
+                    _mark_source(config, source_key, "config_file")
 
         # Update performance configuration
         if "performance" in config_data:
@@ -691,6 +1026,34 @@ class DorisConfig:
             },
             "security": {
                 "auth_type": self.security.auth_type,
+                "enable_token_auth": self.security.enable_token_auth,
+                "enable_jwt_auth": self.security.enable_jwt_auth,
+                "enable_oauth_auth": self.security.enable_oauth_auth,
+                "oauth_enabled": self.security.oauth_enabled,
+                "enable_doris_oauth_auth": self.security.enable_doris_oauth_auth,
+                "doris_oauth_base_url": self.security.doris_oauth_base_url,
+                "doris_oauth_db_tools_enabled": self.security.doris_oauth_db_tools_enabled,
+                "doris_oauth_db_tool_allowlist": self.security.doris_oauth_db_tool_allowlist,
+                "doris_oauth_query_tools_enabled": self.security.doris_oauth_query_tools_enabled,
+                "doris_oauth_query_tool_allowlist": self.security.doris_oauth_query_tool_allowlist,
+                "doris_oauth_explain_tools_enabled": self.security.doris_oauth_explain_tools_enabled,
+                "doris_oauth_explain_tool_allowlist": self.security.doris_oauth_explain_tool_allowlist,
+                "doris_oauth_access_token_expire_seconds": self.security.doris_oauth_access_token_expire_seconds,
+                "doris_oauth_refresh_token_expire_seconds": self.security.doris_oauth_refresh_token_expire_seconds,
+                "doris_oauth_auth_code_expire_seconds": self.security.doris_oauth_auth_code_expire_seconds,
+                "doris_oauth_gc_interval_seconds": self.security.doris_oauth_gc_interval_seconds,
+                "doris_oauth_idle_timeout_seconds": self.security.doris_oauth_idle_timeout_seconds,
+                "doris_oauth_login_page_title": self.security.doris_oauth_login_page_title,
+                "doris_oauth_allowed_redirect_uris": self.security.doris_oauth_allowed_redirect_uris,
+                "doris_oauth_clients_file": self.security.doris_oauth_clients_file,
+                "doris_oauth_dynamic_client_registration_mode": self.security.doris_oauth_dynamic_client_registration_mode,
+                "enable_doris_oauth_production_dcr": self.security.enable_doris_oauth_production_dcr,
+                "enable_doris_oauth_production_wildcard_redirects": self.security.enable_doris_oauth_production_wildcard_redirects,
+                "doris_oauth_allow_insecure_http": self.security.doris_oauth_allow_insecure_http,
+                "doris_oauth_trust_proxy_headers": self.security.doris_oauth_trust_proxy_headers,
+                "doris_oauth_trusted_proxy_cidrs": self.security.doris_oauth_trusted_proxy_cidrs,
+                "doris_oauth_dcr_max_clients": self.security.doris_oauth_dcr_max_clients,
+                "doris_oauth_dcr_client_ttl_seconds": self.security.doris_oauth_dcr_client_ttl_seconds,
                 "token_secret": "***",  # Hide secret key
                 "token_expiry": self.security.token_expiry,
                 "enable_security_check": self.security.enable_security_check,
@@ -788,8 +1151,8 @@ class DorisConfig:
             errors.append("Maximum connections must be greater than 0")
 
         # Validate security configuration
-        if self.security.auth_type not in ["token", "basic", "oauth"]:
-            errors.append("Authentication type must be one of token, basic, or oauth")
+        if self.security.auth_type not in ["token", "basic", "oauth", "jwt"]:
+            errors.append("Authentication type must be one of token, basic, oauth, or jwt")
 
         if self.security.token_expiry <= 0:
             errors.append("Token expiry time must be greater than 0")
@@ -898,6 +1261,231 @@ class DorisConfig:
                 "alerts_enabled": self.monitoring.enable_alerts,
             },
         }
+
+
+def build_auth_config_inputs(config: DorisConfig, requested_workers: int | None = None) -> AuthConfigInputs:
+    """Build source-aware auth inputs from a DorisConfig."""
+    workers_value = requested_workers
+    if workers_value is None:
+        workers_value = getattr(config, "workers", 1)
+    explicit_sources = getattr(config, "_explicit_sources", {})
+    workers_source = explicit_sources.get("workers", "default")
+    transport_source = explicit_sources.get("transport", "default")
+
+    return AuthConfigInputs(
+        enable_token_auth=_config_value(config, "enable_token_auth", config.security.enable_token_auth),
+        enable_jwt_auth=_config_value(config, "enable_jwt_auth", config.security.enable_jwt_auth),
+        enable_external_oauth_auth=_config_value(config, "enable_oauth_auth", config.security.enable_oauth_auth),
+        oauth_enabled=_config_value(config, "oauth_enabled", config.security.oauth_enabled),
+        enable_doris_oauth_auth=_config_value(
+            config, "enable_doris_oauth_auth", config.security.enable_doris_oauth_auth
+        ),
+        legacy_auth_type=_config_value(config, "auth_type", config.security.auth_type),
+        transport=ConfigValue(config.transport, transport_source, transport_source != "default"),
+        workers=ConfigValue(workers_value, workers_source, workers_source != "default"),
+    )
+
+
+def normalize_effective_auth_config(
+    config: DorisConfig,
+    requested_workers: int | None = None,
+) -> EffectiveAuthConfig:
+    """Normalize authentication configuration and attach it to the config."""
+    inputs = build_auth_config_inputs(config, requested_workers=requested_workers)
+    warnings: list[str] = []
+
+    auth_type = str(inputs.legacy_auth_type.value or "").strip().lower()
+    if auth_type and auth_type not in {"token", "basic", "oauth", "jwt"}:
+        raise AuthConfigError(f"Unsupported AUTH_TYPE: {auth_type}")
+
+    modern_auth_explicit = any(
+        [
+            inputs.enable_token_auth.explicit,
+            inputs.enable_jwt_auth.explicit,
+            inputs.enable_external_oauth_auth.explicit,
+            inputs.oauth_enabled.explicit,
+            inputs.enable_doris_oauth_auth.explicit,
+        ]
+    )
+
+    enable_token_auth = _str_to_bool(inputs.enable_token_auth.value)
+    enable_jwt_auth = _str_to_bool(inputs.enable_jwt_auth.value)
+    enable_external_oauth_auth = _str_to_bool(inputs.enable_external_oauth_auth.value)
+    enable_doris_oauth_auth = _str_to_bool(inputs.enable_doris_oauth_auth.value)
+
+    config.security.doris_oauth_db_tool_allowlist = _validate_doris_oauth_metadata_tool_allowlist(
+        config.security.doris_oauth_db_tool_allowlist
+    )
+    query_allowlist = _coerce_csv_config(config.security.doris_oauth_query_tool_allowlist)
+    invalid_query_tools = set(query_allowlist) - DORIS_OAUTH_QUERY_TOOL_SET
+    if invalid_query_tools:
+        invalid_list = ", ".join(sorted(invalid_query_tools))
+        raise AuthConfigError(
+            "DORIS_OAUTH_QUERY_TOOL_ALLOWLIST can only contain exec_query; "
+            f"invalid entries: {invalid_list}"
+        )
+    config.security.doris_oauth_query_tool_allowlist = list(dict.fromkeys(query_allowlist))
+
+    explain_allowlist = _coerce_csv_config(config.security.doris_oauth_explain_tool_allowlist)
+    invalid_explain_tools = set(explain_allowlist) - DORIS_OAUTH_EXPLAIN_TOOL_SET
+    if invalid_explain_tools:
+        invalid_list = ", ".join(sorted(invalid_explain_tools))
+        raise AuthConfigError(
+            "DORIS_OAUTH_EXPLAIN_TOOL_ALLOWLIST can only contain get_sql_explain; "
+            f"invalid entries: {invalid_list}"
+        )
+    config.security.doris_oauth_explain_tool_allowlist = list(dict.fromkeys(explain_allowlist))
+
+    if inputs.enable_external_oauth_auth.explicit and inputs.oauth_enabled.explicit:
+        if _str_to_bool(inputs.enable_external_oauth_auth.value) != _str_to_bool(inputs.oauth_enabled.value):
+            raise AuthConfigError("ENABLE_OAUTH_AUTH and oauth_enabled/OAUTH_ENABLED explicitly conflict")
+
+    if inputs.oauth_enabled.explicit:
+        enable_external_oauth_auth = _str_to_bool(inputs.oauth_enabled.value)
+
+    if not modern_auth_explicit and inputs.legacy_auth_type.explicit:
+        if auth_type == "token":
+            enable_token_auth = True
+            warnings.append("AUTH_TYPE=token is deprecated; use ENABLE_TOKEN_AUTH=true")
+        elif auth_type == "jwt":
+            enable_jwt_auth = True
+            warnings.append("AUTH_TYPE=jwt is deprecated; use ENABLE_JWT_AUTH=true")
+        elif auth_type == "oauth":
+            enable_external_oauth_auth = True
+            warnings.append("AUTH_TYPE=oauth is deprecated; use ENABLE_OAUTH_AUTH=true")
+        elif auth_type == "basic":
+            warnings.append("AUTH_TYPE=basic is legacy; no HTTP basic verifier is enabled by default")
+    elif inputs.legacy_auth_type.explicit:
+        if auth_type == "oauth" and enable_doris_oauth_auth:
+            raise AuthConfigError("AUTH_TYPE=oauth conflicts with ENABLE_DORIS_OAUTH_AUTH=true")
+        warnings.append("AUTH_TYPE is deprecated and ignored because explicit auth switches are set")
+
+    if enable_doris_oauth_auth and enable_external_oauth_auth:
+        raise AuthConfigError("Doris OAuth and external OAuth cannot be enabled together")
+
+    transport = str(inputs.transport.value or "stdio")
+    requested = int(inputs.workers.value if inputs.workers.value is not None else 1)
+    effective_workers = multiprocessing.cpu_count() if requested == 0 else requested
+
+    if enable_doris_oauth_auth and transport == "stdio":
+        raise AuthConfigError("Doris OAuth requires HTTP transport")
+    if enable_doris_oauth_auth and effective_workers > 1:
+        raise AuthConfigError("Doris OAuth initial implementation requires a single worker")
+    if enable_doris_oauth_auth and not config.database.host:
+        raise AuthConfigError("DORIS_HOST is required when Doris OAuth is enabled")
+    if enable_doris_oauth_auth and not config.database.user:
+        raise AuthConfigError("DORIS_USER service account is required when Doris OAuth is enabled")
+    if enable_doris_oauth_auth:
+        base_url = config.security.doris_oauth_base_url.rstrip("/")
+        if not base_url:
+            raise AuthConfigError("DORIS_OAUTH_BASE_URL is required when Doris OAuth is enabled")
+        parsed_base_url = urlparse(base_url)
+        if not parsed_base_url.scheme or not parsed_base_url.netloc:
+            raise AuthConfigError("DORIS_OAUTH_BASE_URL must be an absolute URL")
+        if parsed_base_url.scheme == "http" and not _is_loopback_url(base_url):
+            if not config.security.doris_oauth_allow_insecure_http:
+                raise AuthConfigError("Non-loopback Doris OAuth base URL must use HTTPS")
+        elif parsed_base_url.scheme not in {"http", "https"}:
+            raise AuthConfigError("DORIS_OAUTH_BASE_URL must use HTTP or HTTPS")
+
+        mode = config.security.doris_oauth_dynamic_client_registration_mode
+        if mode not in {"auto", "disabled", "enabled"}:
+            raise AuthConfigError("DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE must be auto, disabled, or enabled")
+        if mode == "enabled" and not _is_loopback_url(base_url):
+            if not config.security.enable_doris_oauth_production_dcr:
+                raise AuthConfigError("Production Doris OAuth DCR requires ENABLE_DORIS_OAUTH_PRODUCTION_DCR=true")
+        if config.security.doris_oauth_trust_proxy_headers and not config.security.doris_oauth_trusted_proxy_cidrs:
+            raise AuthConfigError("Trusted proxy CIDRs are required when Doris OAuth proxy headers are trusted")
+
+        ttl_limits = {
+            "doris_oauth_access_token_expire_seconds": 86400,
+            "doris_oauth_refresh_token_expire_seconds": 30 * 86400,
+            "doris_oauth_auth_code_expire_seconds": 1800,
+            "doris_oauth_gc_interval_seconds": 3600,
+            "doris_oauth_dcr_client_ttl_seconds": 30 * 86400,
+        }
+        for field_name, upper_bound in ttl_limits.items():
+            value = getattr(config.security, field_name)
+            if int(value) <= 0 or int(value) > upper_bound:
+                raise AuthConfigError(f"{field_name} must be between 1 and {upper_bound}")
+        idle_timeout = config.security.doris_oauth_idle_timeout_seconds
+        if idle_timeout is not None and (int(idle_timeout) <= 0 or int(idle_timeout) > 7 * 86400):
+            raise AuthConfigError("doris_oauth_idle_timeout_seconds must be between 1 and 604800")
+        for field_name in (
+            "doris_oauth_rate_limit_window_seconds",
+            "doris_oauth_login_rate_limit_per_ip",
+            "doris_oauth_login_rate_limit_per_user",
+            "doris_oauth_login_rate_limit_per_client",
+            "doris_oauth_login_rate_limit_per_txn",
+            "doris_oauth_dcr_rate_limit_per_ip",
+            "doris_oauth_authorize_rate_limit_per_ip",
+            "doris_oauth_token_rate_limit_per_ip",
+            "doris_oauth_token_rate_limit_per_client",
+            "doris_oauth_revoke_rate_limit_per_ip",
+            "doris_oauth_revoke_rate_limit_per_client",
+            "doris_oauth_api_auth_token_rate_limit_per_ip",
+            "doris_oauth_api_auth_token_rate_limit_per_user",
+            "doris_oauth_api_auth_refresh_rate_limit_per_ip",
+            "doris_oauth_api_auth_refresh_rate_limit_per_client",
+            "doris_oauth_dcr_max_clients",
+        ):
+            if int(getattr(config.security, field_name)) <= 0:
+                raise AuthConfigError(f"{field_name} must be greater than 0")
+
+    methods: list[str] = []
+    if enable_doris_oauth_auth:
+        methods.append("doris_oauth")
+    if enable_token_auth:
+        methods.append("token")
+    if enable_jwt_auth:
+        methods.append("jwt")
+    if enable_external_oauth_auth:
+        methods.append("external_oauth")
+
+    if enable_doris_oauth_auth:
+        discovery_mode = "doris_oauth"
+    elif enable_external_oauth_auth:
+        discovery_mode = "external_oauth"
+    else:
+        discovery_mode = "none"
+
+    source_summary = {
+        "enable_token_auth": inputs.enable_token_auth.source,
+        "enable_jwt_auth": inputs.enable_jwt_auth.source,
+        "enable_oauth_auth": inputs.enable_external_oauth_auth.source,
+        "oauth_enabled": inputs.oauth_enabled.source,
+        "enable_doris_oauth_auth": inputs.enable_doris_oauth_auth.source,
+        "auth_type": inputs.legacy_auth_type.source,
+        "transport": inputs.transport.source,
+        "workers": inputs.workers.source,
+    }
+
+    effective = EffectiveAuthConfig(
+        enable_token_auth=enable_token_auth,
+        enable_jwt_auth=enable_jwt_auth,
+        enable_external_oauth_auth=enable_external_oauth_auth,
+        enable_doris_oauth_auth=enable_doris_oauth_auth,
+        auth_methods=tuple(methods),
+        oauth_discovery_mode=discovery_mode,
+        doris_oauth_base_url=config.security.doris_oauth_base_url.rstrip("/"),
+        transport=transport,
+        requested_workers=requested,
+        effective_workers=effective_workers,
+        legacy_auth_type=auth_type,
+        auth_config_warnings=tuple(warnings),
+        source_summary=source_summary,
+    )
+    config.effective_auth = effective
+    config._auth_inputs = inputs
+    return effective
+
+
+def get_effective_auth_config(config: DorisConfig) -> EffectiveAuthConfig:
+    """Return previously normalized auth config."""
+    effective = getattr(config, "effective_auth", None)
+    if effective is None:
+        raise AuthConfigError("Effective auth config has not been normalized")
+    return effective
 
 
 class ConfigManager:

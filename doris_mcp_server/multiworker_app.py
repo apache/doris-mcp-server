@@ -217,9 +217,10 @@ from starlette.responses import JSONResponse, Response
 from .tools.tools_manager import DorisToolsManager
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
-from .utils.config import DorisConfig
+from .auth.operation_policy import OperationAuthorizationError, authorize_operation
+from .utils.config import DorisConfig, get_effective_auth_config, normalize_effective_auth_config
 from .utils.db import DorisConnectionManager
-from .utils.security import DorisSecurityManager
+from .utils.security import DorisSecurityManager, get_current_auth_context
 
 # Global variables for worker-specific instances
 _worker_server = None
@@ -228,6 +229,8 @@ _worker_connection_manager = None
 _worker_security_manager = None
 _worker_session_manager_context = None
 _worker_initialized = False
+_worker_effective_auth = None
+_doris_oauth_handlers = None
 
 def get_mcp_capabilities():
     """Get MCP capabilities for worker - use the same logic as main.py"""
@@ -259,7 +262,7 @@ def get_mcp_capabilities():
 
 async def initialize_worker():
     """Initialize MCP server and managers for this worker process"""
-    global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_security_manager, _worker_session_manager_context, _worker_initialized, _oauth_handlers, _token_handlers
+    global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_security_manager, _worker_session_manager_context, _worker_initialized, _oauth_handlers, _token_handlers, _worker_effective_auth, _doris_oauth_handlers
     
     if _worker_initialized:
         return
@@ -273,6 +276,9 @@ async def initialize_worker():
         
         # Create configuration
         config = DorisConfig.from_env()
+        _worker_effective_auth = normalize_effective_auth_config(
+            config, requested_workers=getattr(config, "workers", 1)
+        )
         
         # Initialize enhanced logging system
         from .utils.config import ConfigManager
@@ -292,6 +298,7 @@ async def initialize_worker():
         
         # Set connection manager reference in security manager for database validation
         _worker_security_manager.connection_manager = _worker_connection_manager
+        _worker_security_manager.auth_provider.configure_doris_oauth(_worker_connection_manager)
         
         await _worker_connection_manager.initialize()
         
@@ -308,23 +315,33 @@ async def initialize_worker():
         async def handle_list_resources() -> list[Resource]:
             """Handle resource list request"""
             try:
+                authorize_operation(get_current_auth_context(), "list_resources")
                 logger.info("Handling resource list request in worker")
                 resources = await resources_manager.list_resources()
                 logger.info(f"Returning {len(resources)} resources from worker")
                 return resources
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to handle resource list request in worker: {e}")
+                if getattr(get_current_auth_context(), "auth_method", "") == "doris_oauth":
+                    raise
                 return []
 
         @_worker_server.read_resource()
         async def handle_read_resource(uri: str) -> str:
             """Handle resource read request"""
             try:
+                authorize_operation(get_current_auth_context(), "read_resource")
                 logger.info(f"Handling resource read request in worker: {uri}")
                 content = await resources_manager.read_resource(uri)
                 return content
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to handle resource read request in worker: {e}")
+                if getattr(get_current_auth_context(), "auth_method", "") == "doris_oauth":
+                    raise
                 return json.dumps(
                     {"error": f"Failed to read resource: {str(e)}", "uri": uri},
                     ensure_ascii=False,
@@ -335,10 +352,13 @@ async def initialize_worker():
         async def handle_list_tools() -> list[Tool]:
             """Handle tool list request"""
             try:
+                authorize_operation(get_current_auth_context(), "list_tools")
                 logger.info("Handling tool list request in worker")
                 tools = await tools_manager.list_tools()
                 logger.info(f"Returning {len(tools)} tools from worker")
                 return tools
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to handle tool list request in worker: {e}")
                 return []
@@ -350,6 +370,8 @@ async def initialize_worker():
                 logger.info(f"Handling tool call request in worker: {name}")
                 result = await tools_manager.call_tool(name, arguments)
                 return [TextContent(type="text", text=result)]
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to handle tool call request in worker: {e}")
                 error_result = json.dumps(
@@ -367,10 +389,13 @@ async def initialize_worker():
         async def handle_list_prompts() -> list[Prompt]:
             """Handle prompt list request"""
             try:
+                authorize_operation(get_current_auth_context(), "list_prompts")
                 logger.info("Handling prompt list request in worker")
                 prompts = await prompts_manager.list_prompts()
                 logger.info(f"Returning {len(prompts)} prompts from worker")
                 return prompts
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to handle prompt list request in worker: {e}")
                 return []
@@ -379,9 +404,12 @@ async def initialize_worker():
         async def handle_get_prompt(name: str, arguments: dict[str, Any]) -> str:
             """Handle prompt get request"""
             try:
+                authorize_operation(get_current_auth_context(), "get_prompt")
                 logger.info(f"Handling prompt get request in worker: {name}")
                 result = await prompts_manager.get_prompt(name, arguments)
                 return result
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 logger.error(f"Failed to handle prompt get request in worker: {e}")
                 error_result = json.dumps(
@@ -413,6 +441,11 @@ async def initialize_worker():
         from .auth.token_handlers import TokenHandlers
         _oauth_handlers = OAuthHandlers(_worker_security_manager)
         _token_handlers = TokenHandlers(_worker_security_manager, config)
+        if _worker_effective_auth.enable_doris_oauth_auth:
+            from .auth.doris_oauth_handlers import DorisOAuthHandlers
+            _doris_oauth_handlers = DorisOAuthHandlers(
+                _worker_security_manager.auth_provider.doris_oauth_provider
+            )
         
         _worker_initialized = True
         logger.info(f"Worker {os.getpid()} MCP initialization completed successfully")
@@ -504,6 +537,64 @@ async def token_management(request):
         return HTMLResponse("<h1>Token handlers not initialized</h1>")
     return await _token_handlers.handle_management_page(request)
 
+
+async def doris_oauth_unavailable(request):
+    return JSONResponse({"error": "doris_oauth_not_initialized"}, status_code=503)
+
+
+async def doris_oauth_protected_resource_metadata(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.protected_resource_metadata(request)
+
+
+async def doris_oauth_authorization_server_metadata(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.authorization_server_metadata(request)
+
+
+async def doris_oauth_register(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.register(request)
+
+
+async def doris_oauth_authorize(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.authorize(request)
+
+
+async def doris_oauth_token(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.token(request)
+
+
+async def doris_oauth_revoke(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.revoke(request)
+
+
+async def doris_oauth_login(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.login(request)
+
+
+async def doris_oauth_api_token(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.api_token(request)
+
+
+async def doris_oauth_api_refresh(request):
+    if not _doris_oauth_handlers:
+        return await doris_oauth_unavailable(request)
+    return await _doris_oauth_handlers.api_refresh(request)
+
 async def root_info(request):
     """Root endpoint"""
     return JSONResponse({
@@ -589,8 +680,19 @@ async def mcp_asgi_app(scope, receive, send):
     method = scope.get('method', 'UNKNOWN')
     logger.debug(f"Worker {os.getpid()} handling MCP request: {method} {path}")
     
-    # Handle the request directly without nested run context
-    await _worker_session_manager.handle_request(scope, receive, send)
+    from .auth.mcp_auth_middleware import MCPAuthASGIMiddleware
+
+    async def downstream(authenticated_scope, authenticated_receive, authenticated_send):
+        await _worker_session_manager.handle_request(
+            authenticated_scope, authenticated_receive, authenticated_send
+        )
+
+    middleware = MCPAuthASGIMiddleware(
+        _worker_security_manager,
+        downstream,
+        _worker_effective_auth or get_effective_auth_config(_worker_security_manager.config),
+    )
+    await middleware(scope, receive, send)
 
 # Create Starlette app with basic routes
 basic_app = Starlette(
@@ -603,6 +705,16 @@ basic_app = Starlette(
         Route("/auth/callback", oauth_callback, methods=["GET"]),
         Route("/auth/provider", oauth_provider_info, methods=["GET"]),
         Route("/auth/demo", oauth_demo, methods=["GET"]),
+        # Doris OAuth endpoints are explicit to avoid top-level silent 404s.
+        Route("/.well-known/oauth-protected-resource", doris_oauth_protected_resource_metadata, methods=["GET"]),
+        Route("/.well-known/oauth-authorization-server", doris_oauth_authorization_server_metadata, methods=["GET"]),
+        Route("/oauth/register", doris_oauth_register, methods=["POST"]),
+        Route("/oauth/authorize", doris_oauth_authorize, methods=["GET"]),
+        Route("/oauth/token", doris_oauth_token, methods=["POST"]),
+        Route("/oauth/revoke", doris_oauth_revoke, methods=["POST"]),
+        Route("/doris-login", doris_oauth_login, methods=["GET", "POST"]),
+        Route("/api/auth/token", doris_oauth_api_token, methods=["POST"]),
+        Route("/api/auth/refresh", doris_oauth_api_refresh, methods=["POST"]),
         # Token management endpoints
         Route("/token/create", token_create, methods=["GET", "POST"]),
         Route("/token/revoke", token_revoke, methods=["GET", "DELETE"]),
@@ -622,6 +734,16 @@ async def app(scope, receive, send):
     if path == "/mcp" or path.startswith('/mcp/'):
         # Handle MCP requests with session manager
         await mcp_asgi_app(scope, receive, send)
+    elif path.startswith("/auth/") and _worker_effective_auth and not _worker_effective_auth.enable_external_oauth_auth:
+        response = JSONResponse({"error": "external_oauth_disabled"}, status_code=404)
+        await response(scope, receive, send)
+    elif (
+        path.startswith("/.well-known/")
+        or path.startswith("/oauth/")
+        or path == "/doris-login"
+        or path.startswith("/api/auth/")
+    ):
+        await basic_app(scope, receive, send)
     else:
         # Handle other requests with basic Starlette app (includes auth endpoints)
         await basic_app(scope, receive, send)

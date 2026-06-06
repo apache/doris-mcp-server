@@ -22,7 +22,7 @@ Implements enterprise-level authentication, authorization, SQL security validati
 
 import logging
 import re
-from contextvars import ContextVar
+from contextvars import ContextVar, Token as ContextToken
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -33,11 +33,16 @@ from sqlparse.sql import Statement
 from sqlparse.tokens import Keyword, Name
 
 from .logger import get_logger
-from .config import DatabaseConfig
+from .config import (
+    DatabaseConfig,
+    get_effective_auth_config,
+)
 
 # Global ContextVar for auth_context - must be a single instance shared across all modules
 # This allows token-bound database configuration to work correctly in concurrent requests
 mcp_auth_context_var: ContextVar['AuthContext'] = ContextVar('mcp_auth_context', default=None)
+
+RESERVED_DORIS_OAUTH_TOKEN_PREFIX = "doa_"
 
 
 class SecurityLevel(Enum):
@@ -63,6 +68,32 @@ class AuthContext:
     login_time: datetime = field(default_factory=datetime.utcnow)
     last_activity: datetime | None = None
     token: str = ""  # Raw token for token-bound database configuration
+    auth_method: str = ""  # anonymous, token, jwt, external_oauth, doris_oauth
+    doris_user: str = ""
+    oauth_client_id: str = ""
+    oauth_scopes: list[str] = field(default_factory=list)
+    oauth_token_id: str = ""
+    pool_key: str = ""
+
+
+def get_current_auth_context() -> AuthContext | None:
+    """Return the current request auth context."""
+    return mcp_auth_context_var.get()
+
+
+def set_current_auth_context(auth_context: AuthContext) -> ContextToken:
+    """Set auth context and return the ContextVar token for reset."""
+    return mcp_auth_context_var.set(auth_context)
+
+
+def clear_current_auth_context() -> ContextToken:
+    """Force-clear auth context and return the ContextVar token."""
+    return mcp_auth_context_var.set(None)
+
+
+def reset_auth_context(token: ContextToken) -> None:
+    """Reset auth context using the token returned by set_current_auth_context."""
+    mcp_auth_context_var.reset(token)
 
 
 @dataclass
@@ -129,6 +160,9 @@ class DorisSecurityManager:
         except Exception as e:
             self.logger.error(f"Failed to initialize DorisSecurityManager: {e}")
             raise
+
+    def _get_effective_auth_config(self):
+        return get_effective_auth_config(self.config)
 
     async def shutdown(self):
         """Shutdown security manager components"""
@@ -226,16 +260,20 @@ class DorisSecurityManager:
     async def authenticate_request(self, auth_info: dict[str, Any]) -> AuthContext:
         """Validate request authentication information
         
-        Tries authentication methods in order: Token -> JWT -> OAuth
+        Tries authentication methods in normalized effective config order.
         Any one method succeeding allows access
         If all methods are disabled, returns anonymous context
         """
-        # Check if any authentication method is enabled
-        if not (self.config.security.enable_token_auth or 
-                self.config.security.enable_jwt_auth or 
-                self.config.security.enable_oauth_auth):
+        effective_auth = self._get_effective_auth_config()
+        bearer_token = str(auth_info.get("token") or "")
+        authorization = str(auth_info.get("authorization") or "")
+        if not bearer_token and authorization.startswith("Bearer "):
+            bearer_token = authorization[7:]
+
+        if not effective_auth.auth_methods:
+            if auth_info.get("type"):
+                return await self.auth_provider.authenticate(auth_info)
             self.logger.debug("All authentication methods are disabled")
-            # Return anonymous context when no authentication is enabled
             return AuthContext(
                 token_id="anonymous",
                 user_id="anonymous",
@@ -243,35 +281,28 @@ class DorisSecurityManager:
                 permissions=["read"],
                 security_level=SecurityLevel.PUBLIC,
                 client_ip=auth_info.get("client_ip", "unknown"),
-                session_id="anonymous_session"
+                session_id="anonymous_session",
+                auth_method="anonymous",
+                pool_key="global",
             )
         
-        # Try authentication methods in order of preference
         last_error = None
-        
-        # 1. Try Token authentication first (most common)
-        if self.config.security.enable_token_auth:
+
+        for auth_method in effective_auth.auth_methods:
             try:
-                return await self.auth_provider.authenticate_token(auth_info)
+                if auth_method == "doris_oauth":
+                    return await self.auth_provider.authenticate_doris_oauth(auth_info)
+                if auth_method == "token":
+                    return await self.auth_provider.authenticate_token(auth_info)
+                if auth_method == "jwt":
+                    return await self.auth_provider.authenticate_jwt(auth_info)
+                if auth_method == "external_oauth":
+                    return await self.auth_provider.authenticate_oauth(auth_info)
             except Exception as e:
-                self.logger.debug(f"Token authentication failed: {e}")
+                self.logger.debug(f"{auth_method} authentication failed: {e}")
                 last_error = e
-        
-        # 2. Try JWT authentication
-        if self.config.security.enable_jwt_auth:
-            try:
-                return await self.auth_provider.authenticate_jwt(auth_info)
-            except Exception as e:
-                self.logger.debug(f"JWT authentication failed: {e}")
-                last_error = e
-        
-        # 3. Try OAuth authentication
-        if self.config.security.enable_oauth_auth:
-            try:
-                return await self.auth_provider.authenticate_oauth(auth_info)
-            except Exception as e:
-                self.logger.debug(f"OAuth authentication failed: {e}")
-                last_error = e
+                if auth_method == "doris_oauth" and bearer_token.startswith(RESERVED_DORIS_OAUTH_TOKEN_PREFIX):
+                    raise
         
         # All enabled authentication methods failed
         error_message = f"Authentication failed: {str(last_error)}" if last_error else "No authentication method succeeded"
@@ -453,26 +484,32 @@ class AuthenticationProvider:
         self.session_cache = {}
         self.jwt_manager = None
         self.oauth_provider = None
+        self.doris_oauth_provider = None
         self.token_manager = None
         self.security_manager = security_manager
+        self.effective_auth = get_effective_auth_config(config)
         
         # Initialize authentication providers based on individual switches
         auth_methods_enabled = []
         
         # Initialize Token manager if enabled
-        if config.security.enable_token_auth:
+        if self.effective_auth.enable_token_auth:
             self._initialize_token_manager()
             auth_methods_enabled.append("Token")
             
         # Initialize JWT manager if enabled
-        if config.security.enable_jwt_auth:
+        if self.effective_auth.enable_jwt_auth:
             self._initialize_jwt_manager()
             auth_methods_enabled.append("JWT")
             
         # Initialize OAuth provider if enabled
-        if config.security.enable_oauth_auth or (hasattr(config.security, 'oauth_enabled') and config.security.oauth_enabled):
+        if self.effective_auth.enable_external_oauth_auth:
             self._initialize_oauth_provider()
             auth_methods_enabled.append("OAuth")
+
+        if self.effective_auth.enable_doris_oauth_auth:
+            self._initialize_doris_oauth_provider()
+            auth_methods_enabled.append("Doris OAuth")
             
         if auth_methods_enabled:
             self.logger.info(f"Authentication enabled with methods: {', '.join(auth_methods_enabled)}")
@@ -518,6 +555,24 @@ class AuthenticationProvider:
             self.logger.error(f"Failed to initialize OAuth provider: {e}")
             raise
 
+    def _initialize_doris_oauth_provider(self):
+        """Initialize Doris-backed OAuth provider shell."""
+        try:
+            from ..auth.doris_oauth_provider import DorisOAuthProvider
+            self.doris_oauth_provider = DorisOAuthProvider(self.config)
+            self.logger.info("Doris OAuth provider initialized")
+        except ImportError as e:
+            self.logger.error(f"Failed to import Doris OAuth provider: {e}")
+            raise
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Doris OAuth provider: {e}")
+            raise
+
+    def configure_doris_oauth(self, connection_manager) -> None:
+        """Inject the Phase 2 connection manager after it is created."""
+        if self.doris_oauth_provider:
+            self.doris_oauth_provider.configure_connection_manager(connection_manager)
+
     async def initialize(self):
         """Initialize authentication provider asynchronously"""
         if self.jwt_manager:
@@ -550,23 +605,64 @@ class AuthenticationProvider:
             await self.oauth_provider.shutdown()
             self.logger.info("OAuth authentication provider shutdown completed")
 
+        if self.doris_oauth_provider:
+            await self.doris_oauth_provider.shutdown()
+            self.logger.info("Doris OAuth authentication provider shutdown completed")
+
+    async def authenticate(self, auth_info: dict[str, Any]) -> AuthContext:
+        """Legacy direct authentication entrypoint.
+
+        Runtime HTTP auth goes through DorisSecurityManager.authenticate_request()
+        and EffectiveAuthConfig. This method is kept for existing direct callers
+        that pass an explicit auth_info["type"].
+        """
+        auth_type = str(auth_info.get("type") or "").strip().lower()
+        if auth_type == "token":
+            if self.effective_auth.enable_token_auth and self.token_manager:
+                return await self.authenticate_token(auth_info)
+            return await self._authenticate_legacy_token(auth_info)
+        if auth_type == "basic":
+            return await self._authenticate_basic(auth_info)
+        if auth_type == "jwt":
+            return await self.authenticate_jwt(auth_info)
+        if auth_type == "oauth":
+            return await self.authenticate_oauth(auth_info)
+        if auth_type == "doris_oauth":
+            return await self.authenticate_doris_oauth(auth_info)
+        raise ValueError(f"Unsupported authentication type: {auth_type or '<missing>'}")
+
     async def authenticate_token(self, auth_info: dict[str, Any]) -> AuthContext:
         """Perform token authentication"""
-        if not self.config.security.enable_token_auth:
+        if not self.effective_auth.enable_token_auth:
             raise ValueError("Token authentication is not enabled")
         return await self._authenticate_token(auth_info)
     
     async def authenticate_jwt(self, auth_info: dict[str, Any]) -> AuthContext:
         """Perform JWT authentication"""
-        if not self.config.security.enable_jwt_auth:
+        if not self.effective_auth.enable_jwt_auth:
             raise ValueError("JWT authentication is not enabled")
         return await self._authenticate_jwt(auth_info)
     
     async def authenticate_oauth(self, auth_info: dict[str, Any]) -> AuthContext:
         """Perform OAuth authentication"""
-        if not self.config.security.enable_oauth_auth:
+        if not self.effective_auth.enable_external_oauth_auth:
             raise ValueError("OAuth authentication is not enabled")
         return await self._authenticate_oauth(auth_info)
+
+    async def authenticate_doris_oauth(self, auth_info: dict[str, Any]) -> AuthContext:
+        """Authenticate a Doris OAuth doa_ access token."""
+        if not self.effective_auth.enable_doris_oauth_auth:
+            raise ValueError("Doris OAuth authentication is not enabled")
+        token = auth_info.get("token")
+        if not token:
+            authorization = auth_info.get("authorization")
+            if authorization and authorization.startswith("Bearer "):
+                token = authorization[7:]
+        if not token or not token.startswith("doa_"):
+            raise ValueError("Missing Doris OAuth access token")
+        if not self.doris_oauth_provider:
+            raise ValueError("Doris OAuth provider is not initialized")
+        return await self.doris_oauth_provider.authenticate_access_token(auth_info)
 
     async def _authenticate_jwt(self, auth_info: dict[str, Any]) -> AuthContext:
         """JWT authentication"""
@@ -601,10 +697,18 @@ class AuthenticationProvider:
         # Handle different OAuth authentication scenarios
         if "access_token" in auth_info:
             # Direct OAuth access token authentication
-            return await self.oauth_provider.authenticate_with_token(auth_info["access_token"])
+            auth_context = await self.oauth_provider.authenticate_with_token(auth_info["access_token"])
+            auth_context.auth_method = "external_oauth"
+            auth_context.token = ""
+            auth_context.pool_key = "global"
+            return auth_context
         elif "code" in auth_info and "state" in auth_info:
             # OAuth callback authentication
-            return await self.oauth_provider.handle_callback(auth_info["code"], auth_info["state"])
+            auth_context = await self.oauth_provider.handle_callback(auth_info["code"], auth_info["state"])
+            auth_context.auth_method = "external_oauth"
+            auth_context.token = ""
+            auth_context.pool_key = "global"
+            return auth_context
         else:
             raise ValueError("OAuth authentication requires either access_token or code+state")
 
@@ -648,12 +752,42 @@ class AuthenticationProvider:
                 session_id=auth_info.get("session_id", f"session_{token_info.token_id}"),
                 login_time=datetime.utcnow(),
                 last_activity=token_info.last_used,
-                token=token  # Store raw token for token-bound database configuration
+                token=token,  # Store raw token for token-bound database configuration
+                auth_method="token",
+                pool_key=f"static_token:{token_info.token_id}",
             )
             
         except Exception as e:
             self.logger.error(f"Token authentication failed: {e}")
             raise ValueError(f"Token authentication failed: {str(e)}")
+
+    async def _authenticate_legacy_token(self, auth_info: dict[str, Any]) -> AuthContext:
+        """Token authentication for legacy direct callers without TokenManager."""
+        token = auth_info.get("token")
+        if not token:
+            authorization = auth_info.get("authorization")
+            if authorization and authorization.startswith("Bearer "):
+                token = authorization[7:]
+            elif authorization and authorization.startswith("Token "):
+                token = authorization[6:]
+
+        if not token:
+            raise ValueError("Missing authentication token")
+
+        user_info = await self._validate_token(token)
+        return AuthContext(
+            token_id=token,
+            user_id=user_info["user_id"],
+            roles=user_info["roles"],
+            permissions=user_info["permissions"],
+            security_level=user_info["security_level"],
+            client_ip=auth_info.get("client_ip", "unknown"),
+            session_id=auth_info.get("session_id", f"session_{user_info['user_id']}"),
+            login_time=datetime.utcnow(),
+            auth_method="token",
+            token=token,
+            pool_key=f"static_token:{token}",
+        )
 
     async def _authenticate_basic(self, auth_info: dict[str, Any]) -> AuthContext:
         """Basic authentication (username password)"""
@@ -673,6 +807,8 @@ class AuthenticationProvider:
             session_id=auth_info.get("session_id", "default"),
             login_time=datetime.utcnow(),
             security_level=SecurityLevel(user_info.get("security_level", "internal")),
+            auth_method="basic",
+            pool_key="global",
         )
 
     async def _validate_token(self, token: str) -> dict[str, Any]:
@@ -977,6 +1113,10 @@ class SQLSecurityValidator:
             # UNION-based injection (but allow legitimate UNION queries)
             # Only flag if UNION is followed by suspicious patterns like SELECT with WHERE 1=1
             r"UNION\s+(ALL\s+)?SELECT\s+.*\s+(WHERE|AND|OR)\s+\d+\s*=\s*\d+",
+            r"UNION\s+(ALL\s+)?SELECT\s+.*\b(PASSWORD|SECRET|TOKEN|CREDENTIAL|ADMIN)\b",
+
+            # Boolean tautology injection. BETWEEN clauses are cleaned below before this is applied.
+            r"\b(OR|AND)\s+\d+\s*=\s*\d+\b",
 
             # Boolean-based blind injection with comments (true injection pattern)
             r"(WHERE|AND|OR)\s+\d+\s*=\s*\d+\s*(--|#|/\*)",
@@ -1068,9 +1208,16 @@ class SQLSecurityValidator:
                 elif token.ttype in (Comment.Single, Comment.Multi):
                     # Comments are generally OK, but check for suspicious injection patterns
                     comment_value = str(token).lower()
-                    # Check if comment contains dangerous SQL keywords
-                    dangerous_in_comments = ['drop', 'delete', 'insert', 'update', 'union', 'exec', 'execute']
-                    if any(keyword in comment_value for keyword in dangerous_in_comments):
+                    comment_body = re.sub(r"^(--|#|/\*)\s*", "", comment_value).strip()
+                    truncation_pattern = (
+                        r"^(and|or|union|select|drop|delete|insert|update|exec|execute)\b"
+                    )
+                    sensitive_pattern = (
+                        r"\b(admin|credential|password|secret|token)\b"
+                    )
+                    if re.search(truncation_pattern, comment_body) or re.search(
+                        sensitive_pattern, comment_body
+                    ):
                         self.logger.warning(f"Suspicious SQL keyword in comment: {token}")
                         return True
                     # Normal comments are OK

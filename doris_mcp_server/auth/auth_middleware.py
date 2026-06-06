@@ -125,7 +125,9 @@ class AuthMiddleware:
                 session_id=payload.get('jti'),  # Use JWT ID as session ID
                 login_time=datetime.fromtimestamp(payload.get('iat', 0)),
                 last_activity=datetime.utcnow(),
-                token=token  # Store raw token for token-bound database configuration
+                token="",
+                auth_method="jwt",
+                pool_key="global",
             )
             
             logger.info(f"JWT authentication successful for user: {auth_context.user_id}")

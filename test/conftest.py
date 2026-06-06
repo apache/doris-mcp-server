@@ -48,7 +48,7 @@ def event_loop():
 @pytest.fixture
 def test_config():
     """Test configuration fixture"""
-    from doris_mcp_server.utils.config import DorisConfig, DatabaseConfig, SecurityConfig
+    from doris_mcp_server.utils.config import DorisConfig, normalize_effective_auth_config
     
     config = DorisConfig()
     
@@ -68,6 +68,7 @@ def test_config():
     config.security.auth_type = "token"
     config.security.token_secret = "test_secret"
     config.security.token_expiry = 3600
+    normalize_effective_auth_config(config)
     
     return config
 

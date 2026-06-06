@@ -237,6 +237,8 @@ cp .env.example .env
     *   `ENABLE_TOKEN_AUTH`: Enable token-based authentication (default: false)
     *   `ENABLE_JWT_AUTH`: Enable JWT authentication (default: false)
     *   `ENABLE_OAUTH_AUTH`: Enable OAuth authentication (default: false)
+    *   `ENABLE_DORIS_OAUTH_AUTH`: Enable Doris-backed OAuth authentication (default: false)
+    *   `DORIS_OAUTH_BASE_URL`: Public base URL used by Doris-backed OAuth discovery and token endpoints
     *   `TOKEN_FILE_PATH`: Path to tokens.json file for token management (default: tokens.json)
     *   `TOKEN_HOT_RELOAD`: Enable hot reloading of token configuration (default: true)
     *   `DEFAULT_ADMIN_TOKEN`: Default admin token (customizable via env)
@@ -307,6 +309,8 @@ The following table lists the main tools currently available for invocation via 
 | `get_adbc_connection_info` | ADBC connection diagnostics and status monitoring for Arrow Flight SQL. | No parameters required |
 
 **Note:** All metadata tools support catalog federation for multi-catalog environments. Enhanced monitoring tools provide comprehensive memory tracking and metrics collection capabilities. **New in v0.5.0**: 7 advanced analytics tools for enterprise data governance and 2 ADBC tools for high-performance data transfer with 3-10x performance improvements for large datasets.
+
+**Doris-backed OAuth note:** The table above describes global server capabilities. Doris-backed OAuth uses configuration gates for its operation surface. MCP resources are available with resource metadata caching disabled. Reviewed metadata tools are callable when `DORIS_OAUTH_DB_TOOLS_ENABLED=true`; `exec_query` and `get_sql_explain` are callable when their Doris OAuth query/explain gates are enabled. These MySQL-channel operations run through the logged-in Doris user pool, so Doris RBAC is the final data authorization backend. Prompts, ADBC, FE HTTP profile/monitoring, audit/governance, and performance analytics remain closed until they have per-user routing or an explicit service-account/admin design.
 
 ### 4. Run the Service
 
@@ -455,6 +459,85 @@ DEFAULT_READONLY_TOKEN=doris_readonly_token_123456
 # AUTH_TYPE=token               # Use individual switches instead
 # TOKEN_SECRET=your_secret_key  # Use token-based auth instead
 ```
+
+### Doris-Backed OAuth Authentication
+
+Doris-backed OAuth is a separate OAuth mode where Doris itself is the authorization backend. The MCP client discovers this server's OAuth metadata, the user signs in with a Doris username and password, the server validates those credentials by creating a per-user Doris connection pool, and issued `doa_` access tokens route tool calls through that Doris user's pool. MCP scopes control which MCP operations can be called; Doris RBAC controls which catalogs, databases, tables, and metadata the user can see.
+
+This mode is not the same as external OAuth/OIDC. `ENABLE_DORIS_OAUTH_AUTH=true` conflicts with `ENABLE_OAUTH_AUTH=true`, `OAUTH_ENABLED=true`, and legacy `AUTH_TYPE=oauth`; startup fails fast if both modes are configured. A standard MCP agent enters one MCP URL and should discover exactly one OAuth behavior for that URL, so the existing `/auth/*` external OAuth login flow is not used in Doris-backed OAuth mode.
+
+#### Minimal Local Configuration
+
+The following example is for local development on a single worker:
+
+```bash
+TRANSPORT=http
+WORKERS=1
+
+DORIS_HOST=localhost
+DORIS_PORT=9030
+DORIS_USER=root
+DORIS_PASSWORD=<service-account-password>
+DORIS_DATABASE=information_schema
+
+ENABLE_DORIS_OAUTH_AUTH=true
+DORIS_OAUTH_BASE_URL=http://localhost:3000
+ENABLE_OAUTH_AUTH=false
+
+DORIS_OAUTH_DB_TOOLS_ENABLED=true
+DORIS_OAUTH_DB_TOOL_ALLOWLIST=get_db_list,get_db_table_list,get_table_schema,get_table_comment,get_table_column_comments,get_table_indexes,get_catalog_list
+DORIS_OAUTH_QUERY_TOOLS_ENABLED=true
+DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true
+
+# Optional: let Doris RBAC, not the legacy MCP SQL guard, decide DDL/DML.
+ENABLE_SECURITY_CHECK=false
+```
+
+The configured service Doris account is still required by startup validation and by non-Doris-OAuth compatibility paths. Doris-backed OAuth requests are fail-closed if the per-user pool is missing and must not fall back to the service/global account.
+
+#### Doris OAuth Tool Access
+
+`DORIS_OAUTH_DB_TOOLS_ENABLED=true` opens the reviewed metadata bucket. The reviewed tools are:
+
+*   `get_db_list`
+*   `get_db_table_list`
+*   `get_table_schema`
+*   `get_table_comment`
+*   `get_table_column_comments`
+*   `get_table_indexes`
+*   `get_catalog_list`
+
+For normal MCP OAuth flows, clients do not need to pass a long `--scopes` list. If the OAuth request omits scope, the server grants the configured Doris OAuth capability envelope. For MySQL-channel operations, Doris RBAC decides whether the logged-in Doris user can actually read metadata, run SQL, or explain SQL.
+
+`DORIS_OAUTH_QUERY_TOOLS_ENABLED=true` opens `exec_query`. `DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true` opens `get_sql_explain`. If `ENABLE_SECURITY_CHECK=true`, the legacy MCP SQL security layer can still reject some SQL before Doris sees it. Set `ENABLE_SECURITY_CHECK=false` when the intended policy is to let Doris RBAC decide SQL/DDL/DML.
+
+Doris-backed OAuth still does not open prompts, ADBC, FE HTTP profile/monitoring, audit/governance, or performance analytics in this phase unless those paths are separately routed through per-user credentials or given an explicit service-account/admin design.
+
+#### Current Operational Limits
+
+Doris-backed OAuth is currently single-process and single-worker:
+
+*   `WORKERS=1` is required. `WORKERS=0` expands to CPU count and fails when Doris-backed OAuth is enabled.
+*   OAuth clients, authorization transactions, authorization codes, access tokens, refresh tokens, and DCR clients are memory-only and process-local.
+*   Per-user Doris connection pools are process-local.
+*   Process restart requires users to sign in again.
+*   Tokens and pools are not shared across workers, processes, or nodes.
+*   Stateless horizontal scaling and multi-node deployment are not supported for Doris-backed OAuth yet.
+
+If an access token is otherwise valid but its Doris user pool is gone, the request fails with login required / `DORIS_OAUTH_POOL_MISSING`. The server does not store raw Doris passwords for automatic pool reconstruction.
+
+#### Production Hardening
+
+For production deployments:
+
+*   Use an HTTPS `DORIS_OAUTH_BASE_URL` for any non-loopback address.
+*   Keep `DORIS_OAUTH_ALLOW_INSECURE_HTTP=false`; non-loopback `http://` is rejected unless explicitly overridden for development.
+*   Enable `DORIS_OAUTH_TRUST_PROXY_HEADERS` only behind a controlled reverse proxy and set `DORIS_OAUTH_TRUSTED_PROXY_CIDRS`.
+*   Keep login, authorize, token, refresh, revoke, and DCR rate limits enabled.
+*   Use Doris RBAC as the final data authorization boundary and grant Doris users only the data they should inspect.
+*   Do not log Doris passwords, authorization headers, access tokens, refresh tokens, authorization codes, PKCE verifiers, or client secrets.
+*   Treat the `doa_` prefix as reserved for Doris-backed OAuth access tokens; static tokens and JWT bearer values must not use it.
+*   Keep Dynamic Client Registration in `auto` for loopback development or explicitly configure production DCR with `ENABLE_DORIS_OAUTH_PRODUCTION_DCR=true`.
 
 ### Token-Bound Database Configuration (New in v0.6.0)
 
@@ -715,6 +798,7 @@ sensitive_tables = {
 4. **🛡️ Input Validation**: All SQL queries are automatically validated
 5. **🎭 Data Classification**: Properly classify data with security levels
 6. **🔄 Regular Updates**: Keep security rules and configurations updated
+7. **Doris-backed OAuth Hardening**: Use HTTPS, keep external OAuth disabled in this mode, keep `WORKERS=1`, rely on Doris RBAC for MySQL-channel data access, and expose only operations that are configured and verified to use the logged-in Doris user's credentials.
 
 ### Security Monitoring
 
@@ -1468,6 +1552,20 @@ cat logs/doris_mcp_server_critical.log
    curl -H "Authorization: Bearer tenant_alpha_secure_token_123" http://localhost:3000/mcp
    curl -H "Authorization: Bearer tenant_beta_secure_token_456" http://localhost:3000/mcp
    ```
+
+### Q: How is Doris-backed OAuth different from external OAuth/OIDC?
+
+**A:** External OAuth/OIDC delegates identity to an external provider such as Google, Azure AD, GitHub, GitLab, or Keycloak. Doris-backed OAuth is issued by this MCP server after the user signs in with Doris credentials. The server validates the Doris username/password, creates a per-user Doris connection pool, issues `doa_` access and refresh tokens, and lets Doris RBAC decide what data and metadata that user can access.
+
+These modes are mutually exclusive on one MCP URL. Do not enable `ENABLE_DORIS_OAUTH_AUTH=true` together with `ENABLE_OAUTH_AUTH=true`, `OAUTH_ENABLED=true`, or `AUTH_TYPE=oauth`; startup fails fast if both OAuth modes are configured.
+
+Doris-backed OAuth currently exposes MCP resources with disabled resources metadata cache. It exposes reviewed metadata tools when `DORIS_OAUTH_DB_TOOLS_ENABLED=true`, `exec_query` when `DORIS_OAUTH_QUERY_TOOLS_ENABLED=true`, and SQL explain when `DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true`. Normal clients do not need to pass a long scope list; omitted OAuth scope grants the configured Doris OAuth capability envelope. Doris RBAC remains the final data authorization backend for these MySQL-channel operations.
+
+### Q: Can Doris-backed OAuth run with multiple workers or multiple nodes?
+
+**A:** Not in the current implementation. Doris-backed OAuth uses a memory-only OAuth store and process-local per-user Doris pools. Access tokens, refresh tokens, authorization codes, DCR clients, and pools are not shared between workers, processes, or nodes.
+
+Use `WORKERS=1` with Doris-backed OAuth. `WORKERS=0` expands to CPU count and fails because it would create multiple effective workers. Stateless horizontal scaling, shared token storage, shared encrypted Doris credentials, sticky-session recovery, and pool reconstruction are future designs, not current capabilities.
 
 ### Q: How does Hot Reload work and is it safe? (New in v0.6.0)
 

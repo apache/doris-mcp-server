@@ -22,16 +22,16 @@ to prevent SQL injection attacks.
 """
 
 import re
-from contextvars import ContextVar
 from typing import Optional, Tuple, List, Any
 
 from .logger import get_logger
+from .security import (
+    get_current_auth_context,
+    mcp_auth_context_var as auth_context_var,
+    set_current_auth_context,
+)
 
 logger = get_logger(__name__)
-
-# Context variable for auth_context (set by HTTP middleware)
-auth_context_var: ContextVar = ContextVar('mcp_auth_context', default=None)
-
 
 class SQLSecurityError(Exception):
     """Exception raised for SQL security validation failures"""
@@ -269,7 +269,7 @@ class SQLSecurityUtils:
             The auth_context object, or None if not available
         """
         try:
-            auth_context = auth_context_var.get()
+            auth_context = get_current_auth_context()
             if auth_context:
                 logger.debug(f"Retrieved auth_context from context variable")
             return auth_context
@@ -287,7 +287,7 @@ class SQLSecurityUtils:
         Args:
             auth_context: The auth_context object to set
         """
-        auth_context_var.set(auth_context)
+        set_current_auth_context(auth_context)
         logger.debug("Set auth_context in context variable")
 
 
@@ -298,4 +298,3 @@ build_table_reference = SQLSecurityUtils.build_table_reference
 build_column_reference = SQLSecurityUtils.build_column_reference
 get_auth_context = SQLSecurityUtils.get_auth_context
 set_auth_context = SQLSecurityUtils.set_auth_context
-

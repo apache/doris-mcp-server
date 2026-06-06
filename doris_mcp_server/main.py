@@ -26,6 +26,7 @@ import argparse
 import asyncio
 import json
 import logging
+import sys
 from typing import Any
 
 # MCP version compatibility handling
@@ -209,9 +210,15 @@ if not _import_mcp_with_compatibility():
 from .tools.tools_manager import DorisToolsManager
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
-from .utils.config import DorisConfig
+from .auth.operation_policy import OperationAuthorizationError, authorize_operation
+from .utils.config import (
+    DorisConfig,
+    _mark_source,
+    get_effective_auth_config,
+    normalize_effective_auth_config,
+)
 from .utils.db import DorisConnectionManager
-from .utils.security import DorisSecurityManager
+from .utils.security import DorisSecurityManager, get_current_auth_context
 import os
 
 # Configure logging - will be properly initialized later
@@ -239,6 +246,7 @@ class DorisServer:
         
         # Set connection manager reference in security manager for database validation
         self.security_manager.connection_manager = self.connection_manager
+        self.security_manager.auth_provider.configure_doris_oauth(self.connection_manager)
 
         # Initialize independent managers
         self.resources_manager = DorisResourcesManager(self.connection_manager)
@@ -332,23 +340,33 @@ class DorisServer:
         async def handle_list_resources() -> list[Resource]:
             """Handle resource list request"""
             try:
+                authorize_operation(get_current_auth_context(), "list_resources")
                 self.logger.info("Handling resource list request")
                 resources = await self.resources_manager.list_resources()
                 self.logger.info(f"Returning {len(resources)} resources")
                 return resources
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 self.logger.error(f"Failed to handle resource list request: {e}")
+                if getattr(get_current_auth_context(), "auth_method", "") == "doris_oauth":
+                    raise
                 return []
 
         @self.server.read_resource()
         async def handle_read_resource(uri: str) -> str:
             """Handle resource read request"""
             try:
+                authorize_operation(get_current_auth_context(), "read_resource")
                 self.logger.info(f"Handling resource read request: {uri}")
                 content = await self.resources_manager.read_resource(uri)
                 return content
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 self.logger.error(f"Failed to handle resource read request: {e}")
+                if getattr(get_current_auth_context(), "auth_method", "") == "doris_oauth":
+                    raise
                 return json.dumps(
                     {"error": f"Failed to read resource: {str(e)}", "uri": uri},
                     ensure_ascii=False,
@@ -359,10 +377,13 @@ class DorisServer:
         async def handle_list_tools() -> list[Tool]:
             """Handle tool list request"""
             try:
+                authorize_operation(get_current_auth_context(), "list_tools")
                 self.logger.info("Handling tool list request")
                 tools = await self.tools_manager.list_tools()
                 self.logger.info(f"Returning {len(tools)} tools")
                 return tools
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 self.logger.error(f"Failed to handle tool list request: {e}")
                 return []
@@ -377,6 +398,8 @@ class DorisServer:
                 result = await self.tools_manager.call_tool(name, arguments)
 
                 return [TextContent(type="text", text=result)]
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 self.logger.error(f"Failed to handle tool call request: {e}")
                 error_result = json.dumps(
@@ -395,10 +418,13 @@ class DorisServer:
         async def handle_list_prompts() -> list[Prompt]:
             """Handle prompt list request"""
             try:
+                authorize_operation(get_current_auth_context(), "list_prompts")
                 self.logger.info("Handling prompt list request")
                 prompts = await self.prompts_manager.list_prompts()
                 self.logger.info(f"Returning {len(prompts)} prompts")
                 return prompts
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 self.logger.error(f"Failed to handle prompt list request: {e}")
                 return []
@@ -407,9 +433,12 @@ class DorisServer:
         async def handle_get_prompt(name: str, arguments: dict[str, Any]) -> str:
             """Handle prompt get request"""
             try:
+                authorize_operation(get_current_auth_context(), "get_prompt")
                 self.logger.info(f"Handling prompt get request: {name}")
                 result = await self.prompts_manager.get_prompt(name, arguments)
                 return result
+            except OperationAuthorizationError:
+                raise
             except Exception as e:
                 self.logger.error(f"Failed to handle prompt get request: {e}")
                 error_result = json.dumps(
@@ -507,6 +536,12 @@ class DorisServer:
             if global_pool_created:
                 self.logger.info("Global database connection pool available for HTTP mode")
             else:
+                effective_auth = get_effective_auth_config(self.config)
+                if effective_auth.enable_doris_oauth_auth:
+                    raise RuntimeError(
+                        "Doris OAuth requires the configured service/global Doris account "
+                        "to initialize successfully in Phase 3"
+                    )
                 self.logger.info("HTTP mode running without global database pool, will use token-bound configurations")
 
             # Use Starlette and StreamableHTTPSessionManager according to official example
@@ -569,6 +604,13 @@ class DorisServer:
                 
             async def token_management(request):
                 return await token_handlers.handle_management_page(request)
+
+            doris_oauth_handlers = None
+            if self.security_manager.auth_provider.doris_oauth_provider:
+                from .auth.doris_oauth_handlers import DorisOAuthHandlers
+                doris_oauth_handlers = DorisOAuthHandlers(
+                    self.security_manager.auth_provider.doris_oauth_provider
+                )
             
             # Lifecycle manager - simplified since we manage session_manager externally
             @contextlib.asynccontextmanager
@@ -580,25 +622,64 @@ class DorisServer:
                 finally:
                     self.logger.info("Application is shutting down...")
             
-            # Create ASGI application - use direct session manager as ASGI app
-            starlette_app = Starlette(
-                debug=True,
-                routes=[
-                    Route("/health", health_check, methods=["GET"]),
-                    # OAuth endpoints
+            effective_auth = get_effective_auth_config(self.config)
+            routes = [Route("/health", health_check, methods=["GET"])]
+            if effective_auth.enable_external_oauth_auth:
+                routes.extend([
                     Route("/auth/login", oauth_login, methods=["GET"]),
                     Route("/auth/callback", oauth_callback, methods=["GET"]),
                     Route("/auth/provider", oauth_provider_info, methods=["GET"]),
                     Route("/auth/demo", oauth_demo, methods=["GET"]),
-                    # Token management endpoints
-                    Route("/token/create", token_create, methods=["GET", "POST"]),
-                    Route("/token/revoke", token_revoke, methods=["GET", "DELETE"]),
-                    Route("/token/list", token_list, methods=["GET"]),
-                    Route("/token/stats", token_stats, methods=["GET"]),
-                    Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
-                    Route("/token/management", token_management, methods=["GET"]),
-                ],
+                ])
+            if effective_auth.enable_doris_oauth_auth and doris_oauth_handlers:
+                routes.extend(doris_oauth_handlers.routes())
+            routes.extend([
+                Route("/token/create", token_create, methods=["GET", "POST"]),
+                Route("/token/revoke", token_revoke, methods=["GET", "DELETE"]),
+                Route("/token/list", token_list, methods=["GET"]),
+                Route("/token/stats", token_stats, methods=["GET"]),
+                Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
+                Route("/token/management", token_management, methods=["GET"]),
+            ])
+
+            # Create ASGI application - use direct session manager as ASGI app
+            starlette_app = Starlette(
+                debug=True,
+                routes=routes,
                 lifespan=lifespan,
+            )
+
+            from .auth.mcp_auth_middleware import MCPAuthASGIMiddleware
+
+            async def authenticated_mcp_downstream(scope, receive, send):
+                """Handle authenticated MCP request after auth context is set."""
+                method = scope.get("method", "UNKNOWN")
+                headers = dict(scope.get("headers", []))
+
+                # Handle Dify compatibility for GET requests
+                if method == "GET":
+                    accept_header = headers.get(b'accept', b'').decode('utf-8')
+
+                    # For other GET requests, try to add application/json to Accept header
+                    if 'text/event-stream' in accept_header and 'application/json' not in accept_header:
+                        self.logger.info("Adding application/json to Accept header for GET request")
+                        new_headers = []
+                        for name, value in scope.get("headers", []):
+                            if name == b'accept':
+                                new_value = value.decode('utf-8') + ', application/json'
+                                new_headers.append((name, new_value.encode('utf-8')))
+                            else:
+                                new_headers.append((name, value))
+                        scope = dict(scope)
+                        scope["headers"] = new_headers
+                        self.logger.info(f"Modified Accept header to: {new_value}")
+
+                await session_manager.handle_request(scope, receive, send)
+
+            mcp_auth_middleware = MCPAuthASGIMiddleware(
+                self.security_manager,
+                authenticated_mcp_downstream,
+                effective_auth,
             )
             
             # Custom ASGI app that handles both /mcp and /mcp/ without redirects
@@ -614,80 +695,26 @@ class DorisServer:
                     self.logger.info(f"Received request for path: {path}")
                     
                     try:
-                        # Handle health check, auth, and token management endpoints  
+                        # Handle health check, auth, OAuth, and token management endpoints.
+                        if effective_auth.enable_doris_oauth_auth and path.startswith("/auth/"):
+                            response = JSONResponse({"error": "external_oauth_disabled"}, status_code=404)
+                            await response(scope, receive, send)
+                            return
+
                         if (path.startswith("/health") or 
                             path.startswith("/auth/") or 
-                            path.startswith("/token/")):
+                            path.startswith("/token/") or
+                            path.startswith("/.well-known/") or
+                            path.startswith("/oauth/") or
+                            path == "/doris-login" or
+                            path.startswith("/api/auth/")):
                             await starlette_app(scope, receive, send)
                             return
                         
                         # Handle MCP requests - both /mcp and /mcp/ go to session manager
                         if path == "/mcp" or path.startswith("/mcp/"):
                             self.logger.info(f"Handling MCP request for path: {path}")
-                            # Log request details for debugging
-                            method = scope.get("method", "UNKNOWN")
-                            headers = dict(scope.get("headers", []))
-                            self.logger.info(f"MCP Request - Method: {method}")
-                            self.logger.info(f"MCP Request - Headers: {headers}")
-                            
-                            # Authentication check for MCP requests
-                            try:
-                                # Extract authentication information
-                                auth_info = await self._extract_auth_info_from_scope(scope, headers)
-
-                                # Authenticate the request
-                                auth_context = await self.security_manager.authenticate_request(auth_info)
-                                self.logger.info(f"MCP request authenticated: token_id={auth_context.token_id}, client_ip={auth_context.client_ip}")
-
-                                # Store auth context in scope for potential use by tools/resources
-                                scope["auth_context"] = auth_context
-
-                                # FIX for Issue #62 Bug 1: Set auth_context in context variable
-                                # This allows tools to access token information for token-bound database configuration
-                                # CRITICAL: Use the global ContextVar from security.py to ensure same instance is used everywhere
-                                try:
-                                    from .utils.security import mcp_auth_context_var
-                                    mcp_auth_context_var.set(auth_context)
-                                    self.logger.debug(f"Set auth_context in context variable with token: {bool(hasattr(auth_context, 'token') and auth_context.token)}")
-                                except Exception as ctx_error:
-                                    self.logger.warning(f"Failed to set auth_context in context variable: {ctx_error}")
-
-                            except Exception as auth_error:
-                                self.logger.error(f"MCP authentication failed: {auth_error}")
-                                # Return 401 Unauthorized
-                                from starlette.responses import JSONResponse
-                                response = JSONResponse(
-                                    {"error": "Authentication required", "message": str(auth_error)},
-                                    status_code=401
-                                )
-                                await response(scope, receive, send)
-                                return
-                            
-                            # Handle Dify compatibility for GET requests
-                            if method == "GET":
-                                accept_header = headers.get(b'accept', b'').decode('utf-8')
-                                user_agent = headers.get(b'user-agent', b'').decode('utf-8')
-                                
-
-                                
-                                # For other GET requests, try to add application/json to Accept header
-                                if 'text/event-stream' in accept_header and 'application/json' not in accept_header:
-                                    self.logger.info("Adding application/json to Accept header for GET request")
-                                    # Modify headers to include both content types
-                                    new_headers = []
-                                    for name, value in scope.get("headers", []):
-                                        if name == b'accept':
-                                            # Add application/json to the accept header
-                                            new_value = value.decode('utf-8') + ', application/json'
-                                            new_headers.append((name, new_value.encode('utf-8')))
-                                        else:
-                                            new_headers.append((name, value))
-                                    # Update scope with modified headers
-                                    scope = dict(scope)
-                                    scope["headers"] = new_headers
-                                    self.logger.info(f"Modified Accept header to: {new_value}")
-                            
-                            await session_manager.handle_request(scope, receive, send)
+                            await mcp_auth_middleware(scope, receive, send)
                             return
                         
                         # 404 for other paths
@@ -854,15 +881,20 @@ def update_configuration(config: DorisConfig):
     # For some arguments, if not specified, environment variables or default configurations will be used as default values
     parser = create_arg_parser()
     args = parser.parse_args()
+    argv = sys.argv[1:]
+
+    def cli_has(*options: str) -> bool:
+        return any(arg == option or arg.startswith(f"{option}=") for arg in argv for option in options)
 
     # Update config values
     # Command line arguments override configuration (if provided)
     # basic
-    if args.transport != _default_config.transport:
+    if cli_has("--transport"):
         config.transport = args.transport
-    if args.host != _default_config.server_host:
+        _mark_source(config, "transport", "cli")
+    if cli_has("--host"):
         config.server_host = args.host
-    if args.port != _default_config.server_port:
+    if cli_has("--port"):
         config.server_port = args.port
     server_name = os.getenv("SERVER_NAME")
     if server_name:
@@ -872,24 +904,25 @@ def update_configuration(config: DorisConfig):
         config.server_version = server_version
  
     # database
-    if args.doris_host != _default_config.database.host:  # If not default value, use command line argument
+    if cli_has("--doris-host", "--db-host"):
         config.database.host = args.doris_host
-    if args.doris_port != _default_config.database.port:
+    if cli_has("--doris-port", "--db-port"):
         config.database.port = args.doris_port
-    if args.doris_user != _default_config.database.user:
+    if cli_has("--doris-user", "--db-user"):
         config.database.user = args.doris_user
-    if args.doris_password:  # Use password if provided
+    if cli_has("--doris-password", "--db-password"):
         config.database.password = args.doris_password
-    if args.doris_database != _default_config.database.database:
+    if cli_has("--doris-database", "--db-name"):
         config.database.database = args.doris_database
 
     # logging
-    if args.log_level != _default_config.logging.level:
+    if cli_has("--log-level"):
         config.logging.level = args.log_level
     
     # workers (add to config for HTTP mode)
-    if hasattr(args, 'workers'):
+    if hasattr(args, 'workers') and cli_has("--workers"):
         config.workers = args.workers
+        _mark_source(config, "workers", "cli")
 
 
 async def main():
@@ -917,6 +950,19 @@ async def main():
     logger.info(f"Transport: {config.transport}")
     logger.info(f"Log Level: {config.logging.level}")
 
+    try:
+        effective_auth = normalize_effective_auth_config(
+            config, requested_workers=getattr(config, "workers", 1)
+        )
+    except Exception as auth_config_error:
+        logger.error(f"Invalid authentication configuration: {auth_config_error}")
+        return 1
+
+    if effective_auth.auth_config_warnings:
+        for warning in effective_auth.auth_config_warnings:
+            logger.warning(warning)
+    config.workers = effective_auth.effective_workers
+
     # Create server instance
     server = DorisServer(config)
 
@@ -924,13 +970,7 @@ async def main():
         if config.transport == "stdio":
             await server.start_stdio()
         elif config.transport == "http":
-            # Get workers configuration with auto-detection support
-            workers = getattr(config, 'workers', 1)
-            if workers == 0:
-                import multiprocessing
-                workers = multiprocessing.cpu_count()
-                logger.info(f"Auto-detected {workers} CPU cores for worker processes")
-            
+            workers = getattr(config, 'workers', effective_auth.effective_workers)
             await server.start_http(config.server_host, config.server_port, workers)
         else:
             logger.error(f"Unsupported transport protocol: {config.transport}")

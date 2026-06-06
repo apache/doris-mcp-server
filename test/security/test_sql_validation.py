@@ -101,6 +101,34 @@ class TestSQLSecurityValidator:
         assert "comment" in result.error_message.lower()
 
     @pytest.mark.asyncio
+    async def test_legitimate_comment_is_allowed(self, sql_validator, analyst_context):
+        """Test normal comments are not rejected by substring matches."""
+        sql = "SELECT 1 -- order by note"
+
+        result = await sql_validator.validate(sql, analyst_context)
+
+        assert result.is_valid is True
+
+    @pytest.mark.asyncio
+    async def test_legitimate_union_is_allowed(self, sql_validator, analyst_context):
+        """Test ordinary UNION queries are not rejected as sensitive extraction."""
+        sql = "SELECT name FROM users UNION ALL SELECT name FROM archived_users"
+
+        result = await sql_validator.validate(sql, analyst_context)
+
+        assert result.is_valid is True
+
+    @pytest.mark.asyncio
+    async def test_union_sensitive_field_injection_is_rejected(self, sql_validator, analyst_context):
+        """Test UNION extraction of sensitive fields is rejected."""
+        sql = "SELECT name FROM users UNION SELECT password FROM admin_users"
+
+        result = await sql_validator.validate(sql, analyst_context)
+
+        assert result.is_valid is False
+        assert "injection" in result.error_message.lower()
+
+    @pytest.mark.asyncio
     async def test_complex_query_validation(self, sql_validator, analyst_context, test_sql_queries):
         """Test complex query validation"""
         sql = test_sql_queries["complex_query"]
@@ -158,4 +186,4 @@ class TestSQLSecurityValidator:
         result = await sql_validator.validate(malformed_sql, analyst_context)
         
         # Should handle gracefully
-        assert isinstance(result, ValidationResult) 
+        assert isinstance(result, ValidationResult)

@@ -26,6 +26,11 @@ from typing import Any, Dict, List
 
 from mcp.types import Tool
 
+from ..auth.operation_policy import (
+    OperationAuthorizationError,
+    authorize_operation,
+    filter_tools_for_auth_context,
+)
 from ..utils.db import DorisConnectionManager
 from ..utils.query_executor import DorisQueryExecutor
 from ..utils.analysis_tools import TableAnalyzer, SQLAnalyzer, MemoryTracker
@@ -39,6 +44,7 @@ from ..utils.dependency_analysis_tools import DependencyAnalysisTools
 from ..utils.performance_analytics_tools import PerformanceAnalyticsTools
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.logger import get_logger
+from ..utils.security import get_current_auth_context
 
 logger = get_logger(__name__)
 
@@ -1359,12 +1365,13 @@ No parameters required. Returns connection status, configuration, and diagnostic
             ),
         ]
         
-        return tools
+        return filter_tools_for_auth_context(get_current_auth_context(), tools)
         
     async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
         """
         Call the specified query tool (tool routing and scheduling center)
         """
+        authorize_operation(get_current_auth_context(), f"tool:{name}")
         try:
             start_time = time.time()
             
@@ -1449,6 +1456,8 @@ No parameters required. Returns connection status, configuration, and diagnostic
             
             return json.dumps(result, ensure_ascii=False, indent=2)
             
+        except OperationAuthorizationError:
+            raise
         except Exception as e:
             logger.error(f"Tool call failed {name}: {str(e)}")
             error_result = {

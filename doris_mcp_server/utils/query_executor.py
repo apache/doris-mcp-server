@@ -28,7 +28,7 @@ import time
 import os
 import uuid
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, date
 from typing import Any, Dict
 from decimal import Decimal
@@ -37,7 +37,12 @@ import sqlparse
 
 from .db import DorisConnectionManager, QueryResult, get_first_sql_keyword
 from .logger import get_logger
-from .sql_security_utils import get_auth_context
+from .sql_security_utils import (
+    SQLSecurityError,
+    get_auth_context,
+    quote_identifier,
+    validate_identifier,
+)
 
 
 @dataclass
@@ -391,6 +396,18 @@ class DorisQueryExecutor:
         self.metrics.concurrent_queries += 1
 
         try:
+            effective_auth_context = auth_context or get_auth_context()
+            if (
+                query_request.cache_enabled
+                and getattr(effective_auth_context, "auth_method", "") == "doris_oauth"
+            ):
+                self.logger.warning(
+                    "Doris OAuth query cache disabled for session %s",
+                    query_request.session_id,
+                )
+                query_request = replace(query_request, cache_enabled=False)
+                auth_context = effective_auth_context
+
             # Check cache first
             if query_request.cache_enabled:
                 cached_result = await self.query_cache.get(
@@ -543,6 +560,138 @@ class DorisQueryExecutor:
 
         return query_results
 
+    def _build_context_statements(
+        self, db_name: str | None = None, catalog_name: str | None = None
+    ) -> list[str]:
+        """Build validated Doris context switching statements."""
+        statements: list[str] = []
+        if catalog_name:
+            validate_identifier(catalog_name, "catalog name")
+            safe_catalog = quote_identifier(catalog_name, "catalog name")
+            statements.append(f"USE CATALOG {safe_catalog}")
+        if db_name:
+            validate_identifier(db_name, "database name")
+            safe_db = quote_identifier(db_name, "database name")
+            statements.append(f"USE {safe_db}")
+        return statements
+
+    async def _acquire_routed_connection(self, session_id: str, auth_context=None):
+        """Acquire a routed connection, preserving an explicit auth context."""
+        get_connection_for_auth_context = getattr(
+            self.connection_manager,
+            "_get_connection_for_auth_context",
+            None,
+        )
+        if callable(get_connection_for_auth_context):
+            get_effective_auth_context = getattr(
+                self.connection_manager,
+                "_get_effective_auth_context",
+                None,
+            )
+            effective_auth_context = (
+                get_effective_auth_context(auth_context)
+                if callable(get_effective_auth_context)
+                else auth_context
+            )
+            return await get_connection_for_auth_context(
+                session_id,
+                effective_auth_context,
+            )
+        return await self.connection_manager.get_connection(session_id)
+
+    async def _release_routed_connection(self, session_id: str, connection) -> None:
+        release_connection = getattr(self.connection_manager, "release_connection", None)
+        if callable(release_connection):
+            await release_connection(session_id, connection)
+
+    def _query_result_payload(self, result: QueryResult) -> dict[str, Any]:
+        return {
+            "data": [self._serialize_row_data(data) for data in result.data],
+            "row_count": result.row_count,
+            "execution_time": result.execution_time,
+            "metadata": {
+                "columns": result.metadata.get("columns", []),
+                "query": result.sql,
+            },
+        }
+
+    async def _execute_sql_with_context_for_mcp(
+        self,
+        sql: str,
+        *,
+        db_name: str | None = None,
+        catalog_name: str | None = None,
+        limit: int = 1000,
+        timeout: int = 30,
+        session_id: str = "mcp_session",
+        user_id: str = "mcp_user",
+        auth_context=None,
+    ) -> Dict[str, Any]:
+        """Execute optional catalog/db context and target SQL on one routed connection."""
+        try:
+            context_statements = self._build_context_statements(db_name, catalog_name)
+        except SQLSecurityError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_type": "invalid_context",
+                "data": None,
+            }
+
+        target_statements = [s.strip() for s in sqlparse.split(sql) if s.strip()]
+        if not target_statements:
+            return {
+                "success": False,
+                "error": "SQL query is required",
+                "data": None,
+            }
+
+        if len(target_statements) == 1:
+            target_sql = target_statements[0]
+            if get_first_sql_keyword(target_sql) == "SELECT" and "LIMIT" not in target_sql.upper():
+                target_sql = target_sql.rstrip(";")
+                target_sql = f"{target_sql} LIMIT {limit}"
+            target_statements = [target_sql]
+
+        connection = None
+        try:
+            connection = await self._acquire_routed_connection(session_id, auth_context)
+            for context_sql in context_statements:
+                if timeout:
+                    await asyncio.wait_for(
+                        connection.execute(context_sql, auth_context=auth_context),
+                        timeout=timeout,
+                    )
+                else:
+                    await connection.execute(context_sql, auth_context=auth_context)
+
+            query_results: list[QueryResult] = []
+            for statement in target_statements:
+                if timeout:
+                    result = await asyncio.wait_for(
+                        connection.execute(statement, auth_context=auth_context),
+                        timeout=timeout,
+                    )
+                else:
+                    result = await connection.execute(statement, auth_context=auth_context)
+                query_results.append(result)
+
+            if len(query_results) == 1:
+                payload = self._query_result_payload(query_results[0])
+                return {
+                    "success": True,
+                    **payload,
+                }
+
+            return {
+                "success": True,
+                "multiple_results": True,
+                "results": [self._query_result_payload(result) for result in query_results],
+            }
+        finally:
+            if connection is not None:
+                await self._release_routed_connection(session_id, connection)
+
     async def explain_query(self, sql: str, session_id: str) -> dict[str, Any]:
         """Get query execution plan"""
         explain_sql = f"EXPLAIN {sql}"
@@ -599,6 +748,8 @@ class DorisQueryExecutor:
         timeout: int = 30,
         session_id: str = "mcp_session",
         user_id: str = "mcp_user",
+        db_name: str | None = None,
+        catalog_name: str | None = None,
         auth_context = None  # FIX for Issue #62 Bug 1: Accept auth_context with token
     ) -> Dict[str, Any]:
         """Execute SQL query for MCP interface - unified method
@@ -685,15 +836,18 @@ class DorisQueryExecutor:
                 else:
                     self.logger.warning("Security configuration not found, proceeding without validation")
 
-                # Add LIMIT if not present and it's a SELECT query.
-                # get_first_sql_keyword skips leading comments so `-- note\nSELECT ...`
-                # still gets the LIMIT cap (sql.startswith would silently bypass it).
-                sql_upper = sql.upper()
-                if get_first_sql_keyword(sql) == "SELECT" and "LIMIT" not in sql_upper:
-                    if sql.endswith(";"):
-                        sql = sql[:-1]
-                    sql = f"{sql} LIMIT {limit}"
-                
+                if db_name or catalog_name:
+                    return await self._execute_sql_with_context_for_mcp(
+                        sql,
+                        db_name=db_name,
+                        catalog_name=catalog_name,
+                        limit=limit,
+                        timeout=timeout,
+                        session_id=session_id,
+                        user_id=user_id,
+                        auth_context=auth_context,
+                    )
+
                 all_statements = [
                     s.strip()
                     for s in sqlparse.split(sql)
@@ -703,6 +857,16 @@ class DorisQueryExecutor:
                     return await self.execute_batch_sqls_for_mcp(sqls=all_statements, timeout=timeout,
                                                                  session_id=session_id, user_id=user_id,
                                                                  auth_context=auth_context)
+
+                # Add LIMIT if not present and it's a single SELECT query.
+                # Split first so a multi-statement SQL block is not turned into
+                # an extra synthetic statement such as a trailing "LIMIT 100".
+                sql_upper = sql.upper()
+                if get_first_sql_keyword(sql) == "SELECT" and "LIMIT" not in sql_upper:
+                    if sql.endswith(";"):
+                        sql = sql[:-1]
+                    sql = f"{sql} LIMIT {limit}"
+
                 # Create query request
                 query_request = QueryRequest(
                     sql=sql,
@@ -974,6 +1138,8 @@ async def execute_sql_query(sql: str, connection_manager: DorisConnectionManager
         session_id = kwargs.get("session_id", "mcp_session")
         user_id = kwargs.get("user_id", "mcp_user")
         auth_context = kwargs.get("auth_context", None)  # FIX: Extract auth_context
+        db_name = kwargs.get("db_name", None)
+        catalog_name = kwargs.get("catalog_name", None)
 
         # The execute_sql_for_mcp method now includes security validation
         result = await executor.execute_sql_for_mcp(
@@ -982,6 +1148,8 @@ async def execute_sql_query(sql: str, connection_manager: DorisConnectionManager
             timeout=timeout,
             session_id=session_id,
             user_id=user_id,
+            db_name=db_name,
+            catalog_name=catalog_name,
             auth_context=auth_context  # FIX: Pass auth_context with token
         )
 

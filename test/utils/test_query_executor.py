@@ -20,10 +20,13 @@ Query executor tests
 """
 
 import pytest
+from datetime import datetime
 from unittest.mock import Mock, AsyncMock, patch
 
-from doris_mcp_server.utils.query_executor import DorisQueryExecutor
+from doris_mcp_server.utils.query_executor import CachedQuery, DorisQueryExecutor, QueryRequest
 from doris_mcp_server.utils.config import DorisConfig
+from doris_mcp_server.utils.db import QueryResult
+from doris_mcp_server.utils.security import AuthContext
 
 
 class TestDorisQueryExecutor:
@@ -271,3 +274,74 @@ class TestDorisQueryExecutor:
             
             # Verify execute_query was called three times
             assert mock_execute.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_doris_oauth_cache_enabled_query_forces_no_cache(self, query_executor):
+        query_executor.query_cache.get = AsyncMock()
+        query_executor.query_cache.set = AsyncMock()
+        query_executor.query_optimizer.optimize_query = AsyncMock(return_value="SELECT 1")
+        query_executor.connection_manager.execute_query = AsyncMock(
+            return_value=QueryResult(
+                data=[{"one": 1}],
+                metadata={},
+                execution_time=0.01,
+                row_count=1,
+                sql="SELECT 1",
+            )
+        )
+        auth_context = AuthContext(
+            auth_method="doris_oauth",
+            roles=["doris_oauth_user"],
+            doris_user="alice",
+            oauth_scopes=["tool:call:exec_query"],
+            pool_key="doris_user:alice",
+        )
+
+        result = await query_executor.execute_query(
+            QueryRequest(
+                sql="SELECT 1",
+                session_id="s1",
+                user_id="alice",
+                cache_enabled=True,
+            ),
+            auth_context,
+        )
+
+        assert result.row_count == 1
+        query_executor.query_cache.get.assert_not_awaited()
+        query_executor.query_cache.set.assert_not_awaited()
+        query_executor.connection_manager.execute_query.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_static_or_global_cache_enabled_query_still_uses_query_cache(self, query_executor):
+        cached_result = QueryResult(
+            data=[{"cached": True}],
+            metadata={},
+            execution_time=0.01,
+            row_count=1,
+            sql="SELECT 1",
+        )
+        query_executor.query_cache.get = AsyncMock(
+            return_value=CachedQuery(
+                result=cached_result,
+                created_at=datetime.utcnow(),
+                ttl=300,
+            )
+        )
+        query_executor.query_cache.set = AsyncMock()
+        query_executor.connection_manager.execute_query = AsyncMock()
+
+        result = await query_executor.execute_query(
+            QueryRequest(
+                sql="SELECT 1",
+                session_id="s1",
+                user_id="legacy",
+                cache_enabled=True,
+            ),
+            AuthContext(auth_method="token"),
+        )
+
+        assert result is cached_result
+        query_executor.query_cache.get.assert_awaited_once()
+        query_executor.query_cache.set.assert_not_awaited()
+        query_executor.connection_manager.execute_query.assert_not_awaited()

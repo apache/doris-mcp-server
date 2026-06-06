@@ -183,7 +183,11 @@ class OAuthClient:
         else:
             security_config = config
             
-        self.enabled = security_config.oauth_enabled
+        effective_auth = getattr(config, "effective_auth", None)
+        if effective_auth is not None:
+            self.enabled = effective_auth.enable_external_oauth_auth
+        else:
+            self.enabled = security_config.oauth_enabled
         if not self.enabled:
             logger.info("OAuth client disabled by configuration")
             return
