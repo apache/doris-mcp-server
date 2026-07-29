@@ -193,9 +193,12 @@ class AuthMiddleware:
                 
                 return await self.app(scope, receive, send_wrapper)
                 
-            except Exception as e:
+            except Exception:
                 # Authentication failed, return 401 error
-                response_body = f'{{"error": "Authentication failed", "message": "{str(e)}"}}'
+                response_body = (
+                    '{"error": "Authentication failed", '
+                    '"message": "Authentication failed"}'
+                )
                 
                 await send({
                     'type': 'http.response.start',

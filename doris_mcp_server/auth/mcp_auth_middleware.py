@@ -25,6 +25,7 @@ from starlette.responses import JSONResponse
 from ..utils.auth_credentials import BearerCredentials
 from ..utils.config import EffectiveAuthConfig
 from ..utils.logger import get_logger
+from ..utils.redaction import redact_error_payload
 from ..utils.security import (
     clear_current_auth_context,
     get_current_auth_context,
@@ -90,7 +91,10 @@ class MCPAuthASGIMiddleware:
                 )
             else:
                 response = JSONResponse(
-                    {"error": "Authentication required", "message": str(exc)},
+                    {
+                        "error": "Authentication required",
+                        "message": "Authentication failed",
+                    },
                     status_code=401,
                 )
             await response(scope, receive, send)
@@ -109,10 +113,16 @@ class MCPAuthASGIMiddleware:
                 try:
                     reset_auth_context(context_token)
                 except Exception as reset_exc:
-                    logger.error(f"Failed to reset auth context after verification failure: {reset_exc}")
+                    logger.error(
+                        "Failed to reset auth context after verification failure (%s)",
+                        type(reset_exc).__name__,
+                    )
                     clear_current_auth_context()
             response = JSONResponse(
-                {"error": "auth_context_unavailable", "message": str(exc)},
+                {
+                    "error": "auth_context_unavailable",
+                    "message": "Authentication context unavailable",
+                },
                 status_code=500,
             )
             await response(scope, receive, send)
@@ -121,7 +131,7 @@ class MCPAuthASGIMiddleware:
         try:
             await self.downstream(scoped_request, receive, send)
         except OperationAuthorizationError as exc:
-            body = exc.to_dict()
+            body = redact_error_payload(exc.to_dict())
             if (
                 self.effective_auth.oauth_discovery_mode == "doris_oauth"
                 and exc.required_scope
@@ -149,5 +159,8 @@ class MCPAuthASGIMiddleware:
             try:
                 reset_auth_context(context_token)
             except Exception as exc:
-                logger.error(f"Failed to reset auth context after request: {exc}")
+                logger.error(
+                    "Failed to reset auth context after request (%s)",
+                    type(exc).__name__,
+                )
                 clear_current_auth_context()

@@ -29,6 +29,7 @@ from starlette.requests import Request
 
 from ..utils.config import get_effective_auth_config
 from ..utils.logger import get_logger
+from ..utils.redaction import redact_sensitive_text
 from .oauth_resource import external_oauth_protected_resource_metadata
 
 logger = get_logger(__name__)
@@ -71,9 +72,12 @@ class OAuthHandlers:
             })
             
         except Exception as e:
-            logger.error(f"OAuth login initiation failed: {e}")
+            logger.error(
+                "OAuth login initiation failed (%s)",
+                type(e).__name__,
+            )
             return JSONResponse(
-                {"error": f"OAuth login failed: {str(e)}"},
+                {"error": "OAuth login failed"},
                 status_code=500
             )
     
@@ -89,12 +93,19 @@ class OAuthHandlers:
             # Check for error in callback
             if "error" in query_params:
                 error_description = query_params.get("error_description", "Unknown error")
-                logger.warning(f"OAuth callback error: {query_params['error']} - {error_description}")
+                error_uri = query_params.get("error_uri")
+                logger.warning("OAuth callback returned an authorization error")
                 return JSONResponse(
                     {
-                        "error": query_params["error"],
-                        "error_description": error_description,
-                        "error_uri": query_params.get("error_uri")
+                        "error": redact_sensitive_text(query_params["error"]),
+                        "error_description": redact_sensitive_text(
+                            error_description
+                        ),
+                        "error_uri": (
+                            redact_sensitive_text(error_uri)
+                            if error_uri is not None
+                            else None
+                        )
                     },
                     status_code=400
                 )
@@ -124,9 +135,12 @@ class OAuthHandlers:
             })
             
         except Exception as e:
-            logger.error(f"OAuth callback handling failed: {e}")
+            logger.error(
+                "OAuth callback handling failed (%s)",
+                type(e).__name__,
+            )
             return JSONResponse(
-                {"error": f"OAuth callback failed: {str(e)}"},
+                {"error": "OAuth callback failed"},
                 status_code=500
             )
     
@@ -140,9 +154,12 @@ class OAuthHandlers:
             return JSONResponse(provider_info)
             
         except Exception as e:
-            logger.error(f"Failed to get OAuth provider info: {e}")
+            logger.error(
+                "Failed to get OAuth provider info (%s)",
+                type(e).__name__,
+            )
             return JSONResponse(
-                {"error": f"Failed to get provider info: {str(e)}"},
+                {"error": "Failed to get provider info"},
                 status_code=500
             )
 

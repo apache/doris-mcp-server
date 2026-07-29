@@ -240,7 +240,8 @@ class TestDorisToolsManager:
         
         assert "error" in result_data or "success" in result_data
         if "error" in result_data:
-            assert "Unknown tool" in result_data["error"]
+            assert result_data["error"] == "Tool execution failed"
+            assert result_data["error_code"] == "TOOL_EXECUTION_FAILED"
 
     @pytest.mark.asyncio
     async def test_missing_required_arguments(self, tools_manager):

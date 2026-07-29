@@ -1087,7 +1087,11 @@ class SQLSecurityValidator:
                 if not parsed.tokens or str(parsed).strip() == '':
                     continue
 
-                self.logger.debug(f"Validating SQL statement {idx + 1}/{len(all_statements)}: {str(parsed)[:100]}...")
+                self.logger.debug(
+                    "Validating SQL statement %s/%s",
+                    idx + 1,
+                    len(all_statements),
+                )
 
                 # Check blocked operations first (more specific)
                 keyword_result = await self._check_blocked_keywords(parsed)

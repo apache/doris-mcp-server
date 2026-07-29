@@ -119,6 +119,71 @@ async def test_mcp_auth_middleware_rejects_query_string_token():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_methods", "discovery_mode", "base_url"),
+    [
+        (("token",), "none", ""),
+        (
+            ("doris_oauth",),
+            "doris_oauth",
+            "https://mcp.example.test",
+        ),
+    ],
+)
+async def test_mcp_auth_middleware_does_not_reflect_unexpected_auth_details(
+    auth_methods,
+    discovery_mode,
+    base_url,
+):
+    secret = "auth-provider-secret-sec-016"
+
+    class SecurityManager:
+        async def authenticate_request(self, credentials):
+            del credentials
+            raise RuntimeError(
+                f"Authorization: Bearer {secret}; password={secret}"
+            )
+
+    async def downstream(scope, receive, send):
+        raise AssertionError("downstream must not be called")
+
+    messages = []
+    middleware = MCPAuthASGIMiddleware(
+        SecurityManager(),
+        downstream,
+        _effective(
+            auth_methods=auth_methods,
+            discovery_mode=discovery_mode,
+            base_url=base_url,
+        ),
+    )
+    await middleware(
+        {
+            "type": "http",
+            "path": "/mcp",
+            "headers": [(b"authorization", f"Bearer {secret}".encode())],
+            "client": ("127.0.0.1", 1),
+        },
+        _receive,
+        _send_collector(messages),
+    )
+
+    assert messages[0]["status"] == 401
+    assert secret.encode() not in messages[1]["body"]
+    body = json.loads(messages[1]["body"])
+    if discovery_mode == "doris_oauth":
+        assert body == {
+            "error": "authentication_required",
+            "error_description": "Authentication required",
+        }
+    else:
+        assert body == {
+            "error": "Authentication required",
+            "message": "Authentication failed",
+        }
+
+
+@pytest.mark.asyncio
 async def test_mcp_auth_middleware_returns_doris_oauth_challenge_on_401():
     class SecurityManager:
         async def authenticate_request(self, auth_info):

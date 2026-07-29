@@ -28,7 +28,12 @@ from urllib.parse import quote, unquote
 from mcp.types import Resource
 
 from ..utils.db import DorisConnectionManager
+from ..utils.logger import get_logger
+from ..utils.redaction import redact_uri
 from ..utils.sql_security_utils import get_auth_context
+
+
+logger = get_logger(__name__)
 
 
 class TableMetadata:
@@ -268,7 +273,7 @@ class DorisResourcesManager:
 
         except Exception as e:
             self._reraise_if_doris_oauth_resource_error(e)
-            print(f"Failed to get resource list: {e}")
+            logger.exception("Failed to get resource list")
 
         return resources
 
@@ -334,9 +339,16 @@ class DorisResourcesManager:
 
         except Exception as e:
             self._reraise_if_doris_oauth_resource_error(e)
+            if isinstance(e, InvalidResourceURIError):
+                message = "Invalid resource URI"
+            elif isinstance(e, ResourceNotFoundError):
+                message = "Resource not found"
+            else:
+                logger.exception("Failed to read resource")
+                message = "Resource read failed"
             payload = {
-                "error": f"Failed to read resource: {str(e)}",
-                "uri": uri,
+                "error": message,
+                "uri": redact_uri(uri),
             }
             if isinstance(e, InvalidResourceURIError | ResourceNotFoundError):
                 payload["error_code"] = e.error_code

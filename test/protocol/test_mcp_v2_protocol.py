@@ -94,6 +94,17 @@ class StubToolsManager:
 
     async def call_tool(self, name: str, arguments: dict) -> str:
         if name == "fail":
+            if arguments:
+                return json.dumps(
+                    {
+                        "error": (
+                            f"query failed: password={arguments['password']}; "
+                            f"token={arguments['token']}; {arguments['sql']}"
+                        ),
+                        "arguments": arguments,
+                        "token": arguments["token"],
+                    }
+                )
             return json.dumps({"error": "expected failure"})
         return json.dumps({"name": name, "arguments": arguments})
 
@@ -574,13 +585,26 @@ async def test_http_enforces_tool_specific_client_capabilities_and_recovers():
             "arguments": {"value": "capable"},
         }
 
+        secret = "http-secret-sec-016"
         recovered = await client.post(
             "/mcp",
-            json=modern_tool_request(3, "fail"),
+            json=modern_tool_request(
+                3,
+                "fail",
+                {
+                    "password": secret,
+                    "token": secret,
+                    "sql": f"SELECT '{secret}'",
+                },
+            ),
             headers=modern_tool_headers("fail"),
         )
         assert recovered.status_code == 200
         assert recovered.json()["result"]["isError"] is True
+        assert secret not in recovered.text
+        structured = recovered.json()["result"]["structuredContent"]
+        assert "arguments" not in structured
+        assert structured["token"] == "[REDACTED]"
 
 
 @pytest.mark.asyncio
@@ -863,6 +887,24 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             "monitor_data_freshness",
             "analyze_data_access_patterns",
         ]
+        secret = "stdio-secret-sec-016"
+        error_result = await capable.call_tool(
+            "echo",
+            {
+                "fail": True,
+                "password": secret,
+                "token": secret,
+                "sql": f"SELECT '{secret}'",
+            },
+        )
+        assert error_result.is_error is True
+        serialized = json.dumps(
+            error_result.model_dump(by_alias=True, mode="json"),
+            ensure_ascii=False,
+        )
+        assert secret not in serialized
+        assert "arguments" not in error_result.structured_content
+        assert error_result.structured_content["token"] == "[REDACTED]"
 
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
         assert [tool.name for tool in (await legacy.list_tools()).tools] == [

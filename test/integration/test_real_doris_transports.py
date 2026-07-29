@@ -25,6 +25,7 @@ to 9030 and ``DORIS_REAL_PASSWORD`` may be empty.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import secrets
@@ -368,6 +369,22 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
         )
         assert verify_result.is_error is False
         assert verify_payload["data"] == [{"marker": doris_sandbox.marker}]
+
+        response_secret = f"sec016-{secrets.token_hex(12)}"
+        sensitive_error_result, sensitive_error_payload = await _exec_query(
+            client,
+            (
+                f"SELECT '{response_secret}' AS marker "
+                f"FROM `{doris_sandbox.table}_missing`"
+            ),
+        )
+        assert sensitive_error_result.is_error is True
+        assert sensitive_error_payload["success"] is False
+        serialized_error = json.dumps(
+            sensitive_error_result.model_dump(by_alias=True, mode="json"),
+            ensure_ascii=False,
+        )
+        assert response_secret not in serialized_error
 
         timeout_result, timeout_payload = await _exec_query(
             client,

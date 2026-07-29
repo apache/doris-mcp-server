@@ -74,7 +74,7 @@ class TokenBlacklist:
             exp: Token expiration timestamp
         """
         self._blacklisted_tokens[jti] = exp
-        logger.info(f"Token {jti} added to blacklist")
+        logger.info("Token added to blacklist")
     
     async def is_blacklisted(self, jti: str) -> bool:
         """Check if token is blacklisted
@@ -98,7 +98,7 @@ class TokenBlacklist:
         """
         if jti in self._blacklisted_tokens:
             del self._blacklisted_tokens[jti]
-            logger.info(f"Token {jti} removed from blacklist")
+            logger.info("Token removed from blacklist")
             return True
         return False
     
@@ -341,7 +341,7 @@ class TokenValidator:
             exp: Token expiration time
         """
         await self.blacklist.add_token(jti, exp)
-        logger.info(f"Token {jti} has been revoked")
+        logger.info("Token has been revoked")
     
     async def get_validation_stats(self) -> Dict[str, Any]:
         """Get validation statistics"""

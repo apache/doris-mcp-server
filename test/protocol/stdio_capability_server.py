@@ -231,6 +231,17 @@ class OneToolManager:
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> str:
+        if name == "echo" and arguments.get("fail"):
+            return json.dumps(
+                {
+                    "error": (
+                        f"query failed: password={arguments['password']}; "
+                        f"token={arguments['token']}; {arguments['sql']}"
+                    ),
+                    "arguments": arguments,
+                    "token": arguments["token"],
+                }
+            )
         if name == "get_sql_profile":
             return json.dumps(
                 await self.profile_analyzer.get_sql_profile(
