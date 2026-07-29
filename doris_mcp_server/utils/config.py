@@ -25,6 +25,7 @@ import logging
 import multiprocessing
 import os
 from dataclasses import dataclass, field
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -174,6 +175,46 @@ def _is_loopback_url(url: str) -> bool:
     return (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
 
 
+def _is_loopback_bind_host(host: str) -> bool:
+    """Return whether a bind host is explicitly confined to loopback."""
+    normalized = str(host or "").strip().lower()
+    if normalized in {"localhost", "localhost."}:
+        return True
+    if normalized.startswith("[") and normalized.endswith("]"):
+        normalized = normalized[1:-1]
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_http_bind_auth_policy(
+    *,
+    transport: str,
+    host: str,
+    auth_methods: tuple[str, ...],
+    allow_unauthenticated_non_loopback: bool,
+) -> str | None:
+    """Reject unauthenticated HTTP exposure outside explicit loopback binds."""
+    if str(transport).strip().lower() != "http":
+        return None
+    if auth_methods or _is_loopback_bind_host(host):
+        return None
+
+    bind_host = str(host or "").strip() or "<empty>"
+    if allow_unauthenticated_non_loopback:
+        return (
+            "DANGEROUS: ALLOW_UNAUTHENTICATED_NON_LOOPBACK=true permits "
+            f"unauthenticated HTTP exposure on non-loopback host '{bind_host}'"
+        )
+
+    raise AuthConfigError(
+        f"Refusing unauthenticated HTTP bind to non-loopback host '{bind_host}'. "
+        "Enable an authentication method or bind to 127.0.0.1, localhost, or ::1. "
+        "ALLOW_UNAUTHENTICATED_NON_LOOPBACK=true is an explicit dangerous override."
+    )
+
+
 def _ensure_source_maps(config: Any) -> None:
     if not hasattr(config, "_explicit_sources"):
         config._explicit_sources = {}
@@ -237,6 +278,7 @@ class SecurityConfig:
     enable_jwt_auth: bool = False    # Enable JWT authentication (default: disabled)
     enable_oauth_auth: bool = False  # Enable OAuth 2.0/OIDC authentication (default: disabled)
     enable_doris_oauth_auth: bool = False  # Enable Doris-backed OAuth (default: disabled)
+    allow_unauthenticated_non_loopback: bool = False
     doris_oauth_base_url: str = ""  # Public base URL for future Doris OAuth metadata
     doris_oauth_db_tools_enabled: bool = False
     doris_oauth_db_tool_allowlist: list[str] = field(
@@ -643,6 +685,11 @@ class DorisConfig:
         if "ENABLE_DORIS_OAUTH_AUTH" in os.environ:
             config.security.enable_doris_oauth_auth = _str_to_bool(os.getenv("ENABLE_DORIS_OAUTH_AUTH"))
             _mark_source(config, "enable_doris_oauth_auth", "env")
+        if "ALLOW_UNAUTHENTICATED_NON_LOOPBACK" in os.environ:
+            config.security.allow_unauthenticated_non_loopback = _str_to_bool(
+                os.getenv("ALLOW_UNAUTHENTICATED_NON_LOOPBACK")
+            )
+            _mark_source(config, "allow_unauthenticated_non_loopback", "env")
         if "DORIS_OAUTH_BASE_URL" in os.environ:
             config.security.doris_oauth_base_url = os.getenv("DORIS_OAUTH_BASE_URL", "").strip()
             _mark_source(config, "doris_oauth_base_url", "env")
@@ -946,7 +993,14 @@ class DorisConfig:
         config = cls()
 
         # Update basic configuration
-        for key in ["server_name", "server_port", "temp_files_dir", "transport", "workers"]:
+        for key in [
+            "server_name",
+            "server_host",
+            "server_port",
+            "temp_files_dir",
+            "transport",
+            "workers",
+        ]:
             if key in config_data:
                 setattr(config, key, config_data[key])
                 _mark_source(config, key, "config_file")
@@ -1012,6 +1066,7 @@ class DorisConfig:
         return {
             "server_name": self.server_name,
             "server_version": self.server_version,
+            "server_host": self.server_host,
             "server_port": self.server_port,
             "temp_files_dir": self.temp_files_dir,
             "database": {
@@ -1039,6 +1094,7 @@ class DorisConfig:
                 "enable_oauth_auth": self.security.enable_oauth_auth,
                 "oauth_enabled": self.security.oauth_enabled,
                 "enable_doris_oauth_auth": self.security.enable_doris_oauth_auth,
+                "allow_unauthenticated_non_loopback": self.security.allow_unauthenticated_non_loopback,
                 "doris_oauth_base_url": self.security.doris_oauth_base_url,
                 "doris_oauth_db_tools_enabled": self.security.doris_oauth_db_tools_enabled,
                 "doris_oauth_db_tool_allowlist": self.security.doris_oauth_db_tool_allowlist,
@@ -1531,6 +1587,17 @@ def normalize_effective_auth_config(
         methods.append("jwt")
     if enable_external_oauth_auth:
         methods.append("external_oauth")
+
+    bind_warning = validate_http_bind_auth_policy(
+        transport=transport,
+        host=config.server_host,
+        auth_methods=tuple(methods),
+        allow_unauthenticated_non_loopback=(
+            config.security.allow_unauthenticated_non_loopback
+        ),
+    )
+    if bind_warning:
+        warnings.append(bind_warning)
 
     if enable_doris_oauth_auth:
         discovery_mode = "doris_oauth"

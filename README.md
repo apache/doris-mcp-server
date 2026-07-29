@@ -483,9 +483,10 @@ transports, but does not create an HTTP protocol session.
 * The current Host/Origin policy does not provide an operator-configured public
   allowlist. Public hostnames and reverse proxies that rewrite Host or Origin
   are therefore not a supported deployment shape yet.
-* Do not expose an unauthenticated listener on a non-loopback interface. The
-  current release does not reject every unsafe non-loopback configuration at
-  startup, so a successful startup is not proof that the deployment is safe.
+* HTTP startup fails when the bind host is not loopback and no authentication
+  method is enabled. `ALLOW_UNAUTHENTICATED_NON_LOOPBACK=true` is an explicit
+  dangerous override for isolated testing only; do not use it as a deployment
+  shortcut.
 * Stateless MCP requests do not require sticky HTTP sessions and can use
   multiple workers. Authentication modes can have stricter limits:
   Doris-backed OAuth stores tokens and per-user pools in process memory and
@@ -1050,9 +1051,11 @@ Streamable HTTP mode requires you to run the MCP server independently first, and
 1.  **Configure `.env`:** Ensure your database credentials and any other necessary settings are correctly configured in the `.env` file within the project directory.
 2.  **Start the Server:** Run the server from your terminal in the project's root directory:
     ```bash
-    MCP_HOST=127.0.0.1 ./start_server.sh
+    ./start_server.sh
     ```
-    This script reads the `.env` file and starts the FastAPI server with Streamable HTTP support. Keep the listener on loopback unless the non-loopback deployment has been separately secured and validated.
+    This script reads the `.env` file and starts the Streamable HTTP server on
+    `127.0.0.1` by default. A non-loopback listener requires at least one
+    authentication method.
 3.  **Configure Cursor:** Add an entry like the following to your Cursor MCP configuration, pointing to the running server's Streamable HTTP endpoint:
 
     ```json

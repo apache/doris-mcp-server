@@ -38,6 +38,7 @@ from .utils.config import (
     _mark_source,
     get_effective_auth_config,
     normalize_effective_auth_config,
+    validate_http_bind_auth_policy,
 )
 from .utils.db import DorisConnectionManager
 from .utils.security import DorisSecurityManager
@@ -68,6 +69,9 @@ def _multiworker_environment(
         "SERVER_NAME": config.server_name,
         "TRANSPORT": "http",
         "WORKERS": str(workers),
+        "ALLOW_UNAUTHENTICATED_NON_LOOPBACK": str(
+            config.security.allow_unauthenticated_non_loopback
+        ).lower(),
     }
 
 
@@ -162,8 +166,22 @@ class DorisServer:
 
 
 
-    async def start_http(self, host: str = os.getenv("SERVER_HOST", _default_config.database.host), port: int = os.getenv("SERVER_PORT", _default_config.server_port), workers: int = 1):
+    async def start_http(self, host: str = os.getenv("SERVER_HOST", _default_config.server_host), port: int = os.getenv("SERVER_PORT", _default_config.server_port), workers: int = 1):
         """Start Streamable HTTP transport mode with workers support"""
+        effective_auth = get_effective_auth_config(self.config)
+        bind_warning = validate_http_bind_auth_policy(
+            transport="http",
+            host=host,
+            auth_methods=effective_auth.auth_methods,
+            allow_unauthenticated_non_loopback=(
+                self.config.security.allow_unauthenticated_non_loopback
+            ),
+        )
+        if (
+            bind_warning
+            and bind_warning not in effective_auth.auth_config_warnings
+        ):
+            self.logger.warning(bind_warning)
         self.logger.info(f"Starting Doris MCP Server (Streamable HTTP mode) - {host}:{port}, workers: {workers}")
 
         try:

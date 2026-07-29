@@ -40,6 +40,7 @@ services:
       - DORIS_MAX_CONNECTIONS=20
       
       # Security configuration
+      - MCP_HOST=0.0.0.0
       - ENABLE_TOKEN_AUTH=true
       - TOKEN_ADMIN=${MCP_STATIC_TOKEN:?Set MCP_STATIC_TOKEN to a securely generated value of at least 32 characters}
       - MAX_RESULT_ROWS=10000
