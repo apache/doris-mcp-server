@@ -28,6 +28,7 @@ import logging
 import os
 import sys
 
+from ._version import __version__
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
@@ -65,7 +66,6 @@ def _multiworker_environment(
         "SERVER_HOST": host,
         "SERVER_PORT": str(port),
         "SERVER_NAME": config.server_name,
-        "SERVER_VERSION": config.server_version,
         "TRANSPORT": "http",
         "WORKERS": str(workers),
     }
@@ -206,7 +206,13 @@ class DorisServer:
             
             # Health check endpoint
             async def health_check(request):
-                return JSONResponse({"status": "healthy", "service": "doris-mcp-server"})
+                return JSONResponse(
+                    {
+                        "status": "healthy",
+                        "service": self.config.server_name,
+                        "version": __version__,
+                    }
+                )
             
             # OAuth endpoints
             from .auth.oauth_handlers import OAuthHandlers
@@ -444,6 +450,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+
+    parser.add_argument(
         "--transport",
         type=str,
         choices=["stdio", "http"],
@@ -530,10 +542,6 @@ def update_configuration(config: DorisConfig):
     server_name = os.getenv("SERVER_NAME")
     if server_name:
         config.server_name = server_name
-    server_version = os.getenv("SERVER_VERSION")
-    if server_version:
-        config.server_version = server_version
- 
     # database
     if cli_has("--doris-host", "--db-host"):
         config.database.host = args.doris_host

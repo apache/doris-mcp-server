@@ -20,7 +20,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "doris-mcp-server"
-version = "0.6.1"
+dynamic = ["version"]
 description = "Enterprise-grade Model Context Protocol (MCP) server implementation for Apache Doris"
 authors = [
     {name = "Yijia Su", email = "freeoneplus@apache.org"}
@@ -153,6 +153,9 @@ Changelog = "https://github.com/apache/doris-mcp-server/blob/main/CHANGELOG.md"
 [project.scripts]
 doris-mcp-server = "doris_mcp_server.main:main_sync"
 doris-mcp-client = "doris_mcp_client.client:main"
+
+[tool.hatch.version]
+path = "doris_mcp_server/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["doris_mcp_server", "doris_mcp_client"]

@@ -33,6 +33,7 @@ from mcp.types import (
     Tool,
 )
 
+from doris_mcp_server import __version__
 from doris_mcp_server.protocol import create_doris_mcp_server
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
@@ -306,7 +307,7 @@ async def main() -> None:
         tools_manager=OneToolManager(),
         prompts_manager=EmptyPromptsManager(),
         name="doris-mcp-stdio-capability-test",
-        version="0.6.1",
+        version=__version__,
         logger=logging.getLogger(__name__),
         required_client_capabilities={
             "tools/list": ClientCapabilities(

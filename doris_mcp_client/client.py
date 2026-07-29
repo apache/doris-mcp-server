@@ -39,6 +39,8 @@ from mcp.types import (
     Tool,
 )
 
+from doris_mcp_server import __version__
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -462,6 +464,11 @@ def create_arg_parser() -> argparse.ArgumentParser:
     """Create the command line parser for the packaged MCP client."""
     parser = argparse.ArgumentParser(
         description="Connect to an Apache Doris MCP server using SDK 2.0.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--transport",

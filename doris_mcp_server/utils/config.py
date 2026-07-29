@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .._version import __version__
+
 try:
     from dotenv import load_dotenv
 except ImportError:
@@ -492,7 +494,7 @@ class DorisConfig:
 
     # Basic configuration
     server_name: str = "doris-mcp-server"
-    server_version: str = "0.6.1"
+    server_version: str = field(default=__version__, init=False)
     server_host: str = "localhost"
     server_port: int = 3000
     transport: str = "stdio"
@@ -918,7 +920,6 @@ class DorisConfig:
 
         # Server configuration
         config.server_name = os.getenv("SERVER_NAME", config.server_name)
-        config.server_version = os.getenv("SERVER_VERSION", config.server_version)
         server_host = os.getenv("SERVER_HOST", "").strip()
         if server_host:
             config.server_host = server_host
@@ -941,7 +942,7 @@ class DorisConfig:
         config = cls()
 
         # Update basic configuration
-        for key in ["server_name", "server_version", "server_port", "temp_files_dir", "transport", "workers"]:
+        for key in ["server_name", "server_port", "temp_files_dir", "transport", "workers"]:
             if key in config_data:
                 setattr(config, key, config_data[key])
                 _mark_source(config, key, "config_file")

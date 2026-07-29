@@ -34,6 +34,7 @@ from mcp.types import (
     Tool,
 )
 
+from doris_mcp_server import __version__
 from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
@@ -77,7 +78,7 @@ def create_conformance_server():
         tools_manager=CapabilityToolsManager(),
         prompts_manager=EmptyPromptsManager(),
         name="doris-mcp-conformance-test",
-        version="0.6.1",
+        version=__version__,
         logger=logging.getLogger(__name__),
         required_tool_capabilities={
             "test_missing_capability": ClientCapabilities(sampling=SamplingCapability())

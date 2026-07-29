@@ -45,6 +45,8 @@ import pytest
 from mcp import Client, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from doris_mcp_server import __version__
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
@@ -229,6 +231,7 @@ async def _wait_for_http_server(
             try:
                 response = await client.get(f"http://127.0.0.1:{port}/health")
                 if response.status_code == 200:
+                    assert response.json()["version"] == __version__
                     return
             except httpx.HTTPError:
                 pass
@@ -336,6 +339,10 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
         password=doris_sandbox.settings.password,
     )
     async with _transport_client(transport, admin_environment) as client:
+        assert client.server_info is not None
+        assert client.server_info.name == "doris-mcp-server"
+        assert client.server_info.version == __version__
+
         read_result, read_payload = await _exec_query(client, "SELECT 42 AS answer")
         assert read_result.is_error is False
         assert read_payload["success"] is True
