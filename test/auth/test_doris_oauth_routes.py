@@ -11,9 +11,16 @@ from starlette.applications import Starlette
 
 from doris_mcp_server.auth.doris_oauth_handlers import DorisOAuthHandlers
 from doris_mcp_server.auth.doris_oauth_provider import DorisOAuthProvider
-from doris_mcp_server.auth.doris_oauth_types import ProtectedResourceAuthError, TokenEndpointError
-from doris_mcp_server.utils.config import DorisConfig, _mark_source, normalize_effective_auth_config
-
+from doris_mcp_server.auth.doris_oauth_types import (
+    ProtectedResourceAuthError,
+    TokenEndpointError,
+)
+from doris_mcp_server.utils.auth_credentials import BearerCredentials
+from doris_mcp_server.utils.config import (
+    DorisConfig,
+    _mark_source,
+    normalize_effective_auth_config,
+)
 
 FULL_DORIS_OAUTH_SCOPE_SET = tuple(
     sorted(
@@ -525,7 +532,11 @@ async def test_full_login_code_exchange_auth_context_and_pool_missing_revocation
         assert token_json["access_token"].startswith("doa_")
         assert token_json["scope"] == "resource:list resource:read tool:list"
 
-    auth_context = await provider.authenticate_access_token({"token": token_json["access_token"]})
+    credentials = BearerCredentials(
+        scheme="bearer",
+        token=token_json["access_token"],
+    )
+    auth_context = await provider.authenticate_access_token(credentials)
     assert auth_context.auth_method == "doris_oauth"
     assert auth_context.doris_user == "alice"
     assert auth_context.oauth_client_id == client_id
@@ -535,14 +546,14 @@ async def test_full_login_code_exchange_auth_context_and_pool_missing_revocation
 
     cm.pools["alice"] = False
     with pytest.raises(ProtectedResourceAuthError) as exc:
-        await provider.authenticate_access_token({"token": token_json["access_token"]})
+        await provider.authenticate_access_token(credentials)
     assert exc.value.error == "login_required"
     assert exc.value.error_code == "DORIS_OAUTH_POOL_MISSING"
     assert cm.global_acquire_calls == 0
 
     cm.pools["alice"] = True
     with pytest.raises(ProtectedResourceAuthError):
-        await provider.authenticate_access_token({"token": token_json["access_token"]})
+        await provider.authenticate_access_token(credentials)
 
 
 @pytest.mark.asyncio
@@ -610,7 +621,12 @@ async def test_full_login_without_scope_grants_configured_rbac_capability_envelo
     assert "scope:monitoring:read" not in token_json["scope"].split()
     assert "scope:adbc:execute" not in token_json["scope"].split()
 
-    auth_context = await provider.authenticate_access_token({"token": token_json["access_token"]})
+    auth_context = await provider.authenticate_access_token(
+        BearerCredentials(
+            scheme="bearer",
+            token=token_json["access_token"],
+        )
+    )
     assert auth_context.auth_method == "doris_oauth"
     assert auth_context.doris_user == "alice"
     assert tuple(auth_context.oauth_scopes) == FULL_DORIS_OAUTH_SCOPE_SET

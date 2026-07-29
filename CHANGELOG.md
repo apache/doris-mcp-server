@@ -54,6 +54,9 @@ under **Unreleased** until a new version is selected and published.
   management token modes now require explicit high-entropy credentials.
 - Refused unauthenticated HTTP startup on non-loopback bind addresses unless
   the operator sets an explicit dangerous override.
+- Normalized bearer credentials once at the MCP authentication boundary and
+  passed the same redacted DTO to static token, JWT, external OAuth, and Doris
+  OAuth providers.
 - Released Doris connections on SQL profile, data freshness, and access
   analysis paths.
 - Improved Doris 4 role metadata compatibility and query recovery behavior.
