@@ -1,5 +1,5 @@
-from contextlib import asynccontextmanager
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +9,11 @@ from doris_mcp_server.tools.resources_manager import (
     DorisResourcesManager,
     MetadataCache,
 )
-from doris_mcp_server.utils.security import AuthContext, reset_auth_context, set_current_auth_context
+from doris_mcp_server.utils.security import (
+    AuthContext,
+    reset_auth_context,
+    set_current_auth_context,
+)
 
 
 class FakeConnection:
@@ -324,3 +328,41 @@ async def test_legacy_read_resource_keeps_json_error_body_compatibility():
     payload = json.loads(result)
     assert payload["uri"] == "doris://table/orders"
     assert "metadata backend failed" in payload["error"]
+    assert "error_code" not in payload
+
+
+@pytest.mark.asyncio
+async def test_read_resource_marks_invalid_uri_for_protocol_boundary():
+    manager = DorisResourcesManager(FakeConnectionManager())
+
+    result = await manager.read_resource("https://example.com/orders")
+
+    payload = json.loads(result)
+    assert payload == {
+        "error": "Failed to read resource: Invalid resource URI format",
+        "error_code": "INVALID_RESOURCE_URI",
+        "uri": "https://example.com/orders",
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_resource_marks_missing_table_for_protocol_boundary():
+    class EmptyConnection:
+        async def execute(self, sql, params=None, auth_context=None):
+            return SimpleNamespace(data=[])
+
+    class EmptyConnectionManager:
+        @asynccontextmanager
+        async def get_connection_context(self, session_id):
+            yield EmptyConnection()
+
+    manager = DorisResourcesManager(EmptyConnectionManager())
+
+    result = await manager.read_resource("doris://table/missing")
+
+    payload = json.loads(result)
+    assert payload == {
+        "error": "Failed to read resource: Table missing does not exist",
+        "error_code": "RESOURCE_NOT_FOUND",
+        "uri": "doris://table/missing",
+    }

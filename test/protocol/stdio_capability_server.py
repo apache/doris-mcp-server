@@ -17,6 +17,7 @@
 """STDIO fixture for required-client-capability protocol tests."""
 
 import asyncio
+import json
 import logging
 
 from mcp.server.stdio import stdio_server
@@ -32,7 +33,15 @@ class EmptyResourcesManager:
         return []
 
     async def read_resource(self, uri: str) -> str:
-        raise ValueError(f"Unknown resource: {uri}")
+        if uri == "doris://table/orders":
+            return json.dumps({"uri": uri, "columns": 3})
+        return json.dumps(
+            {
+                "error": f"Failed to read resource: Table {uri} does not exist",
+                "error_code": "RESOURCE_NOT_FOUND",
+                "uri": uri,
+            }
+        )
 
 
 class OneToolManager:
