@@ -160,6 +160,7 @@ class DataGovernanceTools:
             catalog_name: Catalog name
             db_name: Database name
         """
+        connection = None
         try:
             start_time = time.time()
             if time_threshold_hours is None:
@@ -221,6 +222,14 @@ class DataGovernanceTools:
                 "error": str(e),
                 "monitoring_timestamp": datetime.now().isoformat()
             }
+        finally:
+            release_connection = getattr(
+                self.connection_manager,
+                "release_connection",
+                None,
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
     
     # ==================== Private Helper Methods ====================
     

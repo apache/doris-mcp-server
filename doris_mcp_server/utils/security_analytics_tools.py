@@ -55,6 +55,7 @@ class SecurityAnalyticsTools:
         Returns:
             Comprehensive access pattern analysis
         """
+        connection = None
         try:
             start_time = time.time()
             
@@ -159,6 +160,14 @@ class SecurityAnalyticsTools:
                 "error": str(e),
                 "analysis_timestamp": datetime.now().isoformat()
             }
+        finally:
+            release_connection = getattr(
+                self.connection_manager,
+                "release_connection",
+                None,
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
     
     # ==================== Private Helper Methods ====================
     

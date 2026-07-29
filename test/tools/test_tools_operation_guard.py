@@ -480,6 +480,8 @@ async def test_sql_profile_binds_auth_context_without_catalog(tmp_path, db_name)
     ):
         assert call["sql"].startswith(sql_prefix)
         assert call["doris_user"] == "alice"
+    assert connection_manager.connection_acquires == 1
+    assert connection_manager.connection_releases == 1
 
 
 @pytest.mark.asyncio
@@ -522,6 +524,30 @@ async def test_unknown_data_freshness_is_not_compared_as_a_number():
 
 
 @pytest.mark.asyncio
+async def test_data_freshness_releases_query_connection():
+    connection = SimpleNamespace()
+    connection_manager = SimpleNamespace(
+        get_connection=AsyncMock(return_value=connection),
+        release_connection=AsyncMock(),
+    )
+    governance = DataGovernanceTools(connection_manager)
+    governance._analyze_table_freshness = AsyncMock(
+        return_value={
+            "status": "unknown",
+            "staleness_hours": None,
+        }
+    )
+
+    result = await governance.monitor_data_freshness(tables=["orders"])
+
+    assert result["table_freshness"]["orders"]["status"] == "unknown"
+    connection_manager.release_connection.assert_awaited_once_with(
+        "query",
+        connection,
+    )
+
+
+@pytest.mark.asyncio
 async def test_doris4_user_roles_use_show_grants_metadata():
     connection = Doris4RoleMetadataConnection()
     analytics = SecurityAnalyticsTools(SimpleNamespace())
@@ -534,6 +560,29 @@ async def test_doris4_user_roles_use_show_grants_metadata():
         "loader": ["default"],
     }
     assert connection.calls == ["SHOW ALL GRANTS"]
+
+
+@pytest.mark.asyncio
+async def test_data_access_patterns_releases_query_connection():
+    connection = SimpleNamespace()
+    connection_manager = SimpleNamespace(
+        get_connection=AsyncMock(return_value=connection),
+        release_connection=AsyncMock(),
+    )
+    analytics = SecurityAnalyticsTools(connection_manager)
+    analytics._get_audit_log_data = AsyncMock(return_value=[{"user_name": "root"}])
+    analytics._analyze_user_access_patterns = AsyncMock(return_value=[])
+    analytics._analyze_role_access_patterns = AsyncMock(return_value={})
+    analytics._detect_security_anomalies = AsyncMock(return_value=[])
+    analytics._generate_access_insights = AsyncMock(return_value={})
+
+    result = await analytics.analyze_data_access_patterns()
+
+    assert "error" not in result
+    connection_manager.release_connection.assert_awaited_once_with(
+        "query",
+        connection,
+    )
 
 
 @pytest.mark.asyncio
