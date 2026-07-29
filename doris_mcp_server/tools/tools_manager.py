@@ -1844,6 +1844,8 @@ No parameters required. Returns connection status, configuration, and diagnostic
         """Data freshness monitoring tool routing"""
         table_names = arguments.get("table_names")
         freshness_threshold_hours = arguments.get("freshness_threshold_hours", 24)
+        if freshness_threshold_hours is None:
+            freshness_threshold_hours = 24
         include_update_patterns = arguments.get("include_update_patterns", True)
         catalog_name = arguments.get("catalog_name")
         db_name = arguments.get("db_name")

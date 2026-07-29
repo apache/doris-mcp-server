@@ -665,6 +665,43 @@ async def test_http_sql_profile_without_catalog_uses_production_analyzer_path():
 
 
 @pytest.mark.asyncio
+async def test_http_unknown_freshness_uses_default_threshold():
+    app = create_test_server(
+        tools_manager=ProfileToolManager(),
+    ).streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        result = await client.post(
+            "/mcp",
+            json=modern_tool_request(
+                1,
+                "monitor_data_freshness",
+                {"table_names": ["org_tenant"]},
+            ),
+            headers=modern_tool_headers("monitor_data_freshness"),
+        )
+
+        assert result.status_code == 200
+        payload = result.json()["result"]["structuredContent"]
+        assert result.json()["result"]["isError"] is False
+        assert "error" not in payload
+        assert payload["monitoring_scope"]["time_threshold_hours"] == 24
+        assert payload["table_freshness"]["org_tenant"]["status"] == "unknown"
+
+
+@pytest.mark.asyncio
 async def test_stdio_validates_capabilities_versions_and_process_survival():
     server_script = Path(__file__).with_name("stdio_capability_server.py")
     server_params = StdioServerParameters(
@@ -713,12 +750,14 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
         assert [tool.name for tool in (await capable.list_tools()).tools] == [
             "echo",
             "get_sql_profile",
+            "monitor_data_freshness",
         ]
 
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
         assert [tool.name for tool in (await legacy.list_tools()).tools] == [
             "echo",
             "get_sql_profile",
+            "monitor_data_freshness",
         ]
         legacy_error = await legacy.read_resource("doris://table/missing")
         assert json.loads(legacy_error.contents[0].text)["error_code"] == "RESOURCE_NOT_FOUND"
@@ -753,6 +792,37 @@ async def test_stdio_sql_profile_without_catalog_uses_production_analyzer_path()
             {"sql": "SELECT 1", "db_name": "hhm_dt_sim"},
         )
         assert json.loads(result.content[0].text)["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_stdio_unknown_freshness_uses_default_threshold():
+    server_script = Path(__file__).with_name("stdio_capability_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(
+        stdio_client(server_params),
+        extensions=[advertise(REQUIRED_EXTENSION)],
+    ) as modern:
+        result = await modern.call_tool(
+            "monitor_data_freshness",
+            {"table_names": ["org_tenant"]},
+        )
+        payload = result.structured_content
+        assert result.is_error is False
+        assert "error" not in payload
+        assert payload["monitoring_scope"]["time_threshold_hours"] == 24
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        result = await legacy.call_tool(
+            "monitor_data_freshness",
+            {"table_names": ["org_tenant"]},
+        )
+        payload = json.loads(result.content[0].text)
+        assert "error" not in payload
+        assert payload["monitoring_scope"]["time_threshold_hours"] == 24
 
 
 @pytest.mark.asyncio

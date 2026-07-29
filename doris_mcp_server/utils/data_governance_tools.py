@@ -162,6 +162,8 @@ class DataGovernanceTools:
         """
         try:
             start_time = time.time()
+            if time_threshold_hours is None:
+                time_threshold_hours = 24
             connection = await self.connection_manager.get_connection("query")
             
             # 1. Get list of tables to monitor
@@ -967,11 +969,15 @@ class DataGovernanceTools:
             })
         
         # Identify particularly stale tables
-        very_stale_tables = [
-            (table_name, info.get("staleness_hours", 0)) 
-            for table_name, info in table_freshness.items() 
-            if info.get("staleness_hours", 0) > 72  # More than 3 days
-        ]
+        very_stale_tables = []
+        for table_name, info in table_freshness.items():
+            staleness_hours = info.get("staleness_hours")
+            if (
+                isinstance(staleness_hours, (int, float))
+                and not isinstance(staleness_hours, bool)
+                and staleness_hours > 72
+            ):
+                very_stale_tables.append((table_name, staleness_hours))
         
         if very_stale_tables:
             issues.append({
@@ -1019,4 +1025,4 @@ class DataGovernanceTools:
                     "timestamp": datetime.now().isoformat()
                 })
         
-        return alerts 
+        return alerts
