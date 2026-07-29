@@ -91,7 +91,7 @@ The primary communication mode offering optimal performance and reliability:
 # Full configuration with database connection
 doris-mcp-server \
     --transport http \
-    --host 0.0.0.0 \
+    --host 127.0.0.1 \
     --port 3000 \
     --db-host 127.0.0.1 \
     --db-port 9030 \
@@ -176,7 +176,7 @@ export TOKEN_MANAGEMENT_ADMIN_TOKEN="your_secure_admin_token"
 export TOKEN_MANAGEMENT_ALLOWED_IPS="127.0.0.1,::1"
 
 # Then start with simplified command
-doris-mcp-server --transport http --host 0.0.0.0 --port 3000
+doris-mcp-server --transport http --host 127.0.0.1 --port 3000
 ```
 
 ### Command Line Arguments
@@ -186,7 +186,7 @@ The `doris-mcp-server` command supports the following arguments:
 | Argument | Description | Default | Required |
 |:---------|:------------|:--------|:---------|
 | `--transport` | Transport mode: `http` or `stdio` | `http` | No |
-| `--host` | HTTP server host (HTTP mode only) | `0.0.0.0` | No |
+| `--host` | HTTP server host (HTTP mode only) | `localhost` | No |
 | `--port` | HTTP server port (HTTP mode only) | `3000` | No |
 | `--db-host` | Doris database host | `localhost` | No |
 | `--db-port` | Doris database port | `9030` | No |
@@ -332,10 +332,136 @@ docker run -d -p <port>:<port> -v /*your-host*/doris-mcp-server/.env:/app/.env -
 ```
 **Service Endpoints:**
 
-*   **Streamable HTTP**: `http://<host>:<port>/mcp` (Primary MCP endpoint - supports GET, POST, DELETE, OPTIONS)
+*   **Streamable HTTP**: `http://<host>:<port>/mcp` (MCP messages use `POST`; do not depend on `GET` or `DELETE` compatibility behavior)
 *   **Health Check**: `http://<host>:<port>/health`
-* 
+
 > **Note**: The server uses Streamable HTTP for web-based communication, providing unified request/response and streaming capabilities.
+
+## MCP Protocol Support and Migration
+
+Doris MCP Server uses the official Python SDK v2 protocol core for both
+Streamable HTTP and stdio. The MCP protocol revision used on the wire is
+independent of the Doris MCP Server package version and the Python SDK package
+version.
+
+The authoritative protocol references are the
+[MCP 2026-07-28 specification](https://modelcontextprotocol.io/specification/2026-07-28),
+[2026-07-28 key changes](https://modelcontextprotocol.io/specification/2026-07-28/changelog),
+and [Streamable HTTP transport specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http).
+
+### Protocol and Transport Matrix
+
+| Client protocol | Streamable HTTP | stdio | Connection behavior | Doris MCP Server status |
+|:----------------|:----------------|:------|:--------------------|:------------------------|
+| `2026-07-28` | Supported and preferred | Supported and preferred | Stateless, self-contained requests; no initialization handshake or protocol session | Covered by modern HTTP and real-process stdio tests |
+| `2025-11-25` | Supported for migration | Supported for migration | Legacy `initialize` is accepted, but the server remains stateless and does not issue `Mcp-Session-Id` | Covered by legacy HTTP and stdio tests |
+| `2025-06-18` and older | Not guaranteed | Not guaranteed | Older negotiation and transport behavior is outside the supported compatibility contract | Upgrade the client before connecting |
+| HTTP+SSE (`2024-11-05`) | Not supported | Not applicable | The retired separate SSE endpoint is not exposed | Migrate to Streamable HTTP at `/mcp` |
+
+The compatibility path for `2025-11-25` exists to support migrations. New
+integrations should target `2026-07-28`.
+
+### MCP 2026-07-28 Request Contract
+
+Modern clients may call `server/discover` before any other method to inspect the
+supported protocol versions, capabilities, and server identity. Discovery is
+optional; every normal request is still self-contained.
+
+Every modern request must carry these values in `params._meta`:
+
+* `io.modelcontextprotocol/protocolVersion`: `2026-07-28`
+* `io.modelcontextprotocol/clientCapabilities`: the capabilities available for
+  that request, or an empty object
+* `io.modelcontextprotocol/clientInfo`: the client name and version; this is
+  recommended by the specification
+
+For Streamable HTTP, send one JSON-RPC request per `POST /mcp` and include:
+
+| Header | Required | Value |
+|:-------|:---------|:------|
+| `Content-Type` | Yes | `application/json` |
+| `Accept` | Yes | Both `application/json` and `text/event-stream` |
+| `MCP-Protocol-Version` | Yes | Must match the protocol version in `_meta` |
+| `Mcp-Method` | Yes | Must match the JSON-RPC `method` |
+| `Mcp-Name` | For `tools/call`, `resources/read`, and `prompts/get` | Must match `params.name` or `params.uri` |
+
+Header names are case-insensitive, but method and name values are not. A
+required header that is missing or disagrees with the request body is rejected
+with HTTP 400 and the protocol `HeaderMismatch` error (`-32020`). Unsupported
+protocol versions are rejected with `UnsupportedProtocolVersion` (`-32022`).
+If a name or URI is not safe as a plain ASCII header value, encode its UTF-8
+bytes as Base64 and send `Mcp-Name: =?base64?{value}?=` as defined by the
+transport specification.
+
+Example discovery request:
+
+```bash
+curl --request POST http://127.0.0.1:3000/mcp \
+  --header 'Content-Type: application/json' \
+  --header 'Accept: application/json, text/event-stream' \
+  --header 'MCP-Protocol-Version: 2026-07-28' \
+  --header 'Mcp-Method: server/discover' \
+  --data '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "server/discover",
+    "params": {
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {
+          "name": "example-client",
+          "version": "1.0.0"
+        }
+      }
+    }
+  }'
+```
+
+Stdio carries the same JSON-RPC request metadata in the message body, but it
+does not use HTTP headers. Do not write logs or other diagnostics to stdout in
+stdio mode; stdout is reserved for MCP protocol messages.
+
+### Migrating from MCP 2025-11-25
+
+1. Upgrade the client to a `2026-07-28`-capable MCP SDK.
+2. Continue using the `/mcp` endpoint for Streamable HTTP, but send every
+   JSON-RPC message as its own POST request.
+3. Remove `initialize`, `notifications/initialized`, `Mcp-Session-Id`, and any
+   sticky-session dependency.
+4. Add the protocol version and client capabilities to every request's `_meta`.
+   Add client identity on every request where possible.
+5. Add `MCP-Protocol-Version` and `Mcp-Method` to every HTTP request, plus
+   `Mcp-Name` for named tool, resource, and prompt requests.
+6. Stop using the removed HTTP GET stream, `Last-Event-ID`, and resumable SSE
+   behavior. Reissue an interrupted request with a new JSON-RPC request ID.
+7. Accept the required `resultType` field in modern results and handle
+   protocol-defined errors such as `-32020`, `-32021`, and `-32022`.
+8. Validate the migrated client against both Streamable HTTP and stdio if the
+   integration supports both transports.
+
+Clients that cannot migrate immediately may keep the `2025-11-25`
+`initialize` flow. Doris MCP Server accepts that flow on both supported
+transports, but does not create an HTTP protocol session.
+
+### Deployment Constraints
+
+* Bind local deployments to `127.0.0.1`, `localhost`, or `::1`. The transport
+  validates both `Host` and `Origin` to protect against DNS rebinding.
+* A bind address is not a public service identity. In particular,
+  `0.0.0.0` does not authorize arbitrary Host or Origin values.
+* The current Host/Origin policy does not provide an operator-configured public
+  allowlist. Public hostnames and reverse proxies that rewrite Host or Origin
+  are therefore not a supported deployment shape yet.
+* Do not expose an unauthenticated listener on a non-loopback interface. The
+  current release does not reject every unsafe non-loopback configuration at
+  startup, so a successful startup is not proof that the deployment is safe.
+* Stateless MCP requests do not require sticky HTTP sessions and can use
+  multiple workers. Authentication modes can have stricter limits:
+  Doris-backed OAuth stores tokens and per-user pools in process memory and
+  must run with `WORKERS=1`.
+* Use HTTPS whenever traffic leaves the local machine, and keep credentials in
+  headers or process environment rather than URLs.
 
 ## Usage
 
@@ -343,15 +469,18 @@ Interaction with the Doris MCP Server requires an **MCP Client**. The client con
 
 **Main Interaction Flow:**
 
-1.  **Client Initialization**: Send an `initialize` method call to `/mcp` (Streamable HTTP).
-2.  **(Optional) Discover Tools**: The client can call `tools/list` to get the list of supported tools, their descriptions, and parameter schemas.
-3.  **Call Tool**: The client sends a `tools/call` request, specifying the `name` and `arguments`.
+1.  **(Optional) Discover the Server**: A modern client can call `server/discover` to inspect supported protocol versions, capabilities, and identity.
+2.  **Discover Tools**: Call `tools/list` to get the supported tools, descriptions, and parameter schemas.
+3.  **Call Tool**: Send a self-contained `tools/call` request with its required `_meta`, `name`, and `arguments`.
     *   **Example: Get Table Schema**
         *   `name`: `get_table_schema`
         *   `arguments`: Include `table_name`, `db_name`, `catalog_name`.
 4.  **Handle Response**:
     *   **Non-streaming**: The client receives a response containing `content` or `isError`.
     *   **Streaming**: The client receives a series of progress notifications, followed by a final response.
+
+Legacy `2025-11-25` clients initialize as before, subject to the stateless
+compatibility limits described above.
 
 ### Catalog Federation Support
 
@@ -890,9 +1019,9 @@ Streamable HTTP mode requires you to run the MCP server independently first, and
 1.  **Configure `.env`:** Ensure your database credentials and any other necessary settings are correctly configured in the `.env` file within the project directory.
 2.  **Start the Server:** Run the server from your terminal in the project's root directory:
     ```bash
-    ./start_server.sh
+    MCP_HOST=127.0.0.1 ./start_server.sh
     ```
-    This script reads the `.env` file and starts the FastAPI server with Streamable HTTP support. Note the host and port the server is listening on (default is `0.0.0.0:3000`).
+    This script reads the `.env` file and starts the FastAPI server with Streamable HTTP support. Keep the listener on loopback unless the non-loopback deployment has been separately secured and validated.
 3.  **Configure Cursor:** Add an entry like the following to your Cursor MCP configuration, pointing to the running server's Streamable HTTP endpoint:
 
     ```json
@@ -1330,42 +1459,17 @@ HEALTH_CHECK_INTERVAL=60          # Pool health check frequency
 
 **Result**: 99.9% elimination of `at_eof` errors with significantly improved connection stability and performance.
 
-### Q: How to resolve MCP library version compatibility issues? (Fixed in v0.4.2)
+### Q: Which MCP protocol revisions are supported?
 
-**A:** Version 0.4.2 introduced an intelligent MCP compatibility layer that supports both MCP 1.8.x and 1.9.x versions:
+**A:** New integrations should use MCP `2026-07-28`. Doris MCP Server also
+accepts the `2025-11-25` initialization flow as a migration bridge on both
+Streamable HTTP and stdio. Older revisions and the retired HTTP+SSE transport
+are not part of the supported compatibility contract.
 
-**The Problem:**
-- MCP 1.9.3 introduced breaking changes to the `RequestContext` class (changed from 2 to 3 generic parameters)
-- This caused `TypeError: Too few arguments for RequestContext` errors
-
-**The Solution (v0.4.2):**
-- **Intelligent Version Detection**: Automatically detects the installed MCP version
-- **Compatibility Layer**: Gracefully handles API differences between versions
-- **Flexible Version Support**: `mcp>=1.8.0,<2.0.0` in dependencies
-
-**Supported MCP Versions:**
-```bash
-# Both versions now work seamlessly
-pip install mcp==1.8.0  # Stable version (recommended)
-pip install mcp==1.9.3  # Latest version with new features
-```
-
-**Version Information:**
-```bash
-# Check which MCP version is being used
-doris-mcp-server --transport stdio
-# The server will log: "Using MCP version: x.x.x"
-```
-
-If you encounter MCP-related startup errors:
-```bash
-# Recommended: Use stable version
-pip uninstall mcp
-pip install mcp==1.8.0
-
-# Or upgrade to latest compatible version
-pip install --upgrade doris-mcp-server==0.5.0
-```
+Do not infer wire-protocol support from the Doris MCP Server package version or
+the Python `mcp` dependency version. See
+[MCP Protocol Support and Migration](#mcp-protocol-support-and-migration) for
+the request metadata, HTTP headers, migration steps, and deployment limits.
 
 ### Q: How to enable ADBC high-performance features? (New in v0.5.0)
 
