@@ -153,7 +153,8 @@ class SSRFMonitoringConnectionManager:
     def __init__(self) -> None:
         self.config = SimpleNamespace(
             database=SimpleNamespace(
-                host="169.254.169.254",
+                host="sql.invalid",
+                fe_http_host="169.254.169.254",
                 fe_http_port=80,
                 be_hosts=[],
                 be_webserver_port=8040,

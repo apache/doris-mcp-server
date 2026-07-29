@@ -42,6 +42,7 @@ from doris_mcp_server.utils.monitoring_tools import DorisMonitoringTools
 def _database_config(
     *,
     host: str,
+    fe_http_host: str = "",
     fe_http_port: int,
     be_hosts: list[str] | None = None,
     be_webserver_port: int = 8040,
@@ -52,6 +53,7 @@ def _database_config(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         host=host,
+        fe_http_host=fe_http_host,
         fe_http_port=fe_http_port,
         be_hosts=be_hosts or [],
         be_webserver_port=be_webserver_port,
@@ -198,6 +200,30 @@ async def test_hostname_resolving_to_link_local_is_rejected(
     fake_loop.getaddrinfo.assert_awaited_once()
 
 
+async def test_hostname_resolving_to_ipv4_and_ipv6_loopback_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_loop = SimpleNamespace(
+        getaddrinfo=AsyncMock(
+            return_value=[
+                (10, 1, 6, "", ("::1", 8030, 0, 0)),
+                (2, 1, 6, "", ("127.0.0.1", 8030)),
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        doris_http_client_module.asyncio,
+        "get_running_loop",
+        lambda: fake_loop,
+    )
+    client = _http_client("localhost", 8030)
+    assert await client._resolve_addresses("localhost", 8030) == (
+        "::1",
+        "127.0.0.1",
+    )
+    fake_loop.getaddrinfo.assert_awaited_once()
+
+
 async def test_redirects_are_not_followed() -> None:
     async with _http_server(
         status=302,
@@ -293,7 +319,8 @@ async def test_monitoring_fetches_configured_loopback_metrics() -> None:
     ) as port:
         manager = _manager(
             _database_config(
-                host="127.0.0.1",
+                host="sql.invalid",
+                fe_http_host="127.0.0.1",
                 fe_http_port=port,
             )
         )
@@ -304,13 +331,15 @@ async def test_monitoring_fetches_configured_loopback_metrics() -> None:
         )
     assert result["success"] is True
     assert result["data"]["fe"]["success"] is True
+    assert result["data"]["fe"]["node_info"]["host"] == "127.0.0.1"
     assert result["data"]["fe"]["metrics"]["doris_fe_query_total"] == 7
 
 
 async def test_analysis_fe_http_path_uses_same_policy() -> None:
     manager = _manager(
         _database_config(
-            host="metadata.google.internal",
+            host="sql.invalid",
+            fe_http_host="metadata.google.internal",
             fe_http_port=80,
         )
     )
@@ -328,7 +357,12 @@ def test_http_safety_configuration_loads_and_has_runtime_hard_caps(
     monkeypatch.setenv("DORIS_HTTP_READ_TIMEOUT_SECONDS", "4")
     monkeypatch.setenv("DORIS_HTTP_TOTAL_TIMEOUT_SECONDS", "8")
     monkeypatch.setenv("DORIS_HTTP_MAX_RESPONSE_BYTES", "8192")
+    monkeypatch.setenv("DORIS_HOST", "sql.internal")
+    monkeypatch.setenv("DORIS_FE_HTTP_HOST", "fe-http.internal")
     config = DorisConfig.from_env()
+    assert config.database.host == "sql.internal"
+    assert config.database.fe_http_host == "fe-http.internal"
+    assert config.to_dict()["database"]["fe_http_host"] == "fe-http.internal"
     assert config.database.http_connect_timeout_seconds == 2
     assert config.database.http_read_timeout_seconds == 4
     assert config.database.http_total_timeout_seconds == 8
@@ -336,7 +370,8 @@ def test_http_safety_configuration_loads_and_has_runtime_hard_caps(
     assert not [error for error in config.validate() if error.startswith("Doris HTTP")]
 
     database_config = _database_config(
-        host="127.0.0.1",
+        host="sql.internal",
+        fe_http_host="127.0.0.1",
         fe_http_port=8030,
         connect_timeout=999,
         read_timeout=999,
@@ -348,3 +383,12 @@ def test_http_safety_configuration_loads_and_has_runtime_hard_caps(
     assert client.read_timeout_seconds == MAX_TIMEOUT_SECONDS
     assert client.total_timeout_seconds == MAX_TIMEOUT_SECONDS
     assert client.max_response_bytes == MAX_RESPONSE_BYTES
+    assert ("127.0.0.1", 8030) in client.allowed_endpoints["fe"]
+    assert ("sql.internal", 8030) not in client.allowed_endpoints["fe"]
+
+    fallback_config = _database_config(
+        host="127.0.0.1",
+        fe_http_port=8030,
+    )
+    fallback_client = DorisHTTPClient.from_database_config(fallback_config)
+    assert ("127.0.0.1", 8030) in fallback_client.allowed_endpoints["fe"]

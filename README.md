@@ -264,7 +264,8 @@ cp .env.example .env
     *   `DORIS_DATABASE`: Default database name (default: information_schema)
     *   `DORIS_MIN_CONNECTIONS`: Minimum connection pool size (default: 5)
     *   `DORIS_MAX_CONNECTIONS`: Maximum connection pool size (default: 20)
-    *   `DORIS_FE_HTTP_PORT`: FE HTTP API port for profile, table-size, and monitoring tools (default: 8030)
+    *   `DORIS_FE_HTTP_HOST`: Independent FE HTTP host for profile, table-size, and monitoring tools (default: empty, falling back to `DORIS_HOST`)
+    *   `DORIS_FE_HTTP_PORT`: Independent FE HTTP API port (default: 8030)
     *   `DORIS_BE_HOSTS`: Explicit BE HTTP allowlist for monitoring (comma-separated; BE HTTP metrics are disabled when empty)
     *   `DORIS_BE_WEBSERVER_PORT`: BE webserver port for monitoring tools (default: 8040)
     *   `DORIS_HTTP_CONNECT_TIMEOUT_SECONDS`: FE/BE HTTP connection timeout (default: 3)
@@ -1480,21 +1481,33 @@ If you have further requirements for the returned results, you can describe the 
 
 ### Q: How to configure BE nodes for monitoring tools?
 
-**A:** Configure every BE HTTP node that the MCP server may contact:
+**A:** Configure SQL, FE HTTP, and BE HTTP endpoints independently when a
+proxy, tunnel, or split network exposes them at different addresses:
 
 ```bash
-# Explicitly allow these configured BE nodes
+# SQL/MySQL protocol endpoint
+DORIS_HOST=sql-gateway.internal
+DORIS_PORT=9030
+
+# FE HTTP endpoint; omit DORIS_FE_HTTP_HOST to reuse DORIS_HOST
+DORIS_FE_HTTP_HOST=fe-http-proxy.internal
+DORIS_FE_HTTP_PORT=8030
+
+# Explicit BE HTTP allowlist
 DORIS_BE_HOSTS=10.1.1.100,10.1.1.101,10.1.1.102
 DORIS_BE_WEBSERVER_PORT=8040
 ```
 
 BE HTTP endpoints are never inferred from `SHOW BACKENDS`: SQL metadata is not
 an outbound HTTP allowlist. If `DORIS_BE_HOSTS` is empty, BE HTTP metrics are
-disabled. FE and BE requests use only configured hosts and ports, pin validated
-DNS results for each request, reject metadata/link-local destinations, disable
-redirects, and enforce connection/read/total timeouts plus a response byte
-limit. Private and loopback addresses remain available for normal internal
-Doris deployments and SSH tunnels.
+disabled. `DORIS_FE_HTTP_HOST` falls back to `DORIS_HOST` only for backward
+compatibility; an explicit value is used for every FE monitoring, profile,
+trace, and table-size HTTP request. FE and BE requests use only configured
+hosts and ports, pin validated DNS results for each request, reject
+metadata/link-local destinations, disable redirects, and enforce
+connection/read/total timeouts plus a response byte limit. Private and loopback
+addresses remain available for normal internal Doris deployments and SSH
+tunnels.
 
 ### Q: How to use SQL Explain/Profile files with LLM for optimization?
 

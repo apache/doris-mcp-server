@@ -967,9 +967,12 @@ class DorisMonitoringTools:
         """Get FE monitoring metrics"""
         try:
             db_config = self.connection_manager.config.database
+            fe_http_host = (
+                getattr(db_config, "fe_http_host", "") or db_config.host
+            )
             fe_result = await self.fetch_metrics_from_node(
                 "fe",
-                {"host": db_config.host, "port": db_config.fe_http_port}
+                {"host": fe_http_host, "port": db_config.fe_http_port}
             )
             if not fe_result.get("success"):
                 return fe_result

@@ -881,10 +881,13 @@ class SQLAnalyzer:
         """
         try:
             db_config = self.connection_manager.config.database
+            fe_http_host = (
+                getattr(db_config, "fe_http_host", "") or db_config.host
+            )
             http_client = DorisHTTPClient.from_database_config(db_config)
             response = await http_client.get(
                 role="fe",
-                host=db_config.host,
+                host=fe_http_host,
                 port=db_config.fe_http_port,
                 path=(
                     "/rest/v2/manager/query/trace_id/"
@@ -957,6 +960,9 @@ class SQLAnalyzer:
         """
         try:
             db_config = self.connection_manager.config.database
+            fe_http_host = (
+                getattr(db_config, "fe_http_host", "") or db_config.host
+            )
             endpoints = [
                 (
                     "/rest/v2/manager/query/profile/text/"
@@ -970,7 +976,7 @@ class SQLAnalyzer:
                 logger.info("Requesting profile from configured FE endpoint %s", i + 1)
                 response = await http_client.get(
                     role="fe",
-                    host=db_config.host,
+                    host=fe_http_host,
                     port=db_config.fe_http_port,
                     path=path,
                     params=params,
@@ -1058,10 +1064,13 @@ class SQLAnalyzer:
                 "Requesting table data size from configured FE endpoint with params: %s",
                 params,
             )
+            fe_http_host = (
+                getattr(db_config, "fe_http_host", "") or db_config.host
+            )
             http_client = DorisHTTPClient.from_database_config(db_config)
             response = await http_client.get(
                 role="fe",
-                host=db_config.host,
+                host=fe_http_host,
                 port=db_config.fe_http_port,
                 path="/api/show_table_data",
                 params=params,

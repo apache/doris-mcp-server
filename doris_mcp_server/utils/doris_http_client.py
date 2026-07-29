@@ -156,7 +156,7 @@ def _address_allowed(address: str) -> bool:
             or candidate.is_link_local
             or candidate.is_multicast
             or candidate.is_unspecified
-            or candidate.is_reserved
+            or (candidate.is_reserved and not candidate.is_loopback)
         )
         for candidate in candidates
     )
@@ -221,7 +221,9 @@ class DorisHTTPClient:
 
     @classmethod
     def from_database_config(cls, database_config: Any) -> DorisHTTPClient:
-        fe_host = _normalize_host(database_config.host)
+        fe_host = _normalize_host(
+            getattr(database_config, "fe_http_host", "") or database_config.host
+        )
         fe_port = _validate_port(database_config.fe_http_port)
         be_port = _validate_port(getattr(database_config, "be_webserver_port", 8040))
         be_hosts = getattr(database_config, "be_hosts", []) or []
