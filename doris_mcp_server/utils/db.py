@@ -148,8 +148,19 @@ class DorisConnection:
         self.owner_pool = owner_pool
         self.logger = get_logger(__name__)
 
-    async def execute(self, sql: str, params: tuple | None = None, auth_context=None) -> QueryResult:
-        """Execute SQL query"""
+    async def execute(
+        self,
+        sql: str,
+        params: tuple | None = None,
+        auth_context=None,
+        *,
+        mask_result: bool = True,
+    ) -> QueryResult:
+        """Execute SQL after validation, with optional result masking.
+
+        ``mask_result=False`` is reserved for trusted internal control data
+        that must remain machine-readable after authorization.
+        """
         start_time = time.time()
 
         try:
@@ -188,8 +199,16 @@ class DorisConnection:
 
                 # If security manager exists and has auth context, apply data masking
                 final_data = list(data) if data else []
-                if self.security_manager and auth_context and final_data:
-                    final_data = await self.security_manager.apply_data_masking(final_data, auth_context)
+                if (
+                    self.security_manager
+                    and auth_context
+                    and final_data
+                    and mask_result
+                ):
+                    final_data = await self.security_manager.apply_data_masking(
+                        final_data,
+                        auth_context,
+                    )
 
                 metadata = {"columns": columns, "query": sql, "params": params}
                 if security_result:

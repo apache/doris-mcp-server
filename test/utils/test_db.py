@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from doris_mcp_server.utils.db import (
@@ -212,6 +213,42 @@ class TestExecuteResultSetDetection:
 
         assert result.data == rows
         assert result.row_count == len(rows)
+
+    async def test_can_skip_masking_without_skipping_security_validation(self):
+        rows = [{"UserIdentity": "'root'@'%'", "Roles": "operator"}]
+        conn = _make_doris_connection(
+            cursor_description=[
+                ("UserIdentity", None, None, None, None, None, None),
+                ("Roles", None, None, None, None, None, None),
+            ],
+            fetchall_rows=rows,
+        )
+        security_manager = MagicMock()
+        security_manager.validate_sql_security = AsyncMock(
+            return_value=MagicMock(
+                is_valid=True,
+                risk_level="low",
+                blocked_operations=[],
+            )
+        )
+        security_manager.apply_data_masking = AsyncMock(
+            return_value=[{"UserIdentity": "masked", "Roles": "operator"}]
+        )
+        conn.security_manager = security_manager
+        auth_context = object()
+
+        result = await conn.execute(
+            "SHOW ALL GRANTS",
+            auth_context=auth_context,
+            mask_result=False,
+        )
+
+        assert result.data == rows
+        security_manager.validate_sql_security.assert_awaited_once_with(
+            "SHOW ALL GRANTS",
+            auth_context,
+        )
+        security_manager.apply_data_masking.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "sql, affected",

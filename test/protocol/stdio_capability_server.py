@@ -38,6 +38,7 @@ from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
 from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
 from doris_mcp_server.utils.db import QueryResult
+from doris_mcp_server.utils.security_analytics_tools import SecurityAnalyticsTools
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
 
@@ -106,6 +107,78 @@ class FreshnessGovernanceTools(DataGovernanceTools):
         }
 
 
+class RoleMetadataConnection:
+    async def execute(
+        self,
+        sql: str,
+        params=None,
+        auth_context=None,
+        *,
+        mask_result: bool = True,
+    ) -> QueryResult:
+        assert mask_result is False
+        if sql.strip() == "SHOW ALL GRANTS":
+            return QueryResult(
+                data=[
+                    {
+                        "UserIdentity": "'root'@'%'",
+                        "Roles": "operator",
+                    }
+                ],
+                metadata={},
+                execution_time=0.01,
+                row_count=1,
+                sql=sql,
+            )
+        raise RuntimeError("Unknown column 'Default_role'")
+
+
+class RoleConnectionManager:
+    def __init__(self) -> None:
+        self.connection = RoleMetadataConnection()
+
+    async def get_connection(self, session_id: str) -> RoleMetadataConnection:
+        return self.connection
+
+
+class RoleSecurityAnalyticsTools(SecurityAnalyticsTools):
+    async def _get_audit_log_data(
+        self,
+        connection,
+        start_date,
+        end_date,
+        include_system_users,
+    ) -> list[dict]:
+        return [{"user_name": "root"}]
+
+    async def _analyze_user_access_patterns(
+        self,
+        audit_data: list[dict],
+        min_query_threshold: int,
+    ) -> list[dict]:
+        return [
+            {
+                "user_name": "root",
+                "access_stats": {"total_queries": 1},
+                "query_type_distribution": {"SELECT": 1},
+            }
+        ]
+
+    async def _detect_security_anomalies(
+        self,
+        audit_data: list[dict],
+        user_access_analysis: list[dict],
+    ) -> list[dict]:
+        return []
+
+    async def _generate_access_insights(
+        self,
+        user_access_analysis: list[dict],
+        role_analysis: dict,
+    ) -> dict:
+        return {}
+
+
 class OneToolManager:
     def __init__(self) -> None:
         connection_manager = ProfileConnectionManager()
@@ -114,6 +187,7 @@ class OneToolManager:
         self.freshness_router.data_governance_tools = FreshnessGovernanceTools(
             connection_manager
         )
+        self.role_analyzer = RoleSecurityAnalyticsTools(RoleConnectionManager())
 
     async def list_tools(self) -> list[Tool]:
         return [
@@ -148,6 +222,11 @@ class OneToolManager:
                     },
                 },
             ),
+            Tool(
+                name="analyze_data_access_patterns",
+                description="Exercise Doris 4 role metadata compatibility.",
+                input_schema={"type": "object", "properties": {}},
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> str:
@@ -161,6 +240,10 @@ class OneToolManager:
         if name == "monitor_data_freshness":
             return json.dumps(
                 await self.freshness_router._monitor_data_freshness_tool(arguments)
+            )
+        if name == "analyze_data_access_patterns":
+            return json.dumps(
+                await self.role_analyzer.analyze_data_access_patterns()
             )
         return "{}"
 
