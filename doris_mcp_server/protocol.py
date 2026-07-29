@@ -148,6 +148,7 @@ def create_doris_mcp_server(
     version: str,
     logger: logging.Logger,
     required_client_capabilities: Mapping[str, ClientCapabilities] | None = None,
+    required_tool_capabilities: Mapping[str, ClientCapabilities] | None = None,
 ) -> Server:
     """Create the one low-level SDK v2 server used by every transport."""
 
@@ -285,14 +286,19 @@ def create_doris_mcp_server(
         on_get_prompt=get_prompt,
     )
 
-    if required_client_capabilities:
-        requirements = dict(required_client_capabilities)
+    if required_client_capabilities or required_tool_capabilities:
+        requirements = dict(required_client_capabilities or {})
+        tool_requirements = dict(required_tool_capabilities or {})
 
         async def enforce_required_client_capabilities(
             ctx: ServerRequestContext,
             call_next: CallNext,
         ):
             required = requirements.get(ctx.method)
+            if ctx.method == "tools/call" and ctx.params is not None:
+                tool_name = ctx.params.get("name")
+                if isinstance(tool_name, str):
+                    required = tool_requirements.get(tool_name, required)
             if (
                 required is not None
                 and ctx.protocol_version == LATEST_PROTOCOL_VERSION

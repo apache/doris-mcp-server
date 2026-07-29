@@ -31,6 +31,7 @@ from mcp.types import (
     Prompt,
     PromptMessage,
     Resource,
+    SamplingCapability,
     TextContent,
     Tool,
 )
@@ -42,6 +43,11 @@ from doris_mcp_server.protocol import (
 from test.protocol.stdio_capability_server import OneToolManager as ProfileToolManager
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
+
+
+async def _unused_sampling_callback(context, params):
+    del context, params
+    raise AssertionError("The capability fixture must not issue sampling requests")
 
 
 class StubResourcesManager:
@@ -141,6 +147,7 @@ class StubPromptsManager:
 
 def create_test_server(
     required_client_capabilities: dict[str, ClientCapabilities] | None = None,
+    required_tool_capabilities: dict[str, ClientCapabilities] | None = None,
     tools_manager=None,
 ):
     return create_doris_mcp_server(
@@ -151,6 +158,7 @@ def create_test_server(
         version="0.6.1",
         logger=logging.getLogger(__name__),
         required_client_capabilities=required_client_capabilities,
+        required_tool_capabilities=required_tool_capabilities,
     )
 
 
@@ -506,6 +514,64 @@ async def test_http_validates_request_meta_and_required_client_capabilities():
 
 
 @pytest.mark.asyncio
+async def test_http_enforces_tool_specific_client_capabilities_and_recovers():
+    server = create_test_server(
+        required_tool_capabilities={
+            "echo": ClientCapabilities(sampling=SamplingCapability()),
+        }
+    )
+    app = server.streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        missing = await client.post(
+            "/mcp",
+            json=modern_tool_request(1, "echo", {"value": "missing"}),
+            headers=modern_tool_headers("echo"),
+        )
+        assert missing.status_code == 400
+        assert missing.json()["error"] == {
+            "code": -32021,
+            "message": "Missing required client capability",
+            "data": {"requiredCapabilities": {"sampling": {}}},
+        }
+
+        capable_request = modern_tool_request(2, "echo", {"value": "capable"})
+        capable_request["params"]["_meta"][
+            "io.modelcontextprotocol/clientCapabilities"
+        ] = {"sampling": {}}
+        capable = await client.post(
+            "/mcp",
+            json=capable_request,
+            headers=modern_tool_headers("echo"),
+        )
+        assert capable.status_code == 200
+        assert capable.json()["result"]["structuredContent"] == {
+            "name": "echo",
+            "arguments": {"value": "capable"},
+        }
+
+        recovered = await client.post(
+            "/mcp",
+            json=modern_tool_request(3, "fail"),
+            headers=modern_tool_headers("fail"),
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["result"]["isError"] is True
+
+
+@pytest.mark.asyncio
 async def test_http_resource_not_found_is_invalid_params_and_server_recovers():
     app = create_test_server().streamable_http_app(
         json_response=True,
@@ -794,7 +860,52 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             "analyze_data_access_patterns",
         ]
         legacy_error = await legacy.read_resource("doris://table/missing")
-        assert json.loads(legacy_error.contents[0].text)["error_code"] == "RESOURCE_NOT_FOUND"
+        assert (
+            json.loads(legacy_error.contents[0].text)["error_code"]
+            == "RESOURCE_NOT_FOUND"
+        )
+
+
+@pytest.mark.asyncio
+async def test_stdio_enforces_tool_specific_client_capabilities_and_recovers():
+    server_script = Path(__file__).with_name("conformance_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script), "--transport", "stdio"],
+    )
+
+    async with Client(stdio_client(server_params)) as missing:
+        assert [tool.name for tool in (await missing.list_tools()).tools] == [
+            "test_missing_capability"
+        ]
+        with pytest.raises(MCPError) as missing_capability:
+            await missing.call_tool("test_missing_capability", {})
+        assert missing_capability.value.code == -32021
+        assert missing_capability.value.data == {
+            "requiredCapabilities": {"sampling": {}}
+        }
+        assert [tool.name for tool in (await missing.list_tools()).tools] == [
+            "test_missing_capability"
+        ]
+
+    async with Client(
+        stdio_client(server_params),
+        sampling_callback=_unused_sampling_callback,
+        sampling_capabilities=SamplingCapability(),
+    ) as capable:
+        result = await capable.call_tool("test_missing_capability", {})
+        assert result.is_error is False
+        assert result.structured_content == {
+            "ok": True,
+            "tool": "test_missing_capability",
+        }
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        result = await legacy.call_tool("test_missing_capability", {})
+        assert json.loads(result.content[0].text) == {
+            "ok": True,
+            "tool": "test_missing_capability",
+        }
 
 
 @pytest.mark.asyncio
