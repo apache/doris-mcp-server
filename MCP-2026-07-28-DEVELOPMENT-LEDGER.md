@@ -140,7 +140,7 @@
 | `CORE-009` | P2 | manager 模块职责拆分 | CORE-005 | 不改变行为前提下缩小超大文件，模块边界有测试 | `BACKLOG` |
 | `CORE-010` | P1 | 修复 SQL profile 分析未绑定 `auth_context` | 无 | 真实 Doris 调用不再触发局部变量未赋值；鉴权上下文覆盖测试通过 | `DONE` |
 | `CORE-011` | P1 | 修复数据新鲜度空阈值比较 | 无 | 阈值缺失或为 `None` 时返回类型化错误/默认值，不抛 `TypeError` | `DONE` |
-| `COMPAT-001` | P1 | Doris 4.0 元数据字段兼容 | 无 | Doris 4.0.5 的角色/权限查询不再依赖不存在的 `Default_role` 字段 | `READY` |
+| `COMPAT-001` | P1 | Doris 4.0 元数据字段兼容 | 无 | Doris 4.0.5 的角色/权限查询不再依赖不存在的 `Default_role` 字段 | `DONE` |
 | `COMPAT-002` | P2 | FE/BE HTTP 端点独立配置 | SEC-018 | SQL、FE HTTP、BE HTTP 可分别配置主机/端口并通过代理/隧道环境测试 | `BACKLOG` |
 
 ## 7. 测试、构建和发布台账
@@ -510,16 +510,60 @@ recovery result: org_tenant=47040
 - STDIO modern/legacy：同样覆盖缺省与显式空阈值，随后真实查询成功；
 - 连接通过既有 SSH key 和临时本地隧道完成；凭据未写入仓库、测试或台账，探针完成后服务与隧道均已关闭。
 
+提交与评审回执：
+
+- commit：`7fe79bc fix: handle unknown data freshness safely`
+- Draft PR：[apache/doris-mcp-server#98](https://github.com/apache/doris-mcp-server/pull/98)
+
+### COMPAT-001
+
+Doris 4.0 角色分析改用公开 RBAC 元数据命令 `SHOW ALL GRANTS`，不再读取
+`mysql.user.Default_role`。当当前账号无权查看全部授权时，降级为 `SHOW GRANTS`
+读取当前用户授权。返回列会按列名归一化，支持多角色、空角色和带 host 的用户身份。
+
+角色元数据属于内部控制数据：固定 SQL 仍然经过当前 `auth_context` 的 SQL 安全校验，
+但通过显式 `mask_result=False` 跳过结果脱敏，避免 `UserIdentity` 被身份证规则破坏后使
+角色分析全部退化为 `unknown`。普通查询默认仍然执行结果脱敏。
+
+自动化验证：
+
+- 单元路径：覆盖多角色、空角色默认值和 `SHOW ALL GRANTS` 无权限时的
+  `SHOW GRANTS` 降级；
+- 数据库连接层：断言关闭控制数据脱敏时仍会执行 SQL 安全校验；
+- Streamable HTTP：生产角色分析路径返回 `operator -> root`；
+- 真实子进程 STDIO modern/legacy：同一路径返回 `operator`，进程保持可用；
+- 完整 pytest：`356 passed / 57 skipped / 0 failed / 252 warnings`；
+- `uv lock --check`、新增测试完整 Ruff、运行时严重错误规则 Ruff、`compileall`、
+  `uv build` 和 `git diff --check` 全部通过。
+
+真实 Doris 验证：
+
+```text
+environment: 192.168.31.63 / hhm_dt_sim
+Doris version: doris-4.0.5-rc01-59de8c4c524
+root role: operator
+hhm_nl2sql_reader role: hhm_nl2sql_readonly
+recovery result: org_tenant=47040
+```
+
+- 实库确认 `mysql.user` 不存在 `Default_role`，`SHOW ALL GRANTS` 返回
+  `UserIdentity` 和 `Roles`；
+- 生产 `_get_user_roles` 直接读取真实 RBAC 映射成功；
+- HTTP modern/legacy：`analyze_data_access_patterns` 返回 `operator -> root`，
+  随后真实查询成功；
+- STDIO modern/legacy：同样返回真实角色映射，随后真实查询成功；
+- 连接通过既有 SSH key 和临时本地隧道完成；凭据未写入仓库、测试或台账，
+  探针完成后服务与隧道均已关闭。
+
 ## 11. 下一开发批次
 
 批次：`BATCH-02-CONFORMANCE-AND-ERROR-SEMANTICS`
 
 按以下顺序推进：
 
-1. `COMPAT-001`：继续修复真实 Doris 已复现缺陷；
-2. `TEST-003`：运行官方 `server-stateless` Conformance；
-3. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
-4. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；
-5. `SEC-003`～`SEC-005`：进入下一安全批，完成非 loopback fail-closed。
+1. `TEST-003`：运行官方 `server-stateless` Conformance；
+2. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
+3. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；
+4. `SEC-003`～`SEC-005`：进入下一安全批，完成非 loopback fail-closed。
 
 `REL-001` 已达成。`REL-002` 仍由官方 Conformance、完整真实 Doris 矩阵、P0/P1 安全项、Compose 和发布门阻塞。

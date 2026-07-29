@@ -702,6 +702,38 @@ async def test_http_unknown_freshness_uses_default_threshold():
 
 
 @pytest.mark.asyncio
+async def test_http_doris4_role_metadata_uses_public_grants_command():
+    app = create_test_server(
+        tools_manager=ProfileToolManager(),
+    ).streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        result = await client.post(
+            "/mcp",
+            json=modern_tool_request(1, "analyze_data_access_patterns", {}),
+            headers=modern_tool_headers("analyze_data_access_patterns"),
+        )
+
+        assert result.status_code == 200
+        assert result.json()["result"]["isError"] is False
+        roles = result.json()["result"]["structuredContent"]["role_analysis"]
+        assert list(roles) == ["operator"]
+        assert roles["operator"]["users"] == ["root"]
+
+
+@pytest.mark.asyncio
 async def test_stdio_validates_capabilities_versions_and_process_survival():
     server_script = Path(__file__).with_name("stdio_capability_server.py")
     server_params = StdioServerParameters(
@@ -751,6 +783,7 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             "echo",
             "get_sql_profile",
             "monitor_data_freshness",
+            "analyze_data_access_patterns",
         ]
 
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
@@ -758,6 +791,7 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             "echo",
             "get_sql_profile",
             "monitor_data_freshness",
+            "analyze_data_access_patterns",
         ]
         legacy_error = await legacy.read_resource("doris://table/missing")
         assert json.loads(legacy_error.contents[0].text)["error_code"] == "RESOURCE_NOT_FOUND"
@@ -823,6 +857,29 @@ async def test_stdio_unknown_freshness_uses_default_threshold():
         payload = json.loads(result.content[0].text)
         assert "error" not in payload
         assert payload["monitoring_scope"]["time_threshold_hours"] == 24
+
+
+@pytest.mark.asyncio
+async def test_stdio_doris4_role_metadata_uses_public_grants_command():
+    server_script = Path(__file__).with_name("stdio_capability_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(
+        stdio_client(server_params),
+        extensions=[advertise(REQUIRED_EXTENSION)],
+    ) as modern:
+        result = await modern.call_tool("analyze_data_access_patterns", {})
+        assert result.is_error is False
+        roles = result.structured_content["role_analysis"]
+        assert list(roles) == ["operator"]
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        result = await legacy.call_tool("analyze_data_access_patterns", {})
+        roles = json.loads(result.content[0].text)["role_analysis"]
+        assert list(roles) == ["operator"]
 
 
 @pytest.mark.asyncio

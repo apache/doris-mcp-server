@@ -22,6 +22,7 @@ from doris_mcp_server.utils.security import (
     reset_auth_context,
     set_current_auth_context,
 )
+from doris_mcp_server.utils.security_analytics_tools import SecurityAnalyticsTools
 
 
 class FakeRoutedConnection:
@@ -115,6 +116,76 @@ class FakeRoutedConnectionManager:
     async def get_connection_for_token(self, token, session_id):
         self.token_calls += 1
         raise AssertionError("Doris OAuth tool path fell back to token routing")
+
+
+class Doris4RoleMetadataConnection:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(
+        self,
+        sql,
+        params=None,
+        auth_context=None,
+        *,
+        mask_result=True,
+    ):
+        self.calls.append(sql.strip())
+        assert mask_result is False
+        if sql.strip() == "SHOW ALL GRANTS":
+            return QueryResult(
+                data=[
+                    {
+                        "UserIdentity": "'root'@'%'",
+                        "Roles": "operator, admin",
+                    },
+                    {
+                        "UserIdentity": "'reader'@'10.%'",
+                        "Roles": "readonly",
+                    },
+                    {
+                        "UserIdentity": "'loader'@'%'",
+                        "Roles": "",
+                    },
+                ],
+                metadata={},
+                execution_time=0.01,
+                row_count=3,
+                sql=sql,
+            )
+        raise RuntimeError("Unknown column 'Default_role'")
+
+
+class CurrentUserRoleMetadataConnection:
+    def __init__(self):
+        self.calls = []
+
+    async def execute(
+        self,
+        sql,
+        params=None,
+        auth_context=None,
+        *,
+        mask_result=True,
+    ):
+        self.calls.append(sql.strip())
+        assert mask_result is False
+        if sql.strip() == "SHOW ALL GRANTS":
+            raise PermissionError("SHOW ALL GRANTS requires elevated privileges")
+        if sql.strip() == "SHOW GRANTS":
+            return QueryResult(
+                data=[
+                    {
+                        "UserIdentity": "'reader'@'%'",
+                        "Roles": "readonly",
+                    }
+                ],
+                metadata={},
+                execution_time=0.01,
+                row_count=1,
+                sql=sql,
+            )
+        raise AssertionError(f"Unexpected SQL: {sql}")
 
 
 def doris_context(
@@ -448,6 +519,32 @@ async def test_unknown_data_freshness_is_not_compared_as_a_number():
     )
 
     assert issues == []
+
+
+@pytest.mark.asyncio
+async def test_doris4_user_roles_use_show_grants_metadata():
+    connection = Doris4RoleMetadataConnection()
+    analytics = SecurityAnalyticsTools(SimpleNamespace())
+
+    roles = await analytics._get_user_roles(connection)
+
+    assert roles == {
+        "root": ["operator", "admin"],
+        "reader": ["readonly"],
+        "loader": ["default"],
+    }
+    assert connection.calls == ["SHOW ALL GRANTS"]
+
+
+@pytest.mark.asyncio
+async def test_user_roles_fall_back_to_current_user_grants():
+    connection = CurrentUserRoleMetadataConnection()
+    analytics = SecurityAnalyticsTools(SimpleNamespace())
+
+    roles = await analytics._get_user_roles(connection)
+
+    assert roles == {"reader": ["readonly"]}
+    assert connection.calls == ["SHOW ALL GRANTS", "SHOW GRANTS"]
 
 
 @pytest.mark.asyncio

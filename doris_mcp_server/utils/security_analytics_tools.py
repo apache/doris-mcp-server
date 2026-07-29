@@ -494,24 +494,55 @@ class SecurityAnalyticsTools:
     async def _get_user_roles(self, connection) -> Dict[str, List[str]]:
         """Get user roles mapping"""
         try:
-            # Try to get user role information
-            roles_sql = """
-            SELECT 
-                User as user_name,
-                COALESCE(Default_role, 'default') as role_name
-            FROM mysql.user
-            """
-            
             auth_context = get_auth_context()
-            result = await connection.execute(roles_sql, auth_context=auth_context)
-            
+            try:
+                result = await connection.execute(
+                    "SHOW ALL GRANTS",
+                    auth_context=auth_context,
+                    mask_result=False,
+                )
+            except Exception as all_grants_error:
+                logger.debug(
+                    "SHOW ALL GRANTS unavailable, falling back to current user: %s",
+                    all_grants_error,
+                )
+                result = await connection.execute(
+                    "SHOW GRANTS",
+                    auth_context=auth_context,
+                    mask_result=False,
+                )
+
             user_roles = defaultdict(list)
             if result.data:
                 for row in result.data:
-                    user_name = row.get("user_name", "")
-                    role_name = row.get("role_name", "default")
-                    if user_name:
-                        user_roles[user_name].append(role_name)
+                    normalized = {
+                        str(key).lower().replace("_", ""): value
+                        for key, value in row.items()
+                    }
+                    identity = normalized.get("useridentity") or normalized.get("user")
+                    if not identity:
+                        continue
+
+                    user_name = (
+                        str(identity)
+                        .split("@", 1)[0]
+                        .strip()
+                        .strip("'\"`")
+                    )
+                    raw_roles = normalized.get("roles")
+                    if isinstance(raw_roles, (list, tuple, set)):
+                        role_names = list(raw_roles)
+                    else:
+                        role_names = str(raw_roles or "").split(",")
+                    role_names = [
+                        str(role).strip().strip("'\"`")
+                        for role in role_names
+                        if str(role).strip().strip("'\"`")
+                    ] or ["default"]
+
+                    for role_name in role_names:
+                        if role_name not in user_roles[user_name]:
+                            user_roles[user_name].append(role_name)
             
             return dict(user_roles)
             
@@ -785,4 +816,4 @@ class SecurityAnalyticsTools:
                 "action": "Consider implementing more granular role-based access control"
             })
         
-        return recommendations 
+        return recommendations
