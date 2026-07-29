@@ -134,9 +134,14 @@ async def test_failed_introspection_never_calls_userinfo():
     client = RejectingOAuthClient()
     provider = _provider(client)
 
-    with pytest.raises(ValueError, match="inactive"):
+    with pytest.raises(
+        OAuthAccessTokenValidationError,
+        match="inactive",
+    ) as exc_info:
         await provider.authenticate_with_token("rejected-access")
 
+    assert exc_info.value.error == "invalid_token"
+    assert exc_info.value.status_code == 401
     assert client.events == [("introspect", "rejected-access")]
 
 
@@ -148,5 +153,10 @@ async def test_userinfo_subject_must_match_introspected_subject():
     )
     provider = _provider(client)
 
-    with pytest.raises(ValueError, match="userinfo subject does not match"):
+    with pytest.raises(
+        OAuthAccessTokenValidationError,
+        match="userinfo subject does not match",
+    ) as exc_info:
         await provider.authenticate_with_token("access-1")
+
+    assert exc_info.value.error == "invalid_token"

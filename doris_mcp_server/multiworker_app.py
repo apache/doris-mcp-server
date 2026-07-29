@@ -231,10 +231,20 @@ async def doris_oauth_unavailable(request):
     return JSONResponse({"error": "doris_oauth_not_initialized"}, status_code=503)
 
 
-async def doris_oauth_protected_resource_metadata(request):
-    if not _doris_oauth_handlers:
+async def oauth_protected_resource_metadata(request):
+    if _worker_effective_auth is None:
         return await doris_oauth_unavailable(request)
-    return await _doris_oauth_handlers.protected_resource_metadata(request)
+    if _worker_effective_auth and _worker_effective_auth.enable_doris_oauth_auth:
+        if not _doris_oauth_handlers:
+            return await doris_oauth_unavailable(request)
+        return await _doris_oauth_handlers.protected_resource_metadata(request)
+    if (
+        _worker_effective_auth
+        and _worker_effective_auth.enable_external_oauth_auth
+        and _oauth_handlers
+    ):
+        return await _oauth_handlers.handle_protected_resource_metadata(request)
+    return JSONResponse({"error": "oauth_disabled"}, status_code=404)
 
 
 async def doris_oauth_authorization_server_metadata(request):
@@ -395,7 +405,11 @@ basic_app = Starlette(
         Route("/auth/provider", oauth_provider_info, methods=["GET"]),
         Route("/auth/demo", oauth_demo, methods=["GET"]),
         # Doris OAuth endpoints are explicit to avoid top-level silent 404s.
-        Route("/.well-known/oauth-protected-resource", doris_oauth_protected_resource_metadata, methods=["GET"]),
+        Route(
+            "/.well-known/oauth-protected-resource",
+            oauth_protected_resource_metadata,
+            methods=["GET"],
+        ),
         Route("/.well-known/oauth-authorization-server", doris_oauth_authorization_server_metadata, methods=["GET"]),
         Route("/oauth/register", doris_oauth_register, methods=["POST"]),
         Route("/oauth/authorize", doris_oauth_authorize, methods=["GET"]),

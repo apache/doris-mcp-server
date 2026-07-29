@@ -319,6 +319,12 @@ class DorisSecurityManager:
                     raise
         
         # All enabled authentication methods failed
+        from ..auth.oauth_token_validation import (
+            OAuthAccessTokenValidationError,
+        )
+
+        if isinstance(last_error, OAuthAccessTokenValidationError):
+            raise last_error
         error_message = f"Authentication failed: {str(last_error)}" if last_error else "No authentication method succeeded"
         self.logger.warning(
             f"Authentication failed for client {credentials.client_ip}: {error_message}"

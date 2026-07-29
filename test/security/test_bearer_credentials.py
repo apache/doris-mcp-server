@@ -21,6 +21,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from doris_mcp_server.auth.oauth_token_validation import (
+    OAuthAccessTokenValidationError,
+)
 from doris_mcp_server.utils.auth_credentials import (
     BearerCredentials,
     normalize_bearer_credentials,
@@ -136,6 +139,35 @@ async def test_security_manager_passes_the_same_dto_to_every_provider(
     assert result is expected_context
     assert received == [(provider_method, credentials)]
     assert received[0][1] is credentials
+
+
+@pytest.mark.asyncio
+async def test_security_manager_preserves_external_oauth_challenge_error():
+    expected = OAuthAccessTokenValidationError(
+        "insufficient_scope",
+        "A required scope is missing",
+        required_scopes=("tool:call:exec_query",),
+    )
+
+    class Provider:
+        async def authenticate_oauth(self, credentials):
+            raise expected
+
+    manager = object.__new__(DorisSecurityManager)
+    manager.auth_provider = Provider()
+    manager.logger = logging.getLogger(__name__)
+    manager._get_effective_auth_config = lambda: SimpleNamespace(
+        auth_methods=("external_oauth",)
+    )
+
+    with pytest.raises(OAuthAccessTokenValidationError) as exc_info:
+        await manager.authenticate_request(
+            BearerCredentials(scheme="bearer", token="external-token")
+        )
+
+    assert exc_info.value is expected
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.required_scopes == ("tool:call:exec_query",)
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,10 @@ class EffectiveAuthConfig:
     legacy_auth_type: str
     auth_config_warnings: tuple[str, ...] = ()
     doris_oauth_base_url: str = ""
+    external_oauth_issuer: str = ""
+    external_oauth_resource: str = ""
+    external_oauth_scopes: tuple[str, ...] = ()
+    external_oauth_required_scopes: tuple[str, ...] = ()
     source_summary: dict[str, str] = field(default_factory=dict)
 
 
@@ -1800,6 +1804,22 @@ def normalize_effective_auth_config(
         auth_methods=tuple(methods),
         oauth_discovery_mode=discovery_mode,
         doris_oauth_base_url=config.security.doris_oauth_base_url.rstrip("/"),
+        external_oauth_issuer=(
+            config.security.oauth_issuer if enable_external_oauth_auth else ""
+        ),
+        external_oauth_resource=(
+            config.security.oauth_resource if enable_external_oauth_auth else ""
+        ),
+        external_oauth_scopes=(
+            tuple(config.security.oauth_scopes)
+            if enable_external_oauth_auth
+            else ()
+        ),
+        external_oauth_required_scopes=(
+            tuple(config.security.oauth_required_scopes)
+            if enable_external_oauth_auth
+            else ()
+        ),
         transport=transport,
         requested_workers=requested,
         effective_workers=effective_workers,
