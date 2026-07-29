@@ -101,6 +101,18 @@ class DorisOAuthResourceError(RuntimeError):
         self.status_code = status_code
 
 
+class InvalidResourceURIError(ValueError):
+    """A resource URI that cannot identify a supported Doris resource."""
+
+    error_code = "INVALID_RESOURCE_URI"
+
+
+class ResourceNotFoundError(ValueError):
+    """A syntactically valid Doris resource URI with no visible target."""
+
+    error_code = "RESOURCE_NOT_FOUND"
+
+
 EXCLUDED_RESOURCE_DATABASES = {
     "information_schema",
     "mysql",
@@ -189,6 +201,8 @@ class DorisResourcesManager:
         )
 
     def _reraise_if_doris_oauth_resource_error(self, exc: Exception) -> None:
+        if isinstance(exc, InvalidResourceURIError | ResourceNotFoundError):
+            return
         if isinstance(exc, DorisOAuthResourceError):
             raise exc
         if self._is_doris_oauth_context():
@@ -314,15 +328,19 @@ class DorisResourcesManager:
             elif resource_type == "stats" and resource_name == "database":
                 return await self._get_database_stats(db_name)
             else:
-                raise ValueError(f"Unsupported resource type: {resource_type}")
+                raise InvalidResourceURIError(
+                    f"Unsupported resource type: {resource_type}"
+                )
 
         except Exception as e:
             self._reraise_if_doris_oauth_resource_error(e)
-            return json.dumps(
-                {"error": f"Failed to read resource: {str(e)}", "uri": uri},
-                ensure_ascii=False,
-                indent=2,
-            )
+            payload = {
+                "error": f"Failed to read resource: {str(e)}",
+                "uri": uri,
+            }
+            if isinstance(e, InvalidResourceURIError | ResourceNotFoundError):
+                payload["error_code"] = e.error_code
+            return json.dumps(payload, ensure_ascii=False, indent=2)
 
     async def _get_table_metadata(self) -> list[TableMetadata]:
         """Get metadata for all tables"""
@@ -487,7 +505,7 @@ class DorisResourcesManager:
             )
             if not table_result.data:
                 qualified_name = f"{db_name}.{table_name}" if db_name else table_name
-                raise ValueError(f"Table {qualified_name} does not exist")
+                raise ResourceNotFoundError(f"Table {qualified_name} does not exist")
 
             table_info = table_result.data[0]
 
@@ -557,7 +575,7 @@ class DorisResourcesManager:
             )
             if not result.data:
                 qualified_name = f"{db_name}.{view_name}" if db_name else view_name
-                raise ValueError(f"View {qualified_name} does not exist")
+                raise ResourceNotFoundError(f"View {qualified_name} does not exist")
 
             view_info = result.data[0]
 
@@ -619,13 +637,13 @@ class DorisResourcesManager:
     def _parse_resource_uri(self, uri: str) -> tuple[str, str, str | None]:
         """Parse resource URI"""
         if not uri.startswith("doris://"):
-            raise ValueError("Invalid resource URI format")
+            raise InvalidResourceURIError("Invalid resource URI format")
 
         path = uri[8:]  # Remove "doris://" prefix
         parts = path.split("/")
 
         if len(parts) < 2:
-            raise ValueError("Incomplete resource URI format")
+            raise InvalidResourceURIError("Incomplete resource URI format")
 
         resource_type = parts[0]
         if resource_type in {"table", "view"}:

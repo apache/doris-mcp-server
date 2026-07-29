@@ -131,7 +131,7 @@
 |---|---|---|---|---|---|
 | `CORE-001` | P1 | list 异常不再返回空列表 | PROTO-002 | DB/权限/内部错误与真实空列表可区分 | `BACKLOG` |
 | `CORE-002` | P1 | Tool 错误使用 `isError=true` | PROTO-002 | 可恢复业务错误对模型可见；内部异常为稳定协议错误 | `DONE` |
-| `CORE-003` | P1 | Resource not found 使用 `-32602` | PROTO-002 | 不存在 URI 返回 Invalid Params，不返回错误正文成功 | `READY` |
+| `CORE-003` | P1 | Resource not found 使用 `-32602` | PROTO-002 | 不存在 URI 返回 Invalid Params，不返回错误正文成功 | `DONE` |
 | `CORE-004` | P1 | Prompt 错误类型化 | PROTO-002 | 缺参数、未知 prompt、DB 上下文失败语义不同 | `READY` |
 | `CORE-005` | P1 | 单一 Tool Definition Registry | PROTO-002 | schema、policy、handler、审计和文档同源 | `BACKLOG` |
 | `CORE-006` | P1 | `/live` 与 `/ready` 分离 | 无 | Doris 不可用时 live 可真、ready 必假；探针有短超时 | `BACKLOG` |
@@ -370,13 +370,52 @@ test/protocol/test_mcp_v2_protocol.py
 5 passed
 ```
 
+提交与评审回执：
+
+- commit：`6b5c779 feat: enforce MCP client capability requirements`
+- Draft PR：[apache/doris-mcp-server#94](https://github.com/apache/doris-mcp-server/pull/94)
+
+### CORE-003
+
+资源读取错误不再只靠错误字符串判断。资源管理器为以下两类客户端请求错误增加稳定标记：
+
+- `INVALID_RESOURCE_URI`
+- `RESOURCE_NOT_FOUND`
+
+现代 `2026-07-28` 协议边界只识别这两个标记，并返回标准 `-32602 Invalid Params`；普通 Doris 后端错误不会被误分类为参数错误。legacy 协议仍保留既有 JSON 错误正文，避免破坏旧客户端。
+
+自动化验证：
+
+- Streamable HTTP：不存在资源返回 HTTP 400 / JSON-RPC `-32602`；
+- Streamable HTTP：错误后同一实例继续成功读取有效资源；
+- 子进程 STDIO：不存在资源返回 `-32602`，错误后继续成功读取；
+- STDIO legacy：继续收到带 `error_code` 的兼容错误正文；
+- 资源管理器：非法 URI、缺失表和普通后端错误三类结果可区分；
+- 完整 pytest：`336 passed / 57 skipped / 0 failed / 247 warnings`；
+- `uv lock --check`、作用域 Ruff、`compileall`、`uv build` 全部通过。
+
+真实 Doris 验证：
+
+```text
+environment: 192.168.31.63 / hhm_dt_sim
+valid resource: doris://table/org_tenant
+missing resource: doris://table/__core_003_missing__
+```
+
+- HTTP modern：`-32602` 后有效资源读取成功；
+- HTTP legacy：兼容错误正文后有效资源读取成功；
+- STDIO modern：`-32602` 后有效资源读取成功；
+- STDIO legacy：兼容错误正文后有效资源读取成功。
+
+连接通过 SSH key 和临时本地隧道完成；凭据未写入仓库或台账，探针完成后服务与隧道均已关闭。
+
 ## 11. 下一开发批次
 
 批次：`BATCH-02-CONFORMANCE-AND-ERROR-SEMANTICS`
 
 按以下顺序推进：
 
-1. `CORE-003` / `CORE-004`：Resource 与 Prompt 错误类型化；
+1. `CORE-004`：Prompt 错误类型化；
 2. `CORE-010` / `CORE-011` / `COMPAT-001`：修复真实 Doris 已复现缺陷；
 3. `TEST-003`：运行官方 `server-stateless` Conformance；
 4. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；

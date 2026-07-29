@@ -521,7 +521,8 @@ async def _invoke_protocol_handler(server, operation):
     }[operation]
     entry = server.server.get_request_handler(method)
     assert entry is not None
-    return await entry.handler(None, params)
+    context = SimpleNamespace(protocol_version=mcp_types.LATEST_PROTOCOL_VERSION)
+    return await entry.handler(context, params)
 
 
 def _manager_mock_for_operation(server, operation):

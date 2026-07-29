@@ -54,6 +54,14 @@ class StubResourcesManager:
         ]
 
     async def read_resource(self, uri: str) -> str:
+        if uri == "doris://table/missing":
+            return json.dumps(
+                {
+                    "error": "Failed to read resource: Table missing does not exist",
+                    "error_code": "RESOURCE_NOT_FOUND",
+                    "uri": uri,
+                }
+            )
         return json.dumps({"uri": uri, "columns": 3})
 
 
@@ -201,6 +209,19 @@ def modern_headers(method: str) -> dict[str, str]:
         "Content-Type": "application/json",
         "Mcp-Protocol-Version": "2026-07-28",
         "Mcp-Method": method,
+    }
+
+
+def modern_resource_request(request_id: int, uri: str) -> dict:
+    request = modern_request(request_id, "resources/read")
+    request["params"]["uri"] = uri
+    return request
+
+
+def modern_resource_headers(uri: str) -> dict[str, str]:
+    return {
+        **modern_headers("resources/read"),
+        "Mcp-Name": uri,
     }
 
 
@@ -410,6 +431,49 @@ async def test_http_validates_request_meta_and_required_client_capabilities():
 
 
 @pytest.mark.asyncio
+async def test_http_resource_not_found_is_invalid_params_and_server_recovers():
+    app = create_test_server().streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+    missing_uri = "doris://table/missing"
+    valid_uri = "doris://table/orders"
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        missing = await client.post(
+            "/mcp",
+            json=modern_resource_request(1, missing_uri),
+            headers=modern_resource_headers(missing_uri),
+        )
+        assert missing.status_code == 400
+        assert missing.json()["error"] == {
+            "code": -32602,
+            "message": "Resource not found",
+            "data": {
+                "uri": missing_uri,
+                "resourceErrorCode": "RESOURCE_NOT_FOUND",
+            },
+        }
+
+        recovered = await client.post(
+            "/mcp",
+            json=modern_resource_request(2, valid_uri),
+            headers=modern_resource_headers(valid_uri),
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["result"]["contents"][0]["uri"] == valid_uri
+
+
+@pytest.mark.asyncio
 async def test_stdio_validates_capabilities_versions_and_process_survival():
     server_script = Path(__file__).with_name("stdio_capability_server.py")
     server_params = StdioServerParameters(
@@ -435,6 +499,21 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             await missing.list_tools(cache_mode="bypass")
         assert missing_capability.value.code == -32021
         assert (await missing.list_resources(cache_mode="bypass")).resources == []
+        with pytest.raises(MCPError) as missing_resource:
+            await missing.read_resource(
+                "doris://table/missing",
+                cache_mode="bypass",
+            )
+        assert missing_resource.value.code == -32602
+        assert missing_resource.value.data == {
+            "uri": "doris://table/missing",
+            "resourceErrorCode": "RESOURCE_NOT_FOUND",
+        }
+        recovered_resource = await missing.read_resource(
+            "doris://table/orders",
+            cache_mode="bypass",
+        )
+        assert recovered_resource.contents[0].uri == "doris://table/orders"
 
     async with Client(
         stdio_client(server_params),
@@ -446,3 +525,5 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
 
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
         assert [tool.name for tool in (await legacy.list_tools()).tools] == ["echo"]
+        legacy_error = await legacy.read_resource("doris://table/missing")
+        assert json.loads(legacy_error.contents[0].text)["error_code"] == "RESOURCE_NOT_FOUND"
