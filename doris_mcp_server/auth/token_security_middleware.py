@@ -33,6 +33,7 @@ from starlette.responses import JSONResponse
 
 from ..utils.logger import get_logger
 from ..utils.config import DorisConfig
+from ..utils.secret_policy import validate_high_entropy_secret
 
 
 class TokenSecurityMiddleware:
@@ -44,6 +45,14 @@ class TokenSecurityMiddleware:
         
         # Initialize admin token hash if provided
         self._admin_token_hash = None
+        if (
+            config.security.enable_http_token_management
+            and config.security.require_admin_auth
+        ):
+            validate_high_entropy_secret(
+                config.security.token_management_admin_token,
+                setting="TOKEN_MANAGEMENT_ADMIN_TOKEN",
+            )
         if config.security.token_management_admin_token:
             self._admin_token_hash = self._hash_token(config.security.token_management_admin_token)
             

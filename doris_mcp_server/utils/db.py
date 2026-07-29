@@ -433,38 +433,6 @@ class DorisConnectionManager:
         return (not self._is_config_empty(self.original_db_config['host']) and
                 not self._is_config_empty(self.original_db_config['user']))
     
-    def _find_available_token_with_db_config(self) -> str:
-        """Find the first available token with database configuration
-        
-        Returns:
-            Raw token string if found, empty string if not found
-        """
-        if not self.token_manager:
-            return ""
-            
-        try:
-            for token_hash, token_info in self.token_manager._tokens.items():
-                if (token_info.database_config and 
-                    token_info.is_active and
-                    not self._is_config_empty(token_info.database_config.host) and
-                    not self._is_config_empty(token_info.database_config.user)):
-                    
-                    # We need to find the raw token from the hash
-                    # This is a bit tricky since we only store hashes
-                    # We'll need to use the admin token from tokens.json if it has db config
-                    if token_info.token_id == 'admin-token':
-                        # Try the known admin token
-                        return 'doris_admin_token_123456'
-                    elif 'tenant' in token_info.token_id:
-                        # For tenant tokens, we'll need a different approach
-                        # For now, skip these as we don't know the raw token
-                        continue
-                        
-            return ""
-        except Exception as e:
-            self.logger.error(f"Error finding available token: {e}")
-            return ""
-    
     def _get_token_hash(self, token: str) -> str:
         """Get hash of token for use as dictionary key"""
         import hashlib
@@ -1913,16 +1881,6 @@ class DorisConnectionManager:
                 # Check if pool is available
                 if not self.pool:
                     self.logger.warning("Connection pool is not available, attempting recovery...")
-                    
-                    # Try to use token-bound configuration if available
-                    if self.token_manager and not self._has_valid_global_config():
-                        available_token = self._find_available_token_with_db_config()
-                        if available_token:
-                            self.logger.info(f"Using token-bound configuration for pool creation: {available_token}")
-                            try:
-                                await self.configure_for_token(available_token)
-                            except Exception as e:
-                                self.logger.error(f"Failed to configure with token-bound config: {e}")
                     
                     # Fallback to recovery
                     if not self.pool:
