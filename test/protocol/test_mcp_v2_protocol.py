@@ -39,6 +39,7 @@ from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
 )
+from test.protocol.stdio_capability_server import OneToolManager as ProfileToolManager
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
 
@@ -140,10 +141,11 @@ class StubPromptsManager:
 
 def create_test_server(
     required_client_capabilities: dict[str, ClientCapabilities] | None = None,
+    tools_manager=None,
 ):
     return create_doris_mcp_server(
         resources_manager=StubResourcesManager(),
-        tools_manager=StubToolsManager(),
+        tools_manager=tools_manager or StubToolsManager(),
         prompts_manager=StubPromptsManager(),
         name="doris-mcp-server",
         version="0.6.1",
@@ -272,6 +274,28 @@ def modern_prompt_request(
 def modern_prompt_headers(name: str) -> dict[str, str]:
     return {
         **modern_headers("prompts/get"),
+        "Mcp-Name": name,
+    }
+
+
+def modern_tool_request(
+    request_id: int,
+    name: str,
+    arguments: dict | None = None,
+) -> dict:
+    request = modern_request(request_id, "tools/call")
+    request["params"].update(
+        {
+            "name": name,
+            "arguments": arguments or {},
+        }
+    )
+    return request
+
+
+def modern_tool_headers(name: str) -> dict[str, str]:
+    return {
+        **modern_headers("tools/call"),
         "Mcp-Name": name,
     }
 
@@ -599,6 +623,48 @@ async def test_http_prompt_errors_are_typed_and_server_recovers():
 
 
 @pytest.mark.asyncio
+async def test_http_sql_profile_without_catalog_uses_production_analyzer_path():
+    app = create_test_server(
+        tools_manager=ProfileToolManager(),
+    ).streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        result = await client.post(
+            "/mcp",
+            json=modern_tool_request(
+                1,
+                "get_sql_profile",
+                {"sql": "SELECT 1", "db_name": "hhm_dt_sim"},
+            ),
+            headers=modern_tool_headers("get_sql_profile"),
+        )
+        assert result.status_code == 200
+        assert result.json()["result"]["isError"] is False
+        assert result.json()["result"]["structuredContent"]["success"] is True
+        assert result.json()["result"]["structuredContent"]["query_id"] == "query-1"
+
+        recovered = await client.post(
+            "/mcp",
+            json=modern_tool_request(2, "echo", {}),
+            headers=modern_tool_headers("echo"),
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["result"]["isError"] is False
+
+
+@pytest.mark.asyncio
 async def test_stdio_validates_capabilities_versions_and_process_survival():
     server_script = Path(__file__).with_name("stdio_capability_server.py")
     server_params = StdioServerParameters(
@@ -645,13 +711,48 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
         extensions=[advertise(REQUIRED_EXTENSION)],
     ) as capable:
         assert [tool.name for tool in (await capable.list_tools()).tools] == [
-            "echo"
+            "echo",
+            "get_sql_profile",
         ]
 
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
-        assert [tool.name for tool in (await legacy.list_tools()).tools] == ["echo"]
+        assert [tool.name for tool in (await legacy.list_tools()).tools] == [
+            "echo",
+            "get_sql_profile",
+        ]
         legacy_error = await legacy.read_resource("doris://table/missing")
         assert json.loads(legacy_error.contents[0].text)["error_code"] == "RESOURCE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_stdio_sql_profile_without_catalog_uses_production_analyzer_path():
+    server_script = Path(__file__).with_name("stdio_capability_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(
+        stdio_client(server_params),
+        extensions=[advertise(REQUIRED_EXTENSION)],
+    ) as modern:
+        result = await modern.call_tool(
+            "get_sql_profile",
+            {"sql": "SELECT 1", "db_name": "hhm_dt_sim"},
+        )
+        assert result.is_error is False
+        assert result.structured_content["success"] is True
+        assert result.structured_content["query_id"] == "query-1"
+
+        recovered = await modern.call_tool("echo", {})
+        assert recovered.is_error is False
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        result = await legacy.call_tool(
+            "get_sql_profile",
+            {"sql": "SELECT 1", "db_name": "hhm_dt_sim"},
+        )
+        assert json.loads(result.content[0].text)["success"] is True
 
 
 @pytest.mark.asyncio

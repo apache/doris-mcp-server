@@ -69,6 +69,12 @@ class FakeRoutedConnectionManager:
         self.connection_acquires += 1
         return FakeRoutedConnection(self, session_id, auth_context)
 
+    async def get_connection(self, session_id):
+        return await self._get_connection_for_auth_context(
+            session_id,
+            self._get_effective_auth_context(),
+        )
+
     async def release_connection(self, session_id, connection):
         self.connection_releases += 1
 
@@ -361,6 +367,47 @@ async def test_doris_oauth_sql_explain_with_db_catalog_uses_one_routed_connectio
         "EXPLAIN SELECT * FROM orders",
     ]
     assert {call["doris_user"] for call in connection_manager.routed_calls} == {"alice"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_name", [None, "db1"])
+async def test_sql_profile_binds_auth_context_without_catalog(tmp_path, db_name):
+    manager, connection_manager = _real_tool_manager_for_routing(tmp_path)
+    manager.sql_analyzer._get_query_id_by_trace_id = AsyncMock(return_value="query-1")
+    manager.sql_analyzer._get_profile_by_query_id = AsyncMock(
+        return_value={"profile": "ok"}
+    )
+    token = set_current_auth_context(
+        doris_context(
+            ["tool:call:get_sql_profile"],
+            user_id="alice",
+        )
+    )
+
+    try:
+        result = await manager.sql_analyzer.get_sql_profile(
+            "SELECT 1",
+            db_name=db_name,
+        )
+    finally:
+        reset_auth_context(token)
+
+    assert result["success"] is True
+    expected_sql = [
+        'set session_context="trace_id:',
+        "set enable_profile=true",
+        "SELECT 1",
+    ]
+    if db_name:
+        expected_sql.insert(0, "USE `db1`")
+    assert len(connection_manager.routed_calls) == len(expected_sql)
+    for call, sql_prefix in zip(
+        connection_manager.routed_calls,
+        expected_sql,
+        strict=True,
+    ):
+        assert call["sql"].startswith(sql_prefix)
+        assert call["doris_user"] == "alice"
 
 
 @pytest.mark.asyncio
