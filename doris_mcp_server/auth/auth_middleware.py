@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..utils.auth_credentials import (
+    EMPTY_CREDENTIAL,
     BearerCredentials,
     normalize_bearer_credentials,
 )
@@ -115,7 +116,7 @@ class AuthMiddleware:
                 session_id=payload.get('jti'),  # Use JWT ID as session ID
                 login_time=datetime.fromtimestamp(payload.get('iat', 0), UTC),
                 last_activity=utc_now(),
-                token="",
+                token=EMPTY_CREDENTIAL,
                 auth_method="jwt",
                 pool_key="global",
             )

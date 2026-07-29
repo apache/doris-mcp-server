@@ -68,7 +68,7 @@ _ERROR_DROP_KEYS = frozenset(
     }
 )
 
-_TEXT_SECRET_KEY = (
+_TEXT_SENSITIVE_KEY = (
     r"(?:authorization|proxy[-_ ]authorization|password|passwd|pwd|"
     r"db[-_ ]password|admin[-_ ]token|custom[-_ ]token|auth[-_ ]token|"
     r"session[-_ ]token|token|secret|secret[-_ ]key|"
@@ -77,7 +77,7 @@ _TEXT_SECRET_KEY = (
     r"cookie|set[-_ ]cookie)"
 )
 _QUOTED_KEY_VALUE_RE = re.compile(
-    rf"(?i)(?P<prefix>[\"']?{_TEXT_SECRET_KEY}[\"']?\s*[:=]\s*)"
+    rf"(?i)(?P<prefix>[\"']?{_TEXT_SENSITIVE_KEY}[\"']?\s*[:=]\s*)"
     r"(?P<quote>[\"'])(?P<value>.*?)(?P=quote)"
 )
 _AUTHORIZATION_VALUE_RE = re.compile(
@@ -86,7 +86,7 @@ _AUTHORIZATION_VALUE_RE = re.compile(
     r"(?P<value>[^\s,;\"'}]+)"
 )
 _UNQUOTED_KEY_VALUE_RE = re.compile(
-    rf"(?i)(?P<prefix>\b{_TEXT_SECRET_KEY}\b\s*[:=]\s*)"
+    rf"(?i)(?P<prefix>\b{_TEXT_SENSITIVE_KEY}\b\s*[:=]\s*)"
     r"(?P<value>(?![\"'\[])[^\s,;&}\]]+)"
 )
 _AUTH_SCHEME_RE = re.compile(
@@ -94,7 +94,7 @@ _AUTH_SCHEME_RE = re.compile(
     r"(?P<value>[A-Za-z0-9._~+/=-]+)"
 )
 _QUERY_SECRET_RE = re.compile(
-    rf"(?i)(?P<prefix>[?&]{_TEXT_SECRET_KEY}=)(?P<value>[^&#\s]*)"
+    rf"(?i)(?P<prefix>[?&]{_TEXT_SENSITIVE_KEY}=)(?P<value>[^&#\s]*)"
 )
 _DSN_PASSWORD_RE = re.compile(
     r"(?i)(?P<prefix>[a-z][a-z0-9+.-]*://[^:/@\s]+:)"

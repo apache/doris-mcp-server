@@ -563,5 +563,5 @@ class DorisADBCQueryTools:
         try:
             if self.adbc_client:
                 self.adbc_client.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(f"Failed to close ADBC client during finalization: {exc}")

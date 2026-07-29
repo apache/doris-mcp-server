@@ -1464,8 +1464,10 @@ class DorisConnectionManager:
                         if token_info.database_config:
                             token_bound_configs_available = True
                             break
-            except Exception:
-                pass
+            except Exception as exc:
+                self.logger.warning(
+                    f"Unable to inspect token-bound database configurations: {exc}"
+                )
 
         # Validate .env database configuration
         env_config_valid = self._has_valid_global_config()
@@ -1885,8 +1887,10 @@ class DorisConnectionManager:
             for conn in warmup_connections:
                 try:
                     await conn.ensure_closed()
-                except Exception:
-                    pass
+                except Exception as cleanup_error:
+                    self.logger.warning(
+                        f"Failed to close warmup connection: {cleanup_error}"
+                    )
 
     async def _pool_health_monitor(self) -> None:
         """Background task to monitor pool health"""
@@ -1956,6 +1960,7 @@ class DorisConnectionManager:
                 test_count = min(pool_free, 2)  # Test up to 2 idle connections
 
                 for i in range(test_count):
+                    conn = None
                     try:
                         # Acquire connection, test it, and release
                         conn = await asyncio.wait_for(pool.acquire(), timeout=5)
@@ -1972,16 +1977,24 @@ class DorisConnectionManager:
 
                     except TimeoutError:
                         self.logger.debug(f"Stale connection test {i + 1} timed out")
-                        try:
-                            await conn.ensure_closed()
-                        except Exception:
-                            pass
+                        if conn is not None:
+                            try:
+                                await conn.ensure_closed()
+                            except Exception as cleanup_error:
+                                self.logger.debug(
+                                    "Failed to close timed-out connection "
+                                    f"{i + 1}: {cleanup_error}"
+                                )
                     except Exception as e:
                         self.logger.debug(f"Stale connection test {i + 1} failed: {e}")
-                        try:
-                            await conn.ensure_closed()
-                        except Exception:
-                            pass
+                        if conn is not None:
+                            try:
+                                await conn.ensure_closed()
+                            except Exception as cleanup_error:
+                                self.logger.debug(
+                                    "Failed to close unhealthy connection "
+                                    f"{i + 1}: {cleanup_error}"
+                                )
 
                 self.logger.debug(
                     f"Stale connection cleanup completed, tested {test_count} connections"
@@ -2078,8 +2091,11 @@ class DorisConnectionManager:
                         if self.pool:
                             try:
                                 self.pool.close()
-                            except Exception:
-                                pass
+                            except Exception as cleanup_error:
+                                self.logger.warning(
+                                    "Failed to close timed-out recovery pool: "
+                                    f"{cleanup_error}"
+                                )
                             self.pool = None
                     except Exception as e:
                         self.logger.error(
@@ -2093,8 +2109,11 @@ class DorisConnectionManager:
                                 await asyncio.wait_for(
                                     self.pool.wait_closed(), timeout=2.0
                                 )
-                            except Exception:
-                                pass
+                            except Exception as cleanup_error:
+                                self.logger.warning(
+                                    "Failed to close unsuccessful recovery pool: "
+                                    f"{cleanup_error}"
+                                )
                             finally:
                                 self.pool = None
 
@@ -2258,8 +2277,11 @@ class DorisConnectionManager:
                     # Return connection and raise error
                     try:
                         self.pool.release(raw_conn)
-                    except Exception:
-                        pass
+                    except Exception as release_error:
+                        self.logger.warning(
+                            "Failed to release already-closed connection: "
+                            f"{release_error}"
+                        )
                     raise RuntimeError("Acquired connection is already closed")
 
                 self.logger.debug(
@@ -2344,8 +2366,11 @@ class DorisConnectionManager:
                 )
                 try:
                     await connection.connection.ensure_closed()
-                except Exception:
-                    pass
+                except Exception as cleanup_error:
+                    self.logger.warning(
+                        "Failed to force-close connection while pool was unavailable: "
+                        f"{cleanup_error}"
+                    )
                 return
 
             # Check connection state before release

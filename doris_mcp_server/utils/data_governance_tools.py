@@ -883,7 +883,13 @@ class DataGovernanceTools:
                         last_update = result["last_update"]
                         method_used = result["method"]
                         break
-                except Exception:
+                except Exception as exc:
+                    logger.debug(
+                        "Freshness method %s failed for %s: %s",
+                        method.__name__,
+                        table_name,
+                        exc,
+                    )
                     continue
 
             if not last_update:

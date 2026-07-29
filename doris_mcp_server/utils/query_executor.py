@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import sqlparse
 
+from .auth_credentials import EMPTY_CREDENTIAL
 from .datetime_utils import utc_now
 from .db import (
     DorisConnection,
@@ -116,7 +117,7 @@ class QueryCache:
         """Generate cache key"""
         cache_data = {"sql": sql.strip().lower(), "parameters": parameters or {}}
         cache_string = json.dumps(cache_data, sort_keys=True)
-        return hashlib.md5(cache_string.encode()).hexdigest()
+        return hashlib.sha256(cache_string.encode()).hexdigest()
 
     async def get(
         self, sql: str, parameters: dict[str, Any] | None = None
@@ -810,7 +811,7 @@ class DorisQueryExecutor:
                         permissions=["read_data"],  # Only read permissions
                         session_id=session_id,
                         security_level=SecurityLevel.INTERNAL,
-                        token=""  # No token in default context
+                        token=EMPTY_CREDENTIAL,
                     )
                 else:
                     # Use provided auth_context (may contain token for database configuration)

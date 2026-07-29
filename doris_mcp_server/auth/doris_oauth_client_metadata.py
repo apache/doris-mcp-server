@@ -36,7 +36,7 @@ from .doris_oauth_redirects import (
     is_loopback_host,
 )
 from .doris_oauth_scope_policy import DorisOAuthScopePolicy
-from .doris_oauth_types import TokenEndpointError
+from .doris_oauth_types import PUBLIC_CLIENT_AUTH_METHOD, TokenEndpointError
 
 FetchDocument = Callable[
     [str],
@@ -60,7 +60,7 @@ class ResolvedClientMetadata:
     application_type: str
     redirect_uris: tuple[str, ...]
     client_allowed_scopes: tuple[str, ...]
-    token_endpoint_auth_method: str = "none"
+    token_endpoint_auth_method: str = PUBLIC_CLIENT_AUTH_METHOD
 
 
 @dataclass(frozen=True)
@@ -368,8 +368,11 @@ class DorisOAuthClientMetadataResolver:
             )
         self._reject_private_jwk_material(document.get("jwks"))
 
-        token_auth_method = document.get("token_endpoint_auth_method", "none")
-        if token_auth_method != "none":
+        token_auth_method = document.get(
+            "token_endpoint_auth_method",
+            PUBLIC_CLIENT_AUTH_METHOD,
+        )
+        if token_auth_method != PUBLIC_CLIENT_AUTH_METHOD:
             raise ClientMetadataError(
                 "Unsupported Client ID Metadata token authentication method"
             )

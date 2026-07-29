@@ -318,8 +318,12 @@ class SecurityAnalyticsTools:
                     stats["query_times"].append(query_dt)
                     stats["hourly_pattern"][query_dt.hour] += 1
                     stats["daily_pattern"][query_dt.weekday()] += 1
-                except Exception:
-                    pass
+                except (AttributeError, TypeError, ValueError) as exc:
+                    logger.debug(
+                        "Skipping invalid security-audit timestamp %r: %s",
+                        query_time,
+                        exc,
+                    )
 
             # Error tracking
             if query_status and "error" in query_status.lower():

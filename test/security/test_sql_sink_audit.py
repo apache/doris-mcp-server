@@ -41,6 +41,62 @@ from doris_mcp_server.utils.sql_security_utils import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOT = REPOSITORY_ROOT / "doris_mcp_server"
+FULL_BANDIT_TARGETS = (
+    SOURCE_ROOT,
+    REPOSITORY_ROOT / "doris_mcp_client",
+    REPOSITORY_ROOT / "generate_requirements.py",
+)
+
+
+def test_configured_bandit_source_gate_has_no_findings():
+    bandit = shutil.which("bandit")
+    assert bandit is not None, "Bandit must be installed from the dev dependency group"
+    completed = subprocess.run(
+        [
+            bandit,
+            "-q",
+            "-c",
+            str(REPOSITORY_ROOT / "pyproject.toml"),
+            "-r",
+            *(str(path) for path in FULL_BANDIT_TARGETS),
+            "-f",
+            "json",
+        ],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    report = json.loads(completed.stdout)
+    assert report["results"] == [], completed.stdout
+    assert completed.returncode == 0
+
+
+def test_non_sql_bandit_exceptions_are_rule_specific_and_documented():
+    exceptions = 0
+    for root in FULL_BANDIT_TARGETS:
+        paths = root.rglob("*.py") if root.is_dir() else (root,)
+        for path in paths:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for index, line in enumerate(lines):
+                if "# nosec" not in line or "# nosec B608" in line:
+                    continue
+                exceptions += 1
+                rule_text = line.split("# nosec", 1)[1].strip()
+                rules = [rule.strip() for rule in rule_text.split(",")]
+                assert rules and all(
+                    len(rule) == 4
+                    and rule.startswith("B")
+                    and rule[1:].isdigit()
+                    for rule in rules
+                ), f"non-specific Bandit exception: {path}:{index + 1}"
+                rationale = " ".join(lines[max(0, index - 3) : index + 1])
+                assert "Bandit audit:" in rationale, (
+                    f"missing Bandit rationale: {path}:{index + 1}"
+                )
+
+    assert exceptions == 2
 
 
 def test_b608_has_no_untriaged_dynamic_sql_findings():

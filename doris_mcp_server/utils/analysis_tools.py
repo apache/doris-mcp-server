@@ -202,9 +202,12 @@ class TableAnalyzer:
                     )
                     if numeric_result.data:
                         analysis.update(numeric_result.data[0])
-                except Exception:
-                    # Non-numeric columns don't support numeric statistics
-                    pass
+                except Exception as exc:
+                    # Non-numeric columns don't support numeric statistics.
+                    logger.debug(
+                        "Numeric statistics are unavailable for "
+                        f"{table_name}.{column_name}: {exc}"
+                    )
 
             return analysis
 
@@ -400,7 +403,7 @@ class SQLAnalyzer:
             # Generate unique query ID for file naming
             import time
 
-            query_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
+            query_hash = hashlib.sha256(sql.encode()).hexdigest()[:8]
             timestamp = int(time.time())
             query_id = f"{timestamp}_{query_hash}"
 
@@ -414,13 +417,7 @@ class SQLAnalyzer:
             logger.info(f"Generating SQL explain for query ID: {query_id}")
 
             # 🔧 FIX: Get auth_context for token-bound database configuration
-            auth_context = None
-            try:
-                from .security import mcp_auth_context_var
-
-                auth_context = mcp_auth_context_var.get()
-            except Exception:
-                pass
+            auth_context = get_auth_context()
 
             context_statements = []
             if catalog_name:
@@ -608,7 +605,7 @@ class SQLAnalyzer:
             trace_id = str(uuid.uuid4())
             import time
 
-            query_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
+            query_hash = hashlib.sha256(sql.encode()).hexdigest()[:8]
             timestamp = int(time.time())
             file_query_id = f"{timestamp}_{query_hash}"
 

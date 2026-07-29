@@ -574,7 +574,12 @@ class PerformanceAnalyticsTools:
                     else:
                         dt = query_time
                     query_hours.append(dt.hour)
-            except Exception:
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "Skipping invalid slow-query timestamp %r: %s",
+                    query.get("query_time"),
+                    exc,
+                )
                 continue
 
         hour_distribution = Counter(query_hours)

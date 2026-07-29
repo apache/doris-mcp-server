@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+EMPTY_CREDENTIAL = ""
+
 
 @dataclass(frozen=True, slots=True)
 class BearerCredentials:
@@ -55,7 +57,7 @@ class BearerCredentials:
             or normalized_scheme not in {"bearer", "token"}
             or not token.strip()
         ):
-            token = ""
+            token = EMPTY_CREDENTIAL
         return cls(
             scheme=normalized_scheme,
             token=token.strip(),

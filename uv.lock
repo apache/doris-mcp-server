@@ -689,6 +689,7 @@ performance = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "bandit" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "ruff" },
@@ -772,6 +773,7 @@ provides-extras = ["dev", "docs", "monitoring", "performance"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "bandit", specifier = ">=1.8.3" },
     { name = "mypy", specifier = ">=1.16.0" },
     { name = "pandas-stubs", specifier = ">=2.2.0" },
     { name = "ruff", specifier = ">=0.11.13" },

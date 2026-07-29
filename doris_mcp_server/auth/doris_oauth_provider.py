@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
-from ..utils.auth_credentials import BearerCredentials
+from ..utils.auth_credentials import EMPTY_CREDENTIAL, BearerCredentials
 from ..utils.config import DorisConfig, EffectiveAuthConfig
 from ..utils.logger import get_logger
 from ..utils.security import (
@@ -27,6 +27,9 @@ from .doris_oauth_redirects import DorisOAuthRedirectPolicy, is_loopback_url
 from .doris_oauth_scope_policy import DorisOAuthScopePolicy
 from .doris_oauth_store import DorisOAuthStore
 from .doris_oauth_types import (
+    CONFIDENTIAL_CLIENT_AUTH_METHOD,
+    PUBLIC_CLIENT_AUTH_METHOD,
+    SUPPORTED_CLIENT_AUTH_METHODS,
     AuthorizeError,
     AuthTransactionRecord,
     ProtectedResourceAuthError,
@@ -139,7 +142,10 @@ class DorisOAuthProvider:
             "response_types_supported": ["code"],
             "grant_types_supported": ["authorization_code", "refresh_token"],
             "code_challenge_methods_supported": ["S256"],
-            "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+            "token_endpoint_auth_methods_supported": [
+                PUBLIC_CLIENT_AUTH_METHOD,
+                CONFIDENTIAL_CLIENT_AUTH_METHOD,
+            ],
             "authorization_response_iss_parameter_supported": True,
             "client_id_metadata_document_supported": True,
         }
@@ -186,8 +192,10 @@ class DorisOAuthProvider:
             scopes = self.scope_policy.grant_client_scopes(requested_scope, explicit=True)
         else:
             scopes = tuple(sorted(self.scope_policy.server_allowed_scopes))
-        token_auth_method = payload.get("token_endpoint_auth_method") or "none"
-        if token_auth_method not in {"none", "client_secret_post"}:
+        token_auth_method = (
+            payload.get("token_endpoint_auth_method") or PUBLIC_CLIENT_AUTH_METHOD
+        )
+        if token_auth_method not in SUPPORTED_CLIENT_AUTH_METHODS:
             raise TokenEndpointError("invalid_client_metadata", "Unsupported token endpoint auth method", status_code=400)
 
         async with self._lock:
@@ -201,7 +209,7 @@ class DorisOAuthProvider:
             client_id = f"dcr_{secrets.token_urlsafe(16)}"
             client_secret = (
                 f"dos_{secrets.token_urlsafe(32)}"
-                if token_auth_method == "client_secret_post"
+                if token_auth_method == CONFIDENTIAL_CLIENT_AUTH_METHOD
                 else None
             )
             ttl = getattr(self.security_config, "doris_oauth_dcr_client_ttl_seconds", 86400)
@@ -469,7 +477,10 @@ class DorisOAuthProvider:
         record = self.store.find_access_or_refresh(str(raw_token))
         if record:
             client = self.store.get_client(record.client_id)
-            if client and client.token_endpoint_auth_method != "none":
+            if (
+                client
+                and client.token_endpoint_auth_method != PUBLIC_CLIENT_AUTH_METHOD
+            ):
                 if request_client_id and request_client_id != record.client_id:
                     raise RevocationEndpointError("invalid_client", "Invalid client authentication", status_code=401)
                 if not request_client_id and not self.store.validate_client_secret(client, payload.get("client_secret")):
@@ -552,7 +563,7 @@ class DorisOAuthProvider:
             session_id=credentials.session_id or f"doris_oauth:{updated.token_id}",
             login_time=login_time,
             last_activity=last_activity,
-            token="",
+            token=EMPTY_CREDENTIAL,
             auth_method="doris_oauth",
             doris_user=updated.doris_user,
             oauth_client_id=updated.client_id,
@@ -609,7 +620,7 @@ class DorisOAuthProvider:
         return self.store.add_client(
             client_id=client_id,
             client_secret=None,
-            token_endpoint_auth_method="none",
+            token_endpoint_auth_method=PUBLIC_CLIENT_AUTH_METHOD,
             application_type="native",
             redirect_uris=("urn:doris-mcp-cli",),
             client_allowed_scopes=tuple(sorted(self.scope_policy.server_allowed_scopes)),

@@ -1283,8 +1283,12 @@ class DataQualityTools:
                             if hasattr(min_date, 'date') and hasattr(max_date, 'date'):
                                 time_span = (max_date - min_date).days
                                 temporal_analysis[col_name]["time_span_days"] = time_span
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(
+                                "Unable to calculate time span for %s: %s",
+                                col_name,
+                                exc,
+                            )
 
             except Exception as e:
                 logger.warning(f"Failed to analyze temporal column {col_name}: {str(e)}")

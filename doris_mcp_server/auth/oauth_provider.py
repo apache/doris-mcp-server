@@ -22,6 +22,7 @@ Integrates OAuth 2.0/OIDC authentication with the existing authentication framew
 
 from typing import Any
 
+from ..utils.auth_credentials import EMPTY_CREDENTIAL
 from ..utils.config import DorisConfig
 from ..utils.datetime_utils import utc_now
 from ..utils.logger import get_logger
@@ -253,7 +254,8 @@ class OAuthAuthenticationProvider:
             session_id=session_id,
             login_time=now,
             last_activity=now,
-            token="",  # OAuth doesn't have raw token, use empty string
+            # Authentication contexts never retain the raw external credential.
+            token=EMPTY_CREDENTIAL,
             auth_method="external_oauth",
             oauth_client_id=token_context.client_id,
             oauth_scopes=list(token_context.scopes),

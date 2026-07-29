@@ -9,6 +9,7 @@ from dataclasses import replace
 
 from ..utils.security import RESERVED_DORIS_OAUTH_TOKEN_PREFIX
 from .doris_oauth_types import (
+    PUBLIC_CLIENT_AUTH_METHOD,
     AccessTokenRecord,
     AuthorizationCodeRecord,
     AuthTransactionRecord,
@@ -82,7 +83,7 @@ class DorisOAuthStore:
         return record
 
     def validate_client_secret(self, client: RegisteredClientRecord, client_secret: str | None) -> bool:
-        if client.token_endpoint_auth_method == "none":
+        if client.token_endpoint_auth_method == PUBLIC_CLIENT_AUTH_METHOD:
             return True
         if not client_secret or not client.client_secret_hash:
             return False

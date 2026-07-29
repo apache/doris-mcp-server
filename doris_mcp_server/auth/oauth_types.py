@@ -39,7 +39,8 @@ class OAuthProvider(Enum):
 class OAuthGrantType(Enum):
     """OAuth grant type enumeration"""
     AUTHORIZATION_CODE = "authorization_code"
-    REFRESH_TOKEN = "refresh_token"
+    # Bandit audit: OAuth grant-type wire value, never credential material.
+    REFRESH_TOKEN = "refresh_token"  # nosec B105
 
 
 @dataclass

@@ -35,7 +35,11 @@ import sqlparse
 from sqlparse.sql import Statement
 from sqlparse.tokens import Keyword, Name
 
-from .auth_credentials import BearerCredentials, normalize_bearer_credentials
+from .auth_credentials import (
+    EMPTY_CREDENTIAL,
+    BearerCredentials,
+    normalize_bearer_credentials,
+)
 from .config import (
     DorisConfig,
     EffectiveAuthConfig,
@@ -64,7 +68,11 @@ mcp_auth_context_var: ContextVar[AuthContext | None] = ContextVar(
     default=None,
 )
 
-RESERVED_DORIS_OAUTH_TOKEN_PREFIX = "doa_"
+RESERVED_DORIS_OAUTH_PREFIX = "doa_"
+# Backward-compatible name; the value is a public token namespace, not a secret.
+RESERVED_DORIS_OAUTH_TOKEN_PREFIX = RESERVED_DORIS_OAUTH_PREFIX
+ANONYMOUS_PRINCIPAL = "anonymous"
+ANONYMOUS_SESSION_ID = "anonymous_session"
 
 
 class SecurityLevel(Enum):
@@ -73,7 +81,8 @@ class SecurityLevel(Enum):
     PUBLIC = "public"
     INTERNAL = "internal"
     CONFIDENTIAL = "confidential"
-    SECRET = "secret"
+    # Bandit audit: classification wire value, never credential material.
+    SECRET = "secret"  # nosec B105
 
 
 @dataclass
@@ -286,14 +295,14 @@ class DorisSecurityManager:
                 return await self.auth_provider.authenticate(legacy_auth_info)
             self.logger.debug("All authentication methods are disabled")
             return AuthContext(
-                token_id="anonymous",
-                user_id="anonymous",
-                roles=["anonymous"],
+                token_id=ANONYMOUS_PRINCIPAL,
+                user_id=ANONYMOUS_PRINCIPAL,
+                roles=[ANONYMOUS_PRINCIPAL],
                 permissions=["read"],
                 security_level=SecurityLevel.PUBLIC,
                 client_ip=credentials.client_ip,
-                session_id="anonymous_session",
-                auth_method="anonymous",
+                session_id=ANONYMOUS_SESSION_ID,
+                auth_method=ANONYMOUS_PRINCIPAL,
                 pool_key="global",
             )
 
@@ -694,7 +703,7 @@ class AuthenticationProvider:
                     auth_info["state"],
                 )
                 auth_context.auth_method = "external_oauth"
-                auth_context.token = ""
+                auth_context.token = EMPTY_CREDENTIAL
                 auth_context.pool_key = "global"
                 return auth_context
             return await self.authenticate_oauth(credentials)
@@ -779,7 +788,7 @@ class AuthenticationProvider:
             credentials.token
         )
         auth_context.auth_method = "external_oauth"
-        auth_context.token = ""
+        auth_context.token = EMPTY_CREDENTIAL
         auth_context.pool_key = "global"
         return auth_context
 

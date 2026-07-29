@@ -3,6 +3,12 @@
 
 from dataclasses import dataclass
 
+PUBLIC_CLIENT_AUTH_METHOD = "none"
+CONFIDENTIAL_CLIENT_AUTH_METHOD = "client_secret_post"
+SUPPORTED_CLIENT_AUTH_METHODS = frozenset(
+    {PUBLIC_CLIENT_AUTH_METHOD, CONFIDENTIAL_CLIENT_AUTH_METHOD}
+)
+
 
 class DorisOAuthError(Exception):
     """Base typed OAuth error."""

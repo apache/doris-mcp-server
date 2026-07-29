@@ -276,7 +276,11 @@ class LogCleanupManager:
                         newest_time = file_mtime
                         stats["newest_file"] = {"name": log_file.name, "age_days": (current_time - file_mtime).days}
 
-                except Exception:
+                except OSError as exc:
+                    if self.logger:
+                        self.logger.debug(
+                            f"Unable to inspect log file {log_file}: {exc}"
+                        )
                     continue
 
         stats["total_size_mb"] = round(stats["total_size_mb"], 2)
