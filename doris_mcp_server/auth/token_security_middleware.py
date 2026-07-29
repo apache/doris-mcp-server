@@ -125,12 +125,6 @@ class TokenSecurityMiddleware:
         if admin_token:
             return admin_token
         
-        # Try query parameter as fallback (not recommended for production)
-        admin_token = request.query_params.get('admin_token', '')
-        if admin_token:
-            self.logger.warning("Admin token passed via query parameter - this is insecure for production")
-            return admin_token
-        
         return None
     
     def _verify_admin_token(self, provided_token: str) -> bool:

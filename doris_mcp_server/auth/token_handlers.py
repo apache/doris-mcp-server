@@ -410,6 +410,15 @@ class TokenHandlers:
             <body>
                 <div class="container">
                     <h1>🔐 Doris MCP Server - Token Management</h1>
+
+                    <div class="section">
+                        <h2>🛡️ Admin Authentication</h2>
+                        <div class="form-group">
+                            <label for="adminToken">Admin Token:</label>
+                            <input type="password" id="adminToken" autocomplete="off" placeholder="Enter the configured admin token">
+                            <small style="color: #666; display: block; margin-top: 5px;">The token stays in this page and is sent only in the Authorization header.</small>
+                        </div>
+                    </div>
                     
                     <div class="section">
                         <h2>📊 Token Statistics</h2>
@@ -517,12 +526,9 @@ class TokenHandlers:
                 </div>
                 
                 <script>
-                    // Get admin token from URL parameters
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const adminToken = urlParams.get('admin_token');
-                    
-                    // Create request headers with admin token
+                    // Read the token only from the in-page password field.
                     function getAuthHeaders() {{
+                        const adminToken = document.getElementById('adminToken').value;
                         if (adminToken) {{
                             return {{
                                 'Content-Type': 'application/json',
@@ -531,15 +537,6 @@ class TokenHandlers:
                         }} else {{
                             return {{'Content-Type': 'application/json'}};
                         }}
-                    }}
-                    
-                    // Create URL with admin token parameter
-                    function getAuthURL(baseUrl) {{
-                        if (adminToken) {{
-                            const separator = baseUrl.includes('?') ? '&' : '?';
-                            return `${{baseUrl}}${{separator}}admin_token=${{encodeURIComponent(adminToken)}}`;
-                        }}
-                        return baseUrl;
                     }}
                     
                     function showResponse(elementId, data, isSuccess = true) {{
@@ -580,7 +577,7 @@ class TokenHandlers:
                         delete data.db_fe_http_port;
                         
                         try {{
-                            const response = await fetch(getAuthURL('/token/create'), {{
+                            const response = await fetch('/token/create', {{
                                 method: 'POST',
                                 headers: getAuthHeaders(),
                                 body: JSON.stringify(data)
@@ -600,7 +597,7 @@ class TokenHandlers:
                     // List tokens
                     document.getElementById('listTokensBtn').addEventListener('click', async () => {{
                         try {{
-                            const response = await fetch(getAuthURL('/token/list'), {{
+                            const response = await fetch('/token/list', {{
                                 headers: getAuthHeaders()
                             }});
                             const result = await response.json();
@@ -613,7 +610,7 @@ class TokenHandlers:
                     // Cleanup tokens
                     document.getElementById('cleanupTokensBtn').addEventListener('click', async () => {{
                         try {{
-                            const response = await fetch(getAuthURL('/token/cleanup'), {{
+                            const response = await fetch('/token/cleanup', {{
                                 method: 'POST',
                                 headers: getAuthHeaders()
                             }});
@@ -633,7 +630,7 @@ class TokenHandlers:
                         }}
                         
                         try {{
-                            const response = await fetch(getAuthURL(`/token/revoke?token_id=${{encodeURIComponent(tokenId)}}`), {{
+                            const response = await fetch(`/token/revoke?token_id=${{encodeURIComponent(tokenId)}}`, {{
                                 method: 'DELETE',
                                 headers: getAuthHeaders()
                             }});
@@ -650,8 +647,6 @@ class TokenHandlers:
                         }}
                     }});
                     
-                    // Load token list on page load
-                    document.getElementById('listTokensBtn').click();
                 </script>
             </body>
             </html>
