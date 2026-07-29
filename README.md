@@ -174,6 +174,8 @@ field and do not persist or propagate the token in URLs.
   - Complete audit logging
   - **Digest-only persistence** to `tokens.json`; plaintext is returned once
     when a token is created
+  - **Multi-worker consistency** through a process-shared lock, atomic
+    read-modify-write updates, and digest-only revocation records
 
 > **🔐 Security Note**: The interface is designed for localhost administration only. It cannot be accessed remotely, ensuring maximum security for token management operations.
 
@@ -1860,16 +1862,27 @@ Use `WORKERS=1` with Doris-backed OAuth. `WORKERS=0` expands to CPU count and fa
 **A:** The hot reload system is designed for enterprise production environments with comprehensive safety measures:
 
 **How It Works:**
-- **File Monitoring**: Checks tokens.json every 10 seconds for modifications
-- **Immediate Validation**: New tokens are validated including database connectivity
-- **Atomic Updates**: All-or-nothing configuration updates
-- **Rollback Protection**: Automatic rollback if any token validation fails
+- **Request-time synchronization**: Every token lookup compares the shared
+  file signature, so another local worker's create or revoke is observed on
+  the next authenticated request rather than waiting for the polling interval
+- **Background monitoring**: A 10-second monitor still refreshes idle workers
+- **Serialized updates**: `tokens.json.lock` protects every managed
+  read-modify-write operation across local worker processes
+- **Atomic updates**: A same-directory temporary file is flushed and replaced
+  atomically with owner-only permissions
+- **Rollback protection**: Invalid externally edited state does not partially
+  replace a worker's current in-memory view
+- **Shared revocation**: `revoked_tokens` stores only token digests and also
+  disables matching `TOKEN_<ID>` environment credentials in every worker
 
 **Safety Features:**
-- **Backup and Restore**: Current configuration backed up before changes
-- **Connection Testing**: Database connections tested before applying changes
-- **Error Isolation**: Invalid tokens don't affect existing valid tokens
-- **Audit Logging**: Complete trail of all configuration changes
+- **No lost updates**: Concurrent create/revoke operations reload the latest
+  document while holding the process-shared lock
+- **No bearer-token plaintext persistence**: Live and revoked bearer values
+  are represented only by self-describing digests
+- **Owner-only state files**: Managed state and lock files use mode `0600`
+- **Error isolation**: Invalid state is rejected before it can replace the
+  complete local token map
 
 **Best Practices:**
 ```bash
@@ -1906,6 +1919,13 @@ For deployments without HTTP token management, use a high-entropy `TOKEN_<ID>`
 environment secret or generate a bearer/digest pair offline as shown above.
 Manual `tokens.json` entries must use `token_digest`; plaintext `token` entries
 exist only for one-way migration from version 1.
+
+The file backend coordinates multiple worker processes on one host. Every
+worker must use the same `TOKEN_FILE_PATH`, and the underlying filesystem must
+provide reliable file locking and atomic rename semantics. Multiple hosts or
+containers without a shared locking filesystem require an external
+transactional state backend; copying separate `tokens.json` files does not
+provide cluster-wide revocation.
 
 **Administrative Endpoints (Secure, Local Access Only):**
 

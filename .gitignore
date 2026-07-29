@@ -20,4 +20,6 @@ env.bak/
 venv.bak/
 .idea/
 .coverage
+.coverage.*
 coverage.xml
+tokens.json.lock

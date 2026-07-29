@@ -55,6 +55,7 @@ dependencies = [
     "aiofiles>=23.0.0",
     "aiohttp>=3.9.0",
     "aioredis>=2.0.0",
+    "filelock>=3.16.1,<4.0.0",
     # Data processing
     "pandas>=2.0.0",
     "numpy>=1.24.0",
