@@ -683,7 +683,10 @@ Each Doris OAuth token record is bound to the resource selected during
 authorization. The protected MCP endpoint accepts only the exact canonical
 resource `${DORIS_OAUTH_BASE_URL}/mcp`; a token issued for the authorization
 server or any other resource is rejected with an `invalid_token` challenge
-before a per-user Doris pool is used.
+before a per-user Doris pool is used. Clients must send that canonical
+`resource` in both the authorization request and authorization-code token
+request. The token endpoint returns RFC 8707 `invalid_target` if the value is
+missing or does not exactly match the resource bound to the authorization code.
 
 #### Minimal Local Configuration
 
