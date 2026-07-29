@@ -20,12 +20,15 @@ Authentication Middleware Module
 Provides middleware for JWT authentication in HTTP and MCP contexts
 """
 
-from typing import Optional, Dict, Any, Callable, Awaitable
 from datetime import datetime
 
-from .jwt_manager import JWTManager
-from ..utils.security import AuthContext, SecurityLevel
+from ..utils.auth_credentials import (
+    BearerCredentials,
+    normalize_bearer_credentials,
+)
 from ..utils.logger import get_logger
+from ..utils.security import AuthContext, SecurityLevel
+from .jwt_manager import JWTManager
 
 logger = get_logger(__name__)
 
@@ -45,7 +48,7 @@ class AuthMiddleware:
         self.jwt_manager = jwt_manager
         logger.info("AuthMiddleware initialized")
     
-    def extract_token_from_header(self, authorization: str) -> Optional[str]:
+    def extract_token_from_header(self, authorization: str) -> str | None:
         """Extract JWT token from Authorization header
         
         Args:
@@ -54,24 +57,17 @@ class AuthMiddleware:
         Returns:
             JWT token string, or None if not found
         """
-        if not authorization:
-            return None
-        
-        # Support Bearer format
-        if authorization.startswith('Bearer '):
-            return authorization[7:]  # Remove "Bearer " prefix
-        
-        # Support direct token format
-        if not authorization.startswith('Basic '):
-            return authorization
-        
-        return None
+        credentials = BearerCredentials.from_authorization(authorization)
+        return credentials.token or None
     
-    async def authenticate_request(self, auth_info: Dict[str, Any]) -> AuthContext:
+    async def authenticate_request(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """Authenticate request and return authentication context
         
         Args:
-            auth_info: Authentication information dictionary
+            credentials: Normalized bearer credentials
             
         Returns:
             AuthContext authentication context
@@ -80,35 +76,26 @@ class AuthMiddleware:
             ValueError: Authentication failed
         """
         try:
-            auth_type = auth_info.get("type", "jwt")
-            
-            if auth_type == "jwt" or auth_type == "token":
-                return await self._authenticate_jwt(auth_info)
-            else:
-                raise ValueError(f"Unsupported authentication type: {auth_type}")
-                
+            return await self._authenticate_jwt(credentials)
         except Exception as e:
             logger.error(f"Request authentication failed: {e}")
             raise
     
-    async def _authenticate_jwt(self, auth_info: Dict[str, Any]) -> AuthContext:
+    async def _authenticate_jwt(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """JWT authentication processing
         
         Args:
-            auth_info: Authentication information containing JWT token
+            credentials: Normalized bearer credentials
             
         Returns:
             AuthContext authentication context
         """
-        # Get token
-        token = auth_info.get("token")
-        if not token:
-            # Try to get from Authorization header
-            authorization = auth_info.get("authorization")
-            token = self.extract_token_from_header(authorization)
-        
-        if not token:
+        if not credentials.is_bearer:
             raise ValueError("Missing JWT token")
+        token = credentials.token
         
         try:
             # Validate token
@@ -137,7 +124,10 @@ class AuthMiddleware:
             logger.error(f"JWT authentication failed: {e}")
             raise ValueError(f"JWT authentication failed: {str(e)}")
     
-    async def create_auth_response_headers(self, auth_context: AuthContext) -> Dict[str, str]:
+    async def create_auth_response_headers(
+        self,
+        auth_context: AuthContext,
+    ) -> dict[str, str]:
         """Create authentication response headers
         
         Args:
@@ -153,7 +143,7 @@ class AuthMiddleware:
             'X-Auth-Security-Level': auth_context.security_level.value
         }
     
-    def create_http_middleware(self, skip_paths: Optional[list] = None):
+    def create_http_middleware(self, skip_paths: list | None = None):
         """Create HTTP middleware function
         
         Args:
@@ -182,11 +172,8 @@ class AuthMiddleware:
             
             try:
                 # Perform authentication
-                auth_info = {
-                    'type': 'jwt',
-                    'authorization': authorization
-                }
-                auth_context = await self.authenticate_request(auth_info)
+                credentials = BearerCredentials.from_authorization(authorization)
+                auth_context = await self.authenticate_request(credentials)
                 
                 # Add authentication context to scope
                 scope['auth_context'] = auth_context
@@ -225,7 +212,10 @@ class AuthMiddleware:
         
         return middleware
     
-    async def authenticate_mcp_request(self, headers: Dict[str, str]) -> AuthContext:
+    async def authenticate_mcp_request(
+        self,
+        headers: dict[str, str],
+    ) -> AuthContext:
         """Authenticate MCP request
         
         Args:
@@ -243,12 +233,14 @@ class AuthMiddleware:
                 headers.get('x-auth-token')
             )
             
-            auth_info = {
-                'type': 'jwt',
-                'authorization': authorization
-            }
-            
-            return await self.authenticate_request(auth_info)
+            credentials = normalize_bearer_credentials(
+                {
+                    "authorization": authorization,
+                    "token": headers.get("X-Auth-Token")
+                    or headers.get("x-auth-token"),
+                }
+            )
+            return await self.authenticate_request(credentials)
             
         except Exception as e:
             logger.error(f"MCP request authentication failed: {e}")

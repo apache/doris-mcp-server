@@ -5,6 +5,7 @@ import pytest
 import doris_mcp_server.auth.mcp_auth_middleware as middleware_module
 from doris_mcp_server.auth.mcp_auth_middleware import MCPAuthASGIMiddleware
 from doris_mcp_server.auth.operation_policy import OperationAuthorizationError
+from doris_mcp_server.utils.auth_credentials import BearerCredentials
 from doris_mcp_server.utils.config import EffectiveAuthConfig
 from doris_mcp_server.utils.security import AuthContext, get_current_auth_context
 
@@ -41,8 +42,12 @@ async def test_mcp_auth_middleware_sets_scope_and_resets_context():
     auth_context = AuthContext(token_id="t1", user_id="u1", auth_method="token")
 
     class SecurityManager:
-        async def authenticate_request(self, auth_info):
-            assert auth_info["token"] == "abc"
+        async def authenticate_request(self, credentials):
+            assert credentials == BearerCredentials(
+                scheme="bearer",
+                token="abc",
+                client_ip="127.0.0.1",
+            )
             return auth_context
 
     async def downstream(scope, receive, send):
@@ -71,9 +76,8 @@ async def test_mcp_auth_middleware_sets_scope_and_resets_context():
 @pytest.mark.asyncio
 async def test_mcp_auth_middleware_rejects_query_string_token():
     class SecurityManager:
-        async def authenticate_request(self, auth_info):
-            assert auth_info["authorization"] == ""
-            assert "token" not in auth_info
+        async def authenticate_request(self, credentials):
+            assert credentials == BearerCredentials(client_ip="127.0.0.1")
             raise ValueError("missing bearer token")
 
     async def downstream(scope, receive, send):

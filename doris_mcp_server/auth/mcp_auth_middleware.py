@@ -22,6 +22,7 @@ from typing import Any
 
 from starlette.responses import JSONResponse
 
+from ..utils.auth_credentials import BearerCredentials
 from ..utils.config import EffectiveAuthConfig
 from ..utils.logger import get_logger
 from ..utils.security import (
@@ -40,23 +41,20 @@ ASGIApp = Callable[[dict[str, Any], Callable[..., Awaitable[Any]], Callable[...,
 logger = get_logger(__name__)
 
 
-async def extract_auth_info_from_scope(scope: dict[str, Any]) -> dict[str, Any]:
-    """Extract auth info from ASGI scope."""
+async def extract_bearer_credentials_from_scope(
+    scope: dict[str, Any],
+) -> BearerCredentials:
+    """Extract canonical bearer credentials from an ASGI scope."""
     headers = dict(scope.get("headers", []))
     authorization = headers.get(b"authorization", b"").decode("utf-8")
     client = scope.get("client") or ("unknown", 0)
     client_ip = client[0] if client else "unknown"
 
-    auth_info = {
-        "authorization": authorization,
-        "client_ip": client_ip,
-        "session_id": scope.get("session_id", ""),
-    }
-    if authorization.startswith("Bearer "):
-        auth_info["token"] = authorization[7:]
-    elif authorization.startswith("Token "):
-        auth_info["token"] = authorization[6:]
-    return auth_info
+    return BearerCredentials.from_authorization(
+        authorization,
+        client_ip=client_ip,
+        session_id=scope.get("session_id", ""),
+    )
 
 
 class MCPAuthASGIMiddleware:
@@ -69,8 +67,8 @@ class MCPAuthASGIMiddleware:
 
     async def __call__(self, scope, receive, send):
         try:
-            auth_info = await extract_auth_info_from_scope(scope)
-            auth_context = await self.security_manager.authenticate_request(auth_info)
+            credentials = await extract_bearer_credentials_from_scope(scope)
+            auth_context = await self.security_manager.authenticate_request(credentials)
         except Exception as exc:
             if self.effective_auth.oauth_discovery_mode == "doris_oauth":
                 response = protected_resource_error_response(

@@ -9,16 +9,21 @@ import time
 from datetime import UTC, datetime
 from urllib.parse import urlencode
 
+from ..utils.auth_credentials import BearerCredentials
 from ..utils.logger import get_logger
-from ..utils.security import AuthContext, RESERVED_DORIS_OAUTH_TOKEN_PREFIX, SecurityLevel
-from .doris_oauth_redirects import DorisOAuthRedirectPolicy, is_loopback_url
+from ..utils.security import (
+    RESERVED_DORIS_OAUTH_TOKEN_PREFIX,
+    AuthContext,
+    SecurityLevel,
+)
 from .doris_oauth_rate_limit import DorisOAuthRateLimiter
+from .doris_oauth_redirects import DorisOAuthRedirectPolicy, is_loopback_url
 from .doris_oauth_scope_policy import DorisOAuthScopePolicy
 from .doris_oauth_store import DorisOAuthStore
 from .doris_oauth_types import (
     AccessTokenRecord,
-    AuthTransactionRecord,
     AuthorizeError,
+    AuthTransactionRecord,
     ProtectedResourceAuthError,
     RefreshTokenRecord,
     RevocationEndpointError,
@@ -349,10 +354,16 @@ class DorisOAuthProvider:
             )
         return self._token_response(pair.access_token, pair.refresh_token, scopes)
 
-    async def authenticate_access_token(self, auth_info: dict) -> AuthContext:
-        token = self._extract_bearer(auth_info)
-        if not token or not token.startswith(RESERVED_DORIS_OAUTH_TOKEN_PREFIX):
+    async def authenticate_access_token(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
+        if (
+            not credentials.is_bearer
+            or not credentials.token.startswith(RESERVED_DORIS_OAUTH_TOKEN_PREFIX)
+        ):
             raise ProtectedResourceAuthError("authentication_required", "Missing Doris OAuth access token")
+        token = credentials.token
         record = self.store.get_access_token(token)
         if not record or record.revoked_at is not None:
             raise ProtectedResourceAuthError("authentication_required", "Invalid Doris OAuth access token")
@@ -376,8 +387,8 @@ class DorisOAuthProvider:
             roles=["doris_oauth_user"],
             permissions=["read_data"],
             security_level=SecurityLevel.INTERNAL,
-            client_ip=auth_info.get("client_ip", "unknown"),
-            session_id=auth_info.get("session_id") or f"doris_oauth:{updated.token_id}",
+            client_ip=credentials.client_ip,
+            session_id=credentials.session_id or f"doris_oauth:{updated.token_id}",
             login_time=login_time,
             last_activity=last_activity,
             token="",
@@ -460,15 +471,6 @@ class DorisOAuthProvider:
         digest = hashlib.sha256(verifier.encode("ascii")).digest()
         challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
         return secrets.compare_digest(challenge, expected_challenge)
-
-    def _extract_bearer(self, auth_info: dict) -> str:
-        token = auth_info.get("token") or ""
-        if token:
-            return str(token)
-        authorization = auth_info.get("authorization") or ""
-        if authorization.startswith("Bearer "):
-            return authorization[7:]
-        return ""
 
     async def _cleanup_inactive_pools(self) -> None:
         if self.connection_manager and hasattr(self.connection_manager, "cleanup_idle_doris_user_pools"):

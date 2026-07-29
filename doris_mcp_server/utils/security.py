@@ -22,7 +22,9 @@ Implements enterprise-level authentication, authorization, SQL security validati
 
 import logging
 import re
-from contextvars import ContextVar, Token as ContextToken
+from collections.abc import Mapping
+from contextvars import ContextVar
+from contextvars import Token as ContextToken
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -32,11 +34,12 @@ import sqlparse
 from sqlparse.sql import Statement
 from sqlparse.tokens import Keyword, Name
 
-from .logger import get_logger
+from .auth_credentials import BearerCredentials, normalize_bearer_credentials
 from .config import (
     DatabaseConfig,
     get_effective_auth_config,
 )
+from .logger import get_logger
 
 # Global ContextVar for auth_context - must be a single instance shared across all modules
 # This allows token-bound database configuration to work correctly in concurrent requests
@@ -257,7 +260,10 @@ class DorisSecurityManager:
 
         return default_rules
 
-    async def authenticate_request(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def authenticate_request(
+        self,
+        auth_input: BearerCredentials | Mapping[str, Any],
+    ) -> AuthContext:
         """Validate request authentication information
         
         Tries authentication methods in normalized effective config order.
@@ -265,14 +271,14 @@ class DorisSecurityManager:
         If all methods are disabled, returns anonymous context
         """
         effective_auth = self._get_effective_auth_config()
-        bearer_token = str(auth_info.get("token") or "")
-        authorization = str(auth_info.get("authorization") or "")
-        if not bearer_token and authorization.startswith("Bearer "):
-            bearer_token = authorization[7:]
+        credentials = normalize_bearer_credentials(auth_input)
+        legacy_auth_type = ""
+        if isinstance(auth_input, Mapping):
+            legacy_auth_type = str(auth_input.get("type") or "")
 
         if not effective_auth.auth_methods:
-            if auth_info.get("type"):
-                return await self.auth_provider.authenticate(auth_info)
+            if legacy_auth_type:
+                return await self.auth_provider.authenticate(dict(auth_input))
             self.logger.debug("All authentication methods are disabled")
             return AuthContext(
                 token_id="anonymous",
@@ -280,7 +286,7 @@ class DorisSecurityManager:
                 roles=["anonymous"],
                 permissions=["read"],
                 security_level=SecurityLevel.PUBLIC,
-                client_ip=auth_info.get("client_ip", "unknown"),
+                client_ip=credentials.client_ip,
                 session_id="anonymous_session",
                 auth_method="anonymous",
                 pool_key="global",
@@ -291,22 +297,29 @@ class DorisSecurityManager:
         for auth_method in effective_auth.auth_methods:
             try:
                 if auth_method == "doris_oauth":
-                    return await self.auth_provider.authenticate_doris_oauth(auth_info)
+                    return await self.auth_provider.authenticate_doris_oauth(credentials)
                 if auth_method == "token":
-                    return await self.auth_provider.authenticate_token(auth_info)
+                    return await self.auth_provider.authenticate_token(credentials)
                 if auth_method == "jwt":
-                    return await self.auth_provider.authenticate_jwt(auth_info)
+                    return await self.auth_provider.authenticate_jwt(credentials)
                 if auth_method == "external_oauth":
-                    return await self.auth_provider.authenticate_oauth(auth_info)
+                    return await self.auth_provider.authenticate_oauth(credentials)
             except Exception as e:
                 self.logger.debug(f"{auth_method} authentication failed: {e}")
                 last_error = e
-                if auth_method == "doris_oauth" and bearer_token.startswith(RESERVED_DORIS_OAUTH_TOKEN_PREFIX):
+                if (
+                    auth_method == "doris_oauth"
+                    and credentials.token.startswith(
+                        RESERVED_DORIS_OAUTH_TOKEN_PREFIX
+                    )
+                ):
                     raise
         
         # All enabled authentication methods failed
         error_message = f"Authentication failed: {str(last_error)}" if last_error else "No authentication method succeeded"
-        self.logger.warning(f"Authentication failed for client {auth_info.get('client_ip', 'unknown')}: {error_message}")
+        self.logger.warning(
+            f"Authentication failed for client {credentials.client_ip}: {error_message}"
+        )
         raise ValueError(error_message)
 
     async def authorize_resource_access(
@@ -617,117 +630,125 @@ class AuthenticationProvider:
         that pass an explicit auth_info["type"].
         """
         auth_type = str(auth_info.get("type") or "").strip().lower()
+        credentials = normalize_bearer_credentials(auth_info)
         if auth_type == "token":
             if self.effective_auth.enable_token_auth and self.token_manager:
-                return await self.authenticate_token(auth_info)
-            return await self._authenticate_legacy_token(auth_info)
+                return await self.authenticate_token(credentials)
+            return await self._authenticate_legacy_token(credentials)
         if auth_type == "basic":
             return await self._authenticate_basic(auth_info)
         if auth_type == "jwt":
-            return await self.authenticate_jwt(auth_info)
+            return await self.authenticate_jwt(credentials)
         if auth_type == "oauth":
-            return await self.authenticate_oauth(auth_info)
+            if "code" in auth_info and "state" in auth_info:
+                if not self.effective_auth.enable_external_oauth_auth:
+                    raise ValueError("OAuth authentication is not enabled")
+                if not self.oauth_provider:
+                    raise ValueError("OAuth provider not initialized")
+                auth_context = await self.oauth_provider.handle_callback(
+                    auth_info["code"],
+                    auth_info["state"],
+                )
+                auth_context.auth_method = "external_oauth"
+                auth_context.token = ""
+                auth_context.pool_key = "global"
+                return auth_context
+            return await self.authenticate_oauth(credentials)
         if auth_type == "doris_oauth":
-            return await self.authenticate_doris_oauth(auth_info)
+            return await self.authenticate_doris_oauth(credentials)
         raise ValueError(f"Unsupported authentication type: {auth_type or '<missing>'}")
 
-    async def authenticate_token(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def authenticate_token(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """Perform token authentication"""
         if not self.effective_auth.enable_token_auth:
             raise ValueError("Token authentication is not enabled")
-        return await self._authenticate_token(auth_info)
+        return await self._authenticate_token(credentials)
     
-    async def authenticate_jwt(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def authenticate_jwt(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """Perform JWT authentication"""
         if not self.effective_auth.enable_jwt_auth:
             raise ValueError("JWT authentication is not enabled")
-        return await self._authenticate_jwt(auth_info)
+        return await self._authenticate_jwt(credentials)
     
-    async def authenticate_oauth(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def authenticate_oauth(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """Perform OAuth authentication"""
         if not self.effective_auth.enable_external_oauth_auth:
             raise ValueError("OAuth authentication is not enabled")
-        return await self._authenticate_oauth(auth_info)
+        return await self._authenticate_oauth(credentials)
 
-    async def authenticate_doris_oauth(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def authenticate_doris_oauth(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """Authenticate a Doris OAuth doa_ access token."""
         if not self.effective_auth.enable_doris_oauth_auth:
             raise ValueError("Doris OAuth authentication is not enabled")
-        token = auth_info.get("token")
-        if not token:
-            authorization = auth_info.get("authorization")
-            if authorization and authorization.startswith("Bearer "):
-                token = authorization[7:]
-        if not token or not token.startswith("doa_"):
+        if (
+            not credentials.is_bearer
+            or not credentials.token.startswith(RESERVED_DORIS_OAUTH_TOKEN_PREFIX)
+        ):
             raise ValueError("Missing Doris OAuth access token")
         if not self.doris_oauth_provider:
             raise ValueError("Doris OAuth provider is not initialized")
-        return await self.doris_oauth_provider.authenticate_access_token(auth_info)
+        return await self.doris_oauth_provider.authenticate_access_token(credentials)
 
-    async def _authenticate_jwt(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def _authenticate_jwt(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """JWT authentication"""
         if not self.jwt_manager:
             raise ValueError("JWT manager not initialized")
-        
-        token = auth_info.get("token")
-        if not token:
-            # Try to extract from Authorization header
-            authorization = auth_info.get("authorization")
-            if authorization and authorization.startswith('Bearer '):
-                token = authorization[7:]
-            
-        if not token:
+        if not credentials.is_bearer:
             raise ValueError("Missing JWT token")
 
         try:
             # Use JWT middleware for authentication
             from ..auth.auth_middleware import AuthMiddleware
             middleware = AuthMiddleware(self.jwt_manager)
-            return await middleware.authenticate_request(auth_info)
+            return await middleware.authenticate_request(credentials)
             
         except Exception as e:
             self.logger.error(f"JWT authentication failed: {e}")
             raise ValueError(f"JWT authentication failed: {str(e)}")
 
-    async def _authenticate_oauth(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def _authenticate_oauth(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """OAuth authentication"""
         if not self.oauth_provider:
             raise ValueError("OAuth provider not initialized")
-        
-        # Handle different OAuth authentication scenarios
-        if "access_token" in auth_info:
-            # Direct OAuth access token authentication
-            auth_context = await self.oauth_provider.authenticate_with_token(auth_info["access_token"])
-            auth_context.auth_method = "external_oauth"
-            auth_context.token = ""
-            auth_context.pool_key = "global"
-            return auth_context
-        elif "code" in auth_info and "state" in auth_info:
-            # OAuth callback authentication
-            auth_context = await self.oauth_provider.handle_callback(auth_info["code"], auth_info["state"])
-            auth_context.auth_method = "external_oauth"
-            auth_context.token = ""
-            auth_context.pool_key = "global"
-            return auth_context
-        else:
-            raise ValueError("OAuth authentication requires either access_token or code+state")
+        if not credentials.is_bearer:
+            raise ValueError("Missing external OAuth access token")
 
-    async def _authenticate_token(self, auth_info: dict[str, Any]) -> AuthContext:
+        auth_context = await self.oauth_provider.authenticate_with_token(
+            credentials.token
+        )
+        auth_context.auth_method = "external_oauth"
+        auth_context.token = ""
+        auth_context.pool_key = "global"
+        return auth_context
+
+    async def _authenticate_token(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """Token authentication"""
         if not self.token_manager:
             raise ValueError("Token manager not initialized")
-            
-        token = auth_info.get("token")
-        if not token:
-            # Try to extract from Authorization header
-            authorization = auth_info.get("authorization")
-            if authorization and authorization.startswith('Bearer '):
-                token = authorization[7:]
-            elif authorization and authorization.startswith('Token '):
-                token = authorization[6:]
-                
-        if not token:
+        if not credentials.is_static_token:
             raise ValueError("Missing authentication token")
+        token = credentials.token
 
         try:
             # Validate token using TokenManager
@@ -748,8 +769,8 @@ class AuthenticationProvider:
                 roles=["token_user"],  # Default role for token users
                 permissions=["read", "write"],  # Default permissions for token users
                 security_level=SecurityLevel.INTERNAL,
-                client_ip=auth_info.get("client_ip", "unknown"),
-                session_id=auth_info.get("session_id", f"session_{token_info.token_id}"),
+                client_ip=credentials.client_ip,
+                session_id=credentials.session_id or f"session_{token_info.token_id}",
                 login_time=datetime.utcnow(),
                 last_activity=token_info.last_used,
                 token=token,  # Store raw token for token-bound database configuration
@@ -761,18 +782,14 @@ class AuthenticationProvider:
             self.logger.error(f"Token authentication failed: {e}")
             raise ValueError(f"Token authentication failed: {str(e)}")
 
-    async def _authenticate_legacy_token(self, auth_info: dict[str, Any]) -> AuthContext:
+    async def _authenticate_legacy_token(
+        self,
+        credentials: BearerCredentials,
+    ) -> AuthContext:
         """Token authentication for legacy direct callers without TokenManager."""
-        token = auth_info.get("token")
-        if not token:
-            authorization = auth_info.get("authorization")
-            if authorization and authorization.startswith("Bearer "):
-                token = authorization[7:]
-            elif authorization and authorization.startswith("Token "):
-                token = authorization[6:]
-
-        if not token:
+        if not credentials.is_static_token:
             raise ValueError("Missing authentication token")
+        token = credentials.token
 
         user_info = await self._validate_token(token)
         return AuthContext(
@@ -781,8 +798,8 @@ class AuthenticationProvider:
             roles=user_info["roles"],
             permissions=user_info["permissions"],
             security_level=user_info["security_level"],
-            client_ip=auth_info.get("client_ip", "unknown"),
-            session_id=auth_info.get("session_id", f"session_{user_info['user_id']}"),
+            client_ip=credentials.client_ip,
+            session_id=credentials.session_id or f"session_{user_info['user_id']}",
             login_time=datetime.utcnow(),
             auth_method="token",
             token=token,

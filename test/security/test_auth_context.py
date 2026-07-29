@@ -3,13 +3,14 @@ from datetime import datetime
 import pytest
 
 from doris_mcp_server.auth.auth_middleware import AuthMiddleware
+from doris_mcp_server.utils import sql_security_utils
+from doris_mcp_server.utils.auth_credentials import BearerCredentials
 from doris_mcp_server.utils.security import (
     AuthContext,
     get_current_auth_context,
     reset_auth_context,
     set_current_auth_context,
 )
-from doris_mcp_server.utils import sql_security_utils
 
 
 def test_sql_security_utils_uses_shared_contextvar():
@@ -45,7 +46,7 @@ async def test_jwt_auth_context_does_not_store_raw_token():
 
     middleware = AuthMiddleware(FakeJWTManager())
     auth_context = await middleware.authenticate_request(
-        {"authorization": "Bearer jwt.raw.token"}
+        BearerCredentials(scheme="bearer", token="jwt.raw.token")
     )
 
     assert auth_context.auth_method == "jwt"
