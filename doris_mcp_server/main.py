@@ -29,6 +29,7 @@ import os
 import sys
 
 from ._version import __version__
+from .health import liveness_payload, readiness_payload
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
@@ -225,12 +226,28 @@ class DorisServer:
             # Health check endpoint
             async def health_check(request):
                 return JSONResponse(
-                    {
-                        "status": "healthy",
-                        "service": self.config.server_name,
-                        "version": __version__,
-                    }
+                    liveness_payload(
+                        service=self.config.server_name,
+                        version=__version__,
+                        legacy=True,
+                    )
                 )
+
+            async def live_check(request):
+                return JSONResponse(
+                    liveness_payload(
+                        service=self.config.server_name,
+                        version=__version__,
+                    )
+                )
+
+            async def readiness_check(request):
+                payload, status_code = await readiness_payload(
+                    self.connection_manager,
+                    service=self.config.server_name,
+                    version=__version__,
+                )
+                return JSONResponse(payload, status_code=status_code)
             
             # OAuth endpoints
             from .auth.oauth_handlers import OAuthHandlers
@@ -293,7 +310,11 @@ class DorisServer:
                     self.logger.info("Application is shutting down...")
             
             effective_auth = get_effective_auth_config(self.config)
-            routes = [Route("/health", health_check, methods=["GET"])]
+            routes = [
+                Route("/health", health_check, methods=["GET"]),
+                Route("/live", live_check, methods=["GET"]),
+                Route("/ready", readiness_check, methods=["GET"]),
+            ]
             if effective_auth.enable_external_oauth_auth:
                 routes.extend([
                     Route(
@@ -355,7 +376,8 @@ class DorisServer:
                             await response(scope, receive, send)
                             return
 
-                        if (path.startswith("/health") or 
+                        if (
+                            path.rstrip("/") in {"/health", "/live", "/ready"} or
                             path.startswith("/auth/") or 
                             path.startswith("/token/") or
                             path.startswith("/.well-known/") or

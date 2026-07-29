@@ -31,6 +31,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from ._version import __version__
+from .health import liveness_payload, readiness_payload
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
@@ -95,7 +96,17 @@ async def initialize_worker():
         _worker_security_manager.connection_manager = _worker_connection_manager
         _worker_security_manager.auth_provider.configure_doris_oauth(_worker_connection_manager)
         
-        await _worker_connection_manager.initialize()
+        global_pool_created = (
+            await _worker_connection_manager.initialize_for_http_mode()
+        )
+        if (
+            not global_pool_created
+            and _worker_effective_auth.enable_doris_oauth_auth
+        ):
+            raise RuntimeError(
+                "Doris OAuth requires the configured service/global Doris account "
+                "to initialize successfully"
+            )
         
         # Create managers
         resources_manager = DorisResourcesManager(_worker_connection_manager)
@@ -149,15 +160,50 @@ async def initialize_worker():
         raise
 
 async def health_check(request):
-    """Health check endpoint that shows worker PID"""
-    return JSONResponse({
-        "status": "healthy",
-        "service": "doris-mcp-server",
-        "worker_pid": os.getpid(),
-        "worker_mode": "multi-process-full-mcp",
-        "mcp_initialized": _worker_initialized,
-        "version": __version__,
-    })
+    """Backward-compatible liveness endpoint."""
+    return JSONResponse(
+        liveness_payload(
+            service="doris-mcp-server",
+            version=__version__,
+            legacy=True,
+            details={
+                "worker_pid": os.getpid(),
+                "worker_mode": "multi-process-full-mcp",
+                "mcp_initialized": _worker_initialized,
+            },
+        )
+    )
+
+
+async def live_check(request):
+    """Database-independent liveness endpoint."""
+    return JSONResponse(
+        liveness_payload(
+            service="doris-mcp-server",
+            version=__version__,
+            details={
+                "worker_pid": os.getpid(),
+                "worker_mode": "multi-process-full-mcp",
+                "mcp_initialized": _worker_initialized,
+            },
+        )
+    )
+
+
+async def readiness_check(request):
+    """Bounded readiness endpoint for this worker."""
+    payload, status_code = await readiness_payload(
+        _worker_connection_manager,
+        service="doris-mcp-server",
+        version=__version__,
+        initialized=_worker_initialized,
+        details={
+            "worker_pid": os.getpid(),
+            "worker_mode": "multi-process-full-mcp",
+            "mcp_initialized": _worker_initialized,
+        },
+    )
+    return JSONResponse(payload, status_code=status_code)
 
 # OAuth and Token handlers (initialize after worker setup)
 _oauth_handlers = None
@@ -304,6 +350,8 @@ async def root_info(request):
         "version": __version__,
         "endpoints": {
             "health": "/health",
+            "live": "/live",
+            "ready": "/ready",
             "mcp": "/mcp"
         }
     })
@@ -399,6 +447,8 @@ basic_app = Starlette(
     routes=[
         Route("/", root_info, methods=["GET"]),
         Route("/health", health_check, methods=["GET"]),
+        Route("/live", live_check, methods=["GET"]),
+        Route("/ready", readiness_check, methods=["GET"]),
         # OAuth endpoints
         Route("/auth/login", oauth_login, methods=["GET"]),
         Route("/auth/callback", oauth_callback, methods=["GET"]),

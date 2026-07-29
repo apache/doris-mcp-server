@@ -1507,7 +1507,32 @@ class DorisConnectionManager:
         except Exception as e:
             self.logger.error(f"Database connectivity test failed: {e}")
             return False
-    
+
+    async def check_readiness(self, *, timeout_seconds: float = 2.0) -> bool:
+        """Run a bounded, side-effect-free Doris readiness probe."""
+        if not self._has_valid_global_config():
+            return False
+        try:
+            timeout = float(timeout_seconds)
+        except (TypeError, ValueError):
+            timeout = 2.0
+        timeout = min(max(timeout, 0.05), 5.0)
+        try:
+            await asyncio.wait_for(
+                self._test_basic_connectivity(),
+                timeout=timeout,
+            )
+            return True
+        except TimeoutError:
+            self.logger.debug(
+                "Doris readiness probe timed out after %s seconds",
+                timeout,
+            )
+            return False
+        except Exception as exc:
+            self.logger.debug("Doris readiness probe failed: %s", exc)
+            return False
+
     async def _test_basic_connectivity(self) -> None:
         """
         Test basic database connectivity without connection pool

@@ -247,21 +247,22 @@ async def _wait_for_http_server(
                     pytrace=False,
                 )
             try:
-                response = await client.get(f"http://127.0.0.1:{port}/health")
+                response = await client.get(f"http://127.0.0.1:{port}/live")
                 if response.status_code == 200:
                     assert response.json()["version"] == __version__
+                    assert response.json()["status"] == "alive"
                     return
             except httpx.HTTPError:
                 pass
             await asyncio.sleep(0.1)
     pytest.fail(
-        "HTTP MCP process did not become healthy:\n" + _read_process_log(log_file),
+        "HTTP MCP process did not become live:\n" + _read_process_log(log_file),
         pytrace=False,
     )
 
 
 @asynccontextmanager
-async def _http_client(environment: dict[str, str]) -> AsyncIterator[Client]:
+async def _http_process(environment: dict[str, str]) -> AsyncIterator[str]:
     port = _free_tcp_port()
     with tempfile.TemporaryFile() as log_file:
         process = await asyncio.create_subprocess_exec(
@@ -281,13 +282,19 @@ async def _http_client(environment: dict[str, str]) -> AsyncIterator[Client]:
         )
         try:
             await _wait_for_http_server(process, port, log_file)
-            async with Client(
-                f"http://127.0.0.1:{port}/mcp",
-                read_timeout_seconds=15,
-            ) as client:
-                yield client
+            yield f"http://127.0.0.1:{port}"
         finally:
             await _stop_process(process)
+
+
+@asynccontextmanager
+async def _http_client(environment: dict[str, str]) -> AsyncIterator[Client]:
+    async with _http_process(environment) as base_url:
+        async with Client(
+            f"{base_url}/mcp",
+            read_timeout_seconds=15,
+        ) as client:
+            yield client
 
 
 @asynccontextmanager
@@ -344,6 +351,32 @@ async def _exec_query(
     )
     assert isinstance(result.structured_content, dict)
     return result, result.structured_content
+
+
+async def test_real_doris_liveness_and_readiness(
+    doris_sandbox: DorisSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    async with _http_process(environment) as base_url:
+        async with httpx.AsyncClient(timeout=5) as client:
+            health = await client.get(f"{base_url}/health")
+            live = await client.get(f"{base_url}/live")
+            ready = await client.get(f"{base_url}/ready")
+
+    assert health.status_code == 200
+    assert health.json()["status"] == "healthy"
+    assert live.status_code == 200
+    assert live.json()["status"] == "alive"
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    assert ready.json()["checks"] == {
+        "service": "ready",
+        "doris": "ready",
+    }
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio"])
