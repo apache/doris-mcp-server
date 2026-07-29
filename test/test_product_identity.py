@@ -16,7 +16,9 @@
 # under the License.
 """Product identity must come from one build-time version source."""
 
+import tomllib
 from importlib.metadata import version as distribution_version
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +26,8 @@ from doris_mcp_client.client import create_arg_parser as create_client_arg_parse
 from doris_mcp_server import __version__
 from doris_mcp_server.main import create_arg_parser as create_server_arg_parser
 from doris_mcp_server.utils.config import DorisConfig
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_package_metadata_matches_runtime_version():
@@ -49,3 +53,24 @@ def test_configuration_cannot_override_product_version(monkeypatch):
     assert DorisConfig._from_dict({"server_version": "9.9.9"}).server_version == (
         __version__
     )
+
+
+def test_release_docs_and_commands_match_product_version():
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    pyproject = tomllib.loads(
+        (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+    assert f"pip install doris-mcp-server=={__version__}" in readme
+    assert f"## [{__version__}]" in changelog
+    assert "the two commands are not interchangeable" in readme
+    assert pyproject["project"]["scripts"] == {
+        "doris-mcp-server": "doris_mcp_server.main:main_sync",
+        "doris-mcp-client": "doris_mcp_client.client:main",
+    }
+    assert "start-http:" in makefile
+    assert "--transport http" in makefile
+    assert "start-sse" not in makefile
+    assert "--transport sse" not in makefile
