@@ -30,6 +30,7 @@ from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
     validate_identifier,
+    validate_integer,
     quote_identifier,
     build_table_reference,
     get_auth_context
@@ -65,6 +66,14 @@ class PerformanceAnalyticsTools:
             Slow query analysis results
         """
         try:
+            days = validate_integer(days, "days", minimum=1, maximum=3650)
+            top_n = validate_integer(top_n, "top N", minimum=1, maximum=1000)
+            min_execution_time_ms = validate_integer(
+                min_execution_time_ms,
+                "minimum execution time",
+                minimum=0,
+                maximum=86_400_000,
+            )
             start_time = time.time()
             connection = await self.connection_manager.get_connection("query")
             
@@ -140,6 +149,7 @@ class PerformanceAnalyticsTools:
             Resource growth analysis results
         """
         try:
+            days = validate_integer(days, "days", minimum=1, maximum=3650)
             start_time = time.time()
             connection = await self.connection_manager.get_connection("query")
             
@@ -220,7 +230,7 @@ class PerformanceAnalyticsTools:
             start_date = datetime.now() - timedelta(days=days)
             
             # Get daily query counts from audit logs
-            query_volume_sql = f"""
+            query_volume_sql = """
             SELECT 
                 DATE(`time`) as query_date,
                 COUNT(*) as total_queries,
@@ -229,7 +239,7 @@ class PerformanceAnalyticsTools:
                 SUM(`scan_bytes`) as total_scan_bytes,
                 SUM(`scan_rows`) as total_scan_rows
             FROM internal.__internal_schema.audit_log 
-            WHERE `time` >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+            WHERE `time` >= %s
                 AND `stmt` IS NOT NULL
                 AND `stmt` != ''
             GROUP BY DATE(`time`)
@@ -237,7 +247,11 @@ class PerformanceAnalyticsTools:
             """
             
             auth_context = get_auth_context()
-            result = await connection.execute(query_volume_sql, auth_context=auth_context)
+            result = await connection.execute(
+                query_volume_sql,
+                params=(start_date,),
+                auth_context=auth_context,
+            )
             daily_data = result.data if result.data else []
             
             if not daily_data:
@@ -298,14 +312,14 @@ class PerformanceAnalyticsTools:
             start_date = datetime.now() - timedelta(days=days)
             
             # Get daily user activity from audit logs
-            user_activity_sql = f"""
+            user_activity_sql = """
             SELECT 
                 DATE(`time`) as activity_date,
                 COUNT(DISTINCT `user`) as daily_active_users,
                 COUNT(*) as total_queries,
                 COUNT(DISTINCT `client_ip`) as unique_ips
             FROM internal.__internal_schema.audit_log 
-            WHERE `time` >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
+            WHERE `time` >= %s
                 AND `stmt` IS NOT NULL
                 AND `stmt` != ''
             GROUP BY DATE(`time`)
@@ -313,7 +327,11 @@ class PerformanceAnalyticsTools:
             """
             
             auth_context = get_auth_context()
-            result = await connection.execute(user_activity_sql, auth_context=auth_context)
+            result = await connection.execute(
+                user_activity_sql,
+                params=(start_date,),
+                auth_context=auth_context,
+            )
             daily_data = result.data if result.data else []
             
             if not daily_data:
@@ -369,7 +387,7 @@ class PerformanceAnalyticsTools:
         try:
             start_date = datetime.now() - timedelta(days=days)
             
-            slow_query_sql = f"""
+            slow_query_sql = """
             SELECT 
                 `user` as user_name,
                 `client_ip` as host,
@@ -380,8 +398,8 @@ class PerformanceAnalyticsTools:
                 `scan_rows` as scan_rows,
                 `return_rows` as return_rows
             FROM internal.__internal_schema.audit_log 
-            WHERE `time` >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                AND `query_time` >= {min_execution_time_ms}
+            WHERE `time` >= %s
+                AND `query_time` >= %s
                 AND `stmt` IS NOT NULL
                 AND `stmt` != ''
                 AND `stmt` NOT LIKE '%__internal_schema%'
@@ -393,7 +411,11 @@ class PerformanceAnalyticsTools:
             """
             
             auth_context = get_auth_context()
-            result = await connection.execute(slow_query_sql, auth_context=auth_context)
+            result = await connection.execute(
+                slow_query_sql,
+                params=(start_date, min_execution_time_ms),
+                auth_context=auth_context,
+            )
             return result.data if result.data else []
             
         except Exception as e:
@@ -645,7 +667,17 @@ class PerformanceAnalyticsTools:
             for table_info in selected_tables["tables"]:
                 table_name = table_info["table_name"]
                 schema_name = table_info["schema_name"]
-                full_table_name = f"{schema_name}.{table_name}" if schema_name else table_name
+                try:
+                    full_table_name = build_table_reference(
+                        table_name,
+                        schema_name or None,
+                    )
+                except SQLSecurityError as exc:
+                    logger.warning(
+                        "Skipping table with unsafe metadata identifier: %s",
+                        exc,
+                    )
+                    continue
                 
                 logger.info(f"🔍 Analyzing table: {full_table_name} ({table_info['size_mb']:.1f}MB)")
                 
@@ -1190,7 +1222,11 @@ class PerformanceAnalyticsTools:
             
             # If information_schema has no data, try COUNT query
             # full_table_name should already be validated by caller using build_table_reference
-            count_sql = f"SELECT COUNT(*) as rows FROM {full_table_name}"
+            # SQL sink audit: full_table_name is produced by
+            # build_table_reference before DorisConnection.execute.
+            count_sql = (
+                f"SELECT COUNT(*) as rows FROM {full_table_name}"  # nosec B608
+            )
             count_result = await connection.execute(count_sql, auth_context=auth_context)
             if count_result.data:
                 return {
@@ -1304,6 +1340,9 @@ class PerformanceAnalyticsTools:
             quoted_time_column = quote_identifier(time_column, "column name")
             
             # Aggregate data by date (full_table_name should be validated by caller)
+            # SQL sink audit: metadata column -> quote_identifier; table ->
+            # build_table_reference; days -> bound param before
+            # DorisConnection.execute.
             growth_sql = f"""
             SELECT 
                 DATE({quoted_time_column}) as date,
@@ -1314,7 +1353,7 @@ class PerformanceAnalyticsTools:
                 AND {quoted_time_column} IS NOT NULL
             GROUP BY DATE({quoted_time_column})
             ORDER BY date DESC
-            """
+            """  # nosec B608
             
             result = await connection.execute(growth_sql, params=(days,), auth_context=auth_context)
             if not result.data:
@@ -1807,4 +1846,4 @@ class PerformanceAnalyticsTools:
                     "action": "Review partitioning strategies and add appropriate indexes"
                 })
         
-        return recommendations 
+        return recommendations

@@ -836,6 +836,53 @@ async def test_http_doris4_role_metadata_uses_public_grants_command():
 
 
 @pytest.mark.asyncio
+async def test_http_rejects_injected_sql_identifier_and_recovers():
+    app = create_test_server(
+        tools_manager=ProfileToolManager(),
+    ).streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        rejected = await client.post(
+            "/mcp",
+            json=modern_tool_request(
+                1,
+                "analyze_columns",
+                {
+                    "table_name": "orders; DROP TABLE orders",
+                    "columns": ["id"],
+                    "db_name": "hhm_dt_sim",
+                },
+            ),
+            headers=modern_tool_headers("analyze_columns"),
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["result"]["isError"] is True
+        assert "Invalid table name" in (
+            rejected.json()["result"]["structuredContent"]["error"]
+        )
+
+        recovered = await client.post(
+            "/mcp",
+            json=modern_tool_request(2, "echo", {}),
+            headers=modern_tool_headers("echo"),
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["result"]["isError"] is False
+
+
+@pytest.mark.asyncio
 async def test_stdio_validates_capabilities_versions_and_process_survival():
     server_script = Path(__file__).with_name("stdio_capability_server.py")
     server_params = StdioServerParameters(
@@ -886,6 +933,7 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             "get_sql_profile",
             "monitor_data_freshness",
             "analyze_data_access_patterns",
+            "analyze_columns",
         ]
         secret = "stdio-secret-sec-016"
         error_result = await capable.call_tool(
@@ -912,6 +960,7 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             "get_sql_profile",
             "monitor_data_freshness",
             "analyze_data_access_patterns",
+            "analyze_columns",
         ]
         legacy_error = await legacy.read_resource("doris://table/missing")
         assert (
@@ -1045,6 +1094,33 @@ async def test_stdio_doris4_role_metadata_uses_public_grants_command():
         result = await legacy.call_tool("analyze_data_access_patterns", {})
         roles = json.loads(result.content[0].text)["role_analysis"]
         assert list(roles) == ["operator"]
+
+
+@pytest.mark.asyncio
+async def test_stdio_rejects_injected_sql_identifier_and_recovers():
+    server_script = Path(__file__).with_name("stdio_capability_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(
+        stdio_client(server_params),
+        extensions=[advertise(REQUIRED_EXTENSION)],
+    ) as modern:
+        rejected = await modern.call_tool(
+            "analyze_columns",
+            {
+                "table_name": "orders; DROP TABLE orders",
+                "columns": ["id"],
+                "db_name": "hhm_dt_sim",
+            },
+        )
+        assert rejected.is_error is True
+        assert "Invalid table name" in rejected.structured_content["error"]
+
+        recovered = await modern.call_tool("echo", {})
+        assert recovered.is_error is False
 
 
 @pytest.mark.asyncio

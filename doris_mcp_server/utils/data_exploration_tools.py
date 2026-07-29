@@ -29,6 +29,7 @@ from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
     validate_identifier,
+    validate_integer,
     quote_identifier,
     build_table_reference,
     get_auth_context
@@ -65,7 +66,9 @@ class DataExplorationTools:
             # table_name should already be validated by _build_full_table_name
             auth_context = get_auth_context()
             
-            count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"
+            # SQL sink audit: table_name is produced by build_table_reference
+            # before this private helper reaches DorisConnection.execute.
+            count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"  # nosec B608
             result = await connection.execute(count_sql, auth_context=auth_context)
             
             if result.data:
@@ -102,6 +105,8 @@ class DataExplorationTools:
             else:
                 where_conditions.append("table_schema = DATABASE()")
             
+            # SQL sink audit: WHERE fragments are fixed locally and all values
+            # are bound through params before DorisConnection.execute.
             columns_sql = f"""
             SELECT 
                 column_name,
@@ -112,7 +117,7 @@ class DataExplorationTools:
             FROM information_schema.columns 
             WHERE {' AND '.join(where_conditions)}
             ORDER BY ordinal_position
-            """
+            """  # nosec B608
             
             result = await connection.execute(columns_sql, params=tuple(params), auth_context=auth_context)
             return result.data if result.data else []
@@ -126,7 +131,13 @@ class DataExplorationTools:
     
     async def _determine_sampling_strategy(self, connection, table_name: str, total_rows: int, sample_size: int) -> Dict[str, Any]:
         """Determine optimal sampling strategy based on table size"""
-        if total_rows <= sample_size:
+        safe_sample_size = validate_integer(
+            sample_size,
+            "sample size",
+            minimum=0,
+            maximum=10_000_000,
+        )
+        if total_rows <= safe_sample_size:
             # Use all data if table is small enough
             return {
                 "total_rows": total_rows,
@@ -138,14 +149,19 @@ class DataExplorationTools:
             }
         else:
             # Use random sampling for large tables
-            sampling_ratio = sample_size / total_rows
+            sampling_ratio = safe_sample_size / total_rows
             return {
                 "total_rows": total_rows,
-                "sample_size": sample_size,
+                "sample_size": safe_sample_size,
                 "sampling_method": "random_sample",
                 "sampling_ratio": round(sampling_ratio, 4),
                 "use_sampling": True,
-                "sample_table_expression": f"(SELECT * FROM {table_name} ORDER BY RAND() LIMIT {sample_size}) as sample_table"
+                # SQL sink audit: table -> build_table_reference; sample size ->
+                # bounded integer; expression remains internal until execute.
+                "sample_table_expression": (
+                    f"(SELECT * FROM {table_name} ORDER BY RAND() "
+                    f"LIMIT {safe_sample_size}) as sample_table"  # nosec B608
+                ),
             }
     
     def _select_analysis_columns(self, columns_info: List[Dict], include_all: bool) -> List[Dict]:
@@ -194,18 +210,22 @@ class DataExplorationTools:
         for column in numeric_columns:
             col_name = column["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
                 # Basic statistics
                 table_expr = sampling_info.get("sample_table_expression", table_name)
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 stats_sql = f"""
                 SELECT 
-                    COUNT({col_name}) as count,
-                    MIN({col_name}) as min_value,
-                    MAX({col_name}) as max_value,
-                    AVG({col_name}) as mean_value,
-                    STDDEV({col_name}) as std_dev
+                    COUNT({safe_column}) as count,
+                    MIN({safe_column}) as min_value,
+                    MAX({safe_column}) as max_value,
+                    AVG({safe_column}) as mean_value,
+                    STDDEV({safe_column}) as std_dev
                 FROM {table_expr}
-                WHERE {col_name} IS NOT NULL
-                """
+                WHERE {safe_column} IS NOT NULL
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 stats_result = await connection.execute(stats_sql, auth_context=auth_context)
@@ -247,18 +267,22 @@ class DataExplorationTools:
     async def _calculate_percentiles(self, connection, table_name: str, col_name: str, sampling_info: Dict) -> Dict[str, float]:
         """Calculate percentiles for numeric column"""
         try:
+            safe_column = quote_identifier(col_name, "column name")
             table_expr = sampling_info.get("sample_table_expression", table_name)
+            # SQL sink audit: metadata column -> quote_identifier; table_expr
+            # originates from a safe table/sampler before
+            # DorisConnection.execute.
             percentile_sql = f"""
             SELECT 
-                PERCENTILE({col_name}, 0.25) as p25,
-                PERCENTILE({col_name}, 0.50) as p50,
-                PERCENTILE({col_name}, 0.75) as p75,
-                PERCENTILE({col_name}, 0.90) as p90,
-                PERCENTILE({col_name}, 0.95) as p95,
-                PERCENTILE({col_name}, 0.99) as p99
+                PERCENTILE({safe_column}, 0.25) as p25,
+                PERCENTILE({safe_column}, 0.50) as p50,
+                PERCENTILE({safe_column}, 0.75) as p75,
+                PERCENTILE({safe_column}, 0.90) as p90,
+                PERCENTILE({safe_column}, 0.95) as p95,
+                PERCENTILE({safe_column}, 0.99) as p99
             FROM {table_expr}
-            WHERE {col_name} IS NOT NULL
-            """
+            WHERE {safe_column} IS NOT NULL
+            """  # nosec B608
             
             auth_context = get_auth_context()
             result = await connection.execute(percentile_sql, auth_context=auth_context)
@@ -291,17 +315,25 @@ class DataExplorationTools:
             lower_bound = q1 - 1.5 * iqr
             upper_bound = q3 + 1.5 * iqr
             
+            safe_column = quote_identifier(col_name, "column name")
             table_expr = sampling_info.get("sample_table_expression", table_name)
+            # SQL sink audit: metadata column -> quote_identifier; numeric
+            # thresholds -> bound params; table_expr -> safe table/sampler.
             outlier_sql = f"""
             SELECT 
                 COUNT(*) as total_count,
-                SUM(CASE WHEN {col_name} < {lower_bound} OR {col_name} > {upper_bound} THEN 1 ELSE 0 END) as outlier_count
+                SUM(CASE WHEN {safe_column} < %s OR {safe_column} > %s
+                    THEN 1 ELSE 0 END) as outlier_count
             FROM {table_expr}
-            WHERE {col_name} IS NOT NULL
-            """
+            WHERE {safe_column} IS NOT NULL
+            """  # nosec B608
             
             auth_context = get_auth_context()
-            result = await connection.execute(outlier_sql, auth_context=auth_context)
+            result = await connection.execute(
+                outlier_sql,
+                params=(lower_bound, upper_bound),
+                auth_context=auth_context,
+            )
             
             if result.data:
                 data = result.data[0]
@@ -382,15 +414,17 @@ class DataExplorationTools:
         for column in categorical_columns:
             col_name = column["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
                 # Basic cardinality and distribution
+                # SQL sink audit: metadata column -> quote_identifier; table ->
+                # build_table_reference -> DorisConnection.execute.
                 cardinality_sql = f"""
                 SELECT 
-                    COUNT(DISTINCT {col_name}) as cardinality,
-                    COUNT({col_name}) as non_null_count
+                    COUNT(DISTINCT {safe_column}) as cardinality,
+                    COUNT({safe_column}) as non_null_count
                 FROM {table_name}
-                WHERE {col_name} IS NOT NULL
-                {sampling_info.get('sample_query_suffix', '')}
-                """
+                WHERE {safe_column} IS NOT NULL
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 cardinality_result = await connection.execute(cardinality_sql, auth_context=auth_context)
@@ -430,17 +464,20 @@ class DataExplorationTools:
         try:
             # Use sample table expression if sampling is enabled
             table_expr = sampling_info.get("sample_table_expression", table_name)
+            safe_column = quote_identifier(col_name, "column name")
             
+            # SQL sink audit: metadata column -> quote_identifier; table_expr
+            # originates from a safe table/sampler.
             distribution_sql = f"""
             SELECT 
-                {col_name} as value,
+                {safe_column} as value,
                 COUNT(*) as count
             FROM {table_expr}
-            WHERE {col_name} IS NOT NULL
-            GROUP BY {col_name}
+            WHERE {safe_column} IS NOT NULL
+            GROUP BY {safe_column}
             ORDER BY COUNT(*) DESC
             LIMIT 20
-            """
+            """  # nosec B608
             
             auth_context = get_auth_context()
             result = await connection.execute(distribution_sql, auth_context=auth_context)
@@ -482,16 +519,20 @@ class DataExplorationTools:
         for column in temporal_columns:
             col_name = column["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
                 # Date range analysis
                 table_expr = sampling_info.get("sample_table_expression", table_name)
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 range_sql = f"""
                 SELECT 
-                    MIN({col_name}) as earliest,
-                    MAX({col_name}) as latest,
-                    COUNT({col_name}) as non_null_count
+                    MIN({safe_column}) as earliest,
+                    MAX({safe_column}) as latest,
+                    COUNT({safe_column}) as non_null_count
                 FROM {table_expr}
-                WHERE {col_name} IS NOT NULL
-                """
+                WHERE {safe_column} IS NOT NULL
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 range_result = await connection.execute(range_sql, auth_context=auth_context)
@@ -564,16 +605,20 @@ class DataExplorationTools:
         """Analyze temporal patterns like seasonality and trends"""
         try:
             table_expr = sampling_info.get("sample_table_expression", table_name)
+            safe_column = quote_identifier(col_name, "column name")
             # Weekly pattern analysis
+            # SQL sink audit: metadata column -> quote_identifier; table_expr
+            # originates from a safe table/sampler before
+            # DorisConnection.execute.
             weekly_pattern_sql = f"""
             SELECT 
-                DAYOFWEEK({col_name}) as day_of_week,
+                DAYOFWEEK({safe_column}) as day_of_week,
                 COUNT(*) as count
             FROM {table_expr}
-            WHERE {col_name} IS NOT NULL
-            GROUP BY DAYOFWEEK({col_name})
+            WHERE {safe_column} IS NOT NULL
+            GROUP BY DAYOFWEEK({safe_column})
             ORDER BY day_of_week
-            """
+            """  # nosec B608
             
             auth_context = get_auth_context()
             weekly_result = await connection.execute(weekly_pattern_sql, auth_context=auth_context)
@@ -586,17 +631,18 @@ class DataExplorationTools:
                     weekly_pattern.append(round(percentage, 3))
             
             # Monthly trend analysis (simplified)
+            # SQL sink audit: same quoted metadata column and safe table_expr.
             monthly_trend_sql = f"""
             SELECT 
-                YEAR({col_name}) as year,
-                MONTH({col_name}) as month,
+                YEAR({safe_column}) as year,
+                MONTH({safe_column}) as month,
                 COUNT(*) as count
             FROM {table_expr}
-            WHERE {col_name} IS NOT NULL
-            GROUP BY YEAR({col_name}), MONTH({col_name})
+            WHERE {safe_column} IS NOT NULL
+            GROUP BY YEAR({safe_column}), MONTH({safe_column})
             ORDER BY year, month
             LIMIT 12
-            """
+            """  # nosec B608
             
             monthly_result = await connection.execute(monthly_trend_sql, auth_context=auth_context)
             monthly_trend = "stable"  # Simplified trend analysis
@@ -675,13 +721,17 @@ class DataExplorationTools:
         for column in columns:
             col_name = column["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
                 table_expr = sampling_info.get("sample_table_expression", table_name)
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 null_sql = f"""
                 SELECT 
                     COUNT(*) as total_count,
-                    COUNT({col_name}) as non_null_count
+                    COUNT({safe_column}) as non_null_count
                 FROM {table_expr}
-                """
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 result = await connection.execute(null_sql, auth_context=auth_context)
@@ -768,4 +818,4 @@ class DataExplorationTools:
         
         summary["notable_patterns"] = patterns
         
-        return summary 
+        return summary

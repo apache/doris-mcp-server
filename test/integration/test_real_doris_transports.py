@@ -446,8 +446,68 @@ async def test_real_doris_tool_regression_paths(
         password=doris_sandbox.settings.password,
     )
     missing_table = f"{doris_sandbox.table}_missing"
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {doris_sandbox.qualified_table} VALUES (1, %s)",
+            (doris_sandbox.marker,),
+        )
 
     async with _transport_client(transport, environment) as client:
+        basic_info_result = await client.call_tool(
+            "get_table_basic_info",
+            {
+                "table_name": doris_sandbox.table,
+                "db_name": doris_sandbox.settings.database,
+            },
+        )
+        assert basic_info_result.is_error is False
+        assert isinstance(basic_info_result.structured_content, dict)
+        assert basic_info_result.structured_content["row_count"] == 1
+        assert basic_info_result.structured_content["column_count"] == 2
+
+        column_analysis_result = await client.call_tool(
+            "analyze_columns",
+            {
+                "table_name": doris_sandbox.table,
+                "columns": ["id", "marker"],
+                "analysis_types": ["completeness"],
+                "sample_size": 10,
+                "db_name": doris_sandbox.settings.database,
+            },
+        )
+        assert column_analysis_result.is_error is False
+        assert isinstance(column_analysis_result.structured_content, dict)
+        assert column_analysis_result.structured_content["columns_analyzed"] == 2
+        assert set(
+            column_analysis_result.structured_content["completeness_analysis"]
+        ) == {"id", "marker"}
+
+        injected_identifier_result = await client.call_tool(
+            "analyze_columns",
+            {
+                "table_name": (
+                    f"{doris_sandbox.table}; "
+                    f"DROP TABLE {doris_sandbox.table}"
+                ),
+                "columns": ["id"],
+                "analysis_types": ["completeness"],
+                "sample_size": 10,
+                "db_name": doris_sandbox.settings.database,
+            },
+        )
+        assert injected_identifier_result.is_error is True
+        assert isinstance(injected_identifier_result.structured_content, dict)
+        assert "Invalid table name" in (
+            injected_identifier_result.structured_content["error"]
+        )
+
+        intact_result, intact_payload = await _exec_query(
+            client,
+            f"SELECT COUNT(*) AS row_count FROM {doris_sandbox.qualified_table}",
+        )
+        assert intact_result.is_error is False
+        assert intact_payload["data"] == [{"row_count": 1}]
+
         profile_result = await client.call_tool(
             "get_sql_profile",
             {

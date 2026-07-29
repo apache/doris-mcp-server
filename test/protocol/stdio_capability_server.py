@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import tempfile
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 from mcp.server.stdio import stdio_server
@@ -38,6 +39,7 @@ from doris_mcp_server.protocol import create_doris_mcp_server
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
 from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
+from doris_mcp_server.utils.data_quality_tools import DataQualityTools
 from doris_mcp_server.utils.db import QueryResult
 from doris_mcp_server.utils.security_analytics_tools import SecurityAnalyticsTools
 
@@ -82,6 +84,10 @@ class ProfileConnectionManager:
 
     async def get_connection(self, session_id: str) -> ProfileConnection:
         return self.connection
+
+    @asynccontextmanager
+    async def get_connection_context(self, session_id: str):
+        yield self.connection
 
 
 class ProfileAnalyzer(SQLAnalyzer):
@@ -188,6 +194,15 @@ class OneToolManager:
         self.freshness_router.data_governance_tools = FreshnessGovernanceTools(
             connection_manager
         )
+        self.freshness_router.data_quality_tools = DataQualityTools(
+            connection_manager,
+            config=SimpleNamespace(
+                data_quality=SimpleNamespace(
+                    enable_batch_analysis=True,
+                    max_columns_per_batch=20,
+                )
+            ),
+        )
         self.role_analyzer = RoleSecurityAnalyticsTools(RoleConnectionManager())
 
     async def list_tools(self) -> list[Tool]:
@@ -228,6 +243,22 @@ class OneToolManager:
                 description="Exercise Doris 4 role metadata compatibility.",
                 input_schema={"type": "object", "properties": {}},
             ),
+            Tool(
+                name="analyze_columns",
+                description="Exercise production SQL identifier validation.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "table_name": {"type": "string"},
+                        "columns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "db_name": {"type": "string"},
+                    },
+                    "required": ["table_name", "columns"],
+                },
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> str:
@@ -256,6 +287,10 @@ class OneToolManager:
         if name == "analyze_data_access_patterns":
             return json.dumps(
                 await self.role_analyzer.analyze_data_access_patterns()
+            )
+        if name == "analyze_columns":
+            return json.dumps(
+                await self.freshness_router._analyze_columns_tool(arguments)
             )
         return "{}"
 

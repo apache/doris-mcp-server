@@ -34,6 +34,8 @@ from .config import DorisConfig
 from .sql_security_utils import (
     SQLSecurityError,
     validate_identifier,
+    validate_integer,
+    quote_identifier,
     build_table_reference,
     get_auth_context
 )
@@ -150,6 +152,12 @@ class DataQualityTools:
         """
         try:
             start_time = time.time()
+            sample_size = validate_integer(
+                sample_size,
+                "sample size",
+                minimum=0,
+                maximum=10_000_000,
+            )
             logger.info(f"🔍 Analyzing columns for table: {table_name}")
             logger.info(f"📊 Columns to analyze: {columns}")
             logger.info(f"🎯 Analysis types: {analysis_types}")
@@ -317,7 +325,9 @@ class DataQualityTools:
             auth_context = get_auth_context()
             
             # Try to get row count
-            count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"
+            # SQL sink audit: table_name is produced by build_table_reference
+            # before this private helper reaches DorisConnection.execute.
+            count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"  # nosec B608
             result = await connection.execute(count_sql, auth_context=auth_context)
             if result.data:
                 return {"row_count": result.data[0]["row_count"]}
@@ -388,6 +398,8 @@ class DataQualityTools:
             params.append(table_name)
             where_conditions.append("PARTITION_NAME IS NOT NULL")
             
+            # SQL sink audit: WHERE fragments are fixed locally and all values
+            # are bound through params before DorisConnection.execute.
             partition_sql = f"""
             SELECT 
                 PARTITION_NAME,
@@ -397,7 +409,7 @@ class DataQualityTools:
                 INDEX_LENGTH
             FROM information_schema.PARTITIONS 
             WHERE {' AND '.join(where_conditions)}
-            """
+            """  # nosec B608
             
             result = await connection.execute(partition_sql, params=tuple(params), auth_context=auth_context)
             partitions = []
@@ -454,11 +466,8 @@ class DataQualityTools:
     ) -> Optional[str]:
         """Get table DDL statement"""
         try:
-            query = (
-                f"SHOW CREATE TABLE {db_name}.{table_name}"
-                if db_name
-                else f"SHOW CREATE TABLE {table_name}"
-            )
+            safe_table_ref = build_table_reference(table_name, db_name)
+            query = f"SHOW CREATE TABLE {safe_table_ref}"
             auth_context = get_auth_context()
             result = await connection.execute(query, auth_context=auth_context)
             if result.data:
@@ -514,11 +523,17 @@ class DataQualityTools:
     
     async def _determine_optimized_sampling_strategy(self, connection, table_name: str, total_rows: int, sample_size: int) -> Dict[str, Any]:
         """Determine optimized sampling strategy"""
+        safe_sample_size = validate_integer(
+            sample_size,
+            "sample size",
+            minimum=0,
+            maximum=10_000_000,
+        )
         # Use thresholds from configuration
         small_threshold = self.config.data_quality.small_table_threshold
         medium_threshold = self.config.data_quality.medium_table_threshold
         
-        if total_rows <= sample_size or sample_size <= 0:
+        if total_rows <= safe_sample_size or safe_sample_size <= 0:
             return {
                 "sample_size": total_rows,
                 "sample_rate": 1.0,
@@ -527,7 +542,7 @@ class DataQualityTools:
                 "total_rows": total_rows
             }
         
-        sample_rate = sample_size / total_rows
+        sample_rate = safe_sample_size / total_rows
         
         # Stratified sampling strategy
         if total_rows <= small_threshold:
@@ -541,9 +556,13 @@ class DataQualityTools:
             }
         elif total_rows <= medium_threshold:
             # Medium table: simple LIMIT sampling (avoid ORDER BY RAND())
-            sample_table_expr = f"(SELECT * FROM {table_name} LIMIT {sample_size}) AS sample_table"
+            # SQL sink audit: table -> build_table_reference; sample size ->
+            # bounded integer; expression remains internal until execute.
+            sample_table_expr = (
+                f"(SELECT * FROM {table_name} LIMIT {safe_sample_size}) AS sample_table"  # nosec B608
+            )
             return {
-                "sample_size": sample_size,
+                "sample_size": safe_sample_size,
                 "sample_rate": sample_rate,
                 "sample_table_expression": sample_table_expr,
                 "sampling_method": "limit_sampling",
@@ -552,15 +571,23 @@ class DataQualityTools:
         else:
             # Large table: use simpler sampling strategy
             # For very large tables, still use LIMIT but increase sample size to improve representativeness
-            adjusted_sample_size = min(sample_size * 2, total_rows // 100)  # At most 1% sampling
-            sample_table_expr = f"(SELECT * FROM {table_name} LIMIT {adjusted_sample_size}) AS sample_table"
+            adjusted_sample_size = min(
+                safe_sample_size * 2,
+                total_rows // 100,
+            )  # At most 1% sampling
+            # SQL sink audit: table -> build_table_reference; adjusted sample
+            # size is derived from a bounded integer and DB row count before
+            # the expression reaches DorisConnection.execute.
+            sample_table_expr = (
+                f"(SELECT * FROM {table_name} LIMIT {adjusted_sample_size}) AS sample_table"  # nosec B608
+            )
             return {
                 "sample_size": adjusted_sample_size,
                 "sample_rate": adjusted_sample_size / total_rows,
                 "sample_table_expression": sample_table_expr,
                 "sampling_method": "enhanced_limit_sampling",
                 "total_rows": total_rows,
-                "original_sample_size": sample_size
+                "original_sample_size": safe_sample_size
             }
     
     async def _analyze_columns_batch(self, connection, table_name: str, columns_info: List[Dict], 
@@ -619,19 +646,29 @@ class DataQualityTools:
         try:
             # Build batch completeness query
             select_clauses = []
+            column_aliases = {}
             
             # First get total row count
             select_clauses.append("COUNT(*) as total_rows")
             
             # Then add statistics for each column
-            for col in columns_info:
+            for index, col in enumerate(columns_info):
                 col_name = col["column_name"]
+                safe_column = quote_identifier(col_name, "column name")
+                non_null_alias = f"column_{index}_non_null"
+                distinct_alias = f"column_{index}_distinct"
+                column_aliases[col_name] = (non_null_alias, distinct_alias)
                 select_clauses.extend([
-                    f"COUNT({col_name}) as {col_name}_non_null",
-                    f"COUNT(DISTINCT {col_name}) as {col_name}_distinct"
+                    f"COUNT({safe_column}) as {non_null_alias}",
+                    f"COUNT(DISTINCT {safe_column}) as {distinct_alias}"
                 ])
             
-            batch_sql = f"SELECT {', '.join(select_clauses)} FROM {table_expr}"
+            # SQL sink audit: metadata columns -> quote_identifier; aliases are
+            # index-derived; table_expr originates from a safe table/sampler
+            # before DorisConnection.execute.
+            batch_sql = (
+                f"SELECT {', '.join(select_clauses)} FROM {table_expr}"  # nosec B608
+            )
             
             auth_context = get_auth_context()
             result = await connection.execute(batch_sql, auth_context=auth_context)
@@ -644,8 +681,9 @@ class DataQualityTools:
             
             for col in columns_info:
                 col_name = col["column_name"]
-                non_null = row[f"{col_name}_non_null"]
-                distinct = row[f"{col_name}_distinct"]
+                non_null_alias, distinct_alias = column_aliases[col_name]
+                non_null = row[non_null_alias]
+                distinct = row[distinct_alias]
                 
                 null_count = total_rows - non_null
                 null_rate = null_count / total_rows if total_rows > 0 else 0
@@ -705,16 +743,30 @@ class DataQualityTools:
         """Batch numeric distribution analysis"""
         try:
             select_clauses = []
-            for col in numeric_columns:
+            column_aliases = {}
+            for index, col in enumerate(numeric_columns):
                 col_name = col["column_name"]
+                safe_column = quote_identifier(col_name, "column name")
+                aliases = {
+                    "min": f"column_{index}_min",
+                    "max": f"column_{index}_max",
+                    "avg": f"column_{index}_avg",
+                    "stddev": f"column_{index}_stddev",
+                }
+                column_aliases[col_name] = aliases
                 select_clauses.extend([
-                    f"MIN({col_name}) as {col_name}_min",
-                    f"MAX({col_name}) as {col_name}_max",
-                    f"AVG({col_name}) as {col_name}_avg",
-                    f"STDDEV({col_name}) as {col_name}_stddev"
+                    f"MIN({safe_column}) as {aliases['min']}",
+                    f"MAX({safe_column}) as {aliases['max']}",
+                    f"AVG({safe_column}) as {aliases['avg']}",
+                    f"STDDEV({safe_column}) as {aliases['stddev']}"
                 ])
             
-            batch_sql = f"SELECT {', '.join(select_clauses)} FROM {table_expr}"
+            # SQL sink audit: metadata columns -> quote_identifier; aliases are
+            # index-derived; table_expr originates from a safe table/sampler
+            # before DorisConnection.execute.
+            batch_sql = (
+                f"SELECT {', '.join(select_clauses)} FROM {table_expr}"  # nosec B608
+            )
             
             auth_context = get_auth_context()
             result = await connection.execute(batch_sql, auth_context=auth_context)
@@ -726,12 +778,17 @@ class DataQualityTools:
             
             for col in numeric_columns:
                 col_name = col["column_name"]
+                aliases = column_aliases[col_name]
                 numeric_results[col_name] = {
                     "data_type": "numeric",
-                    "min_value": row[f"{col_name}_min"],
-                    "max_value": row[f"{col_name}_max"],
-                    "mean": round(float(row[f"{col_name}_avg"]), 4) if row[f"{col_name}_avg"] is not None else None,
-                    "std_dev": round(float(row[f"{col_name}_stddev"]), 4) if row[f"{col_name}_stddev"] is not None else None
+                    "min_value": row[aliases["min"]],
+                    "max_value": row[aliases["max"]],
+                    "mean": round(float(row[aliases["avg"]]), 4)
+                    if row[aliases["avg"]] is not None
+                    else None,
+                    "std_dev": round(float(row[aliases["stddev"]]), 4)
+                    if row[aliases["stddev"]] is not None
+                    else None,
                 }
             
             return numeric_results
@@ -748,15 +805,19 @@ class DataQualityTools:
         for col in categorical_columns:
             col_name = col["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
                 # Get top 10 most frequent values
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 freq_sql = f"""
-                SELECT {col_name}, COUNT(*) as frequency
+                SELECT {safe_column}, COUNT(*) as frequency
                 FROM {table_expr}
-                WHERE {col_name} IS NOT NULL
-                GROUP BY {col_name}
+                WHERE {safe_column} IS NOT NULL
+                GROUP BY {safe_column}
                 ORDER BY frequency DESC
                 LIMIT 10
-                """
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 result = await connection.execute(freq_sql, auth_context=auth_context)
@@ -780,17 +841,29 @@ class DataQualityTools:
         """Batch temporal distribution analysis"""
         try:
             select_clauses = []
-            for col in temporal_columns:
+            column_aliases = {}
+            for index, col in enumerate(temporal_columns):
                 col_name = col["column_name"]
+                safe_column = quote_identifier(col_name, "column name")
+                aliases = {
+                    "min": f"column_{index}_min",
+                    "max": f"column_{index}_max",
+                }
+                column_aliases[col_name] = aliases
                 select_clauses.extend([
-                    f"MIN({col_name}) as {col_name}_min",
-                    f"MAX({col_name}) as {col_name}_max"
+                    f"MIN({safe_column}) as {aliases['min']}",
+                    f"MAX({safe_column}) as {aliases['max']}",
                 ])
             
             if not select_clauses:
                 return {}
             
-            batch_sql = f"SELECT {', '.join(select_clauses)} FROM {table_expr}"
+            # SQL sink audit: metadata columns -> quote_identifier; aliases are
+            # index-derived; table_expr originates from a safe table/sampler
+            # before DorisConnection.execute.
+            batch_sql = (
+                f"SELECT {', '.join(select_clauses)} FROM {table_expr}"  # nosec B608
+            )
             
             auth_context = get_auth_context()
             result = await connection.execute(batch_sql, auth_context=auth_context)
@@ -802,10 +875,11 @@ class DataQualityTools:
             
             for col in temporal_columns:
                 col_name = col["column_name"]
+                aliases = column_aliases[col_name]
                 temporal_results[col_name] = {
                     "data_type": "temporal",
-                    "min_value": row[f"{col_name}_min"],
-                    "max_value": row[f"{col_name}_max"]
+                    "min_value": row[aliases["min"]],
+                    "max_value": row[aliases["max"]],
                 }
             
             return temporal_results
@@ -826,14 +900,18 @@ class DataQualityTools:
             logger.info(f"  📊 [{i}/{len(columns_info)}] Analyzing column: {col_name}")
             
             try:
+                safe_column = quote_identifier(col_name, "column name")
                 # Completeness analysis SQL
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 completeness_sql = f"""
                 SELECT 
                     COUNT(*) as total_count,
-                    COUNT({col_name}) as non_null_count,
-                    COUNT(*) - COUNT({col_name}) as null_count
+                    COUNT({safe_column}) as non_null_count,
+                    COUNT(*) - COUNT({safe_column}) as null_count
                 FROM {table_expr}
-                """
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 result = await connection.execute(completeness_sql, auth_context=auth_context)
@@ -951,16 +1029,20 @@ class DataQualityTools:
         for column in numeric_columns:
             col_name = column["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 stats_sql = f"""
                 SELECT 
-                    COUNT({col_name}) as non_null_count,
-                    MIN({col_name}) as min_value,
-                    MAX({col_name}) as max_value,
-                    AVG({col_name}) as mean_value,
-                    STDDEV({col_name}) as std_dev
+                    COUNT({safe_column}) as non_null_count,
+                    MIN({safe_column}) as min_value,
+                    MAX({safe_column}) as max_value,
+                    AVG({safe_column}) as mean_value,
+                    STDDEV({safe_column}) as std_dev
                 FROM {table_expr}
-                WHERE {col_name} IS NOT NULL
-                """
+                WHERE {safe_column} IS NOT NULL
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 result = await connection.execute(stats_sql, auth_context=auth_context)
@@ -993,14 +1075,18 @@ class DataQualityTools:
         for column in categorical_columns:
             col_name = column["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
                 # Basic statistics
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 cardinality_sql = f"""
                 SELECT 
-                    COUNT(DISTINCT {col_name}) as cardinality,
-                    COUNT({col_name}) as non_null_count
+                    COUNT(DISTINCT {safe_column}) as cardinality,
+                    COUNT({safe_column}) as non_null_count
                 FROM {table_expr}
-                WHERE {col_name} IS NOT NULL
-                """
+                WHERE {safe_column} IS NOT NULL
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 cardinality_result = await connection.execute(cardinality_sql, auth_context=auth_context)
@@ -1018,14 +1104,17 @@ class DataQualityTools:
                     
                     # If cardinality is not too large, get distribution of top values
                     if cardinality <= 50 and detailed_response:
+                        # SQL sink audit: metadata column -> quote_identifier;
+                        # table_expr originates from a safe table/sampler before
+                        # DorisConnection.execute.
                         top_values_sql = f"""
-                        SELECT {col_name}, COUNT(*) as count
+                        SELECT {safe_column}, COUNT(*) as count
                         FROM {table_expr}
-                        WHERE {col_name} IS NOT NULL
-                        GROUP BY {col_name}
+                        WHERE {safe_column} IS NOT NULL
+                        GROUP BY {safe_column}
                         ORDER BY COUNT(*) DESC
                         LIMIT 10
-                        """
+                        """  # nosec B608
                         
                         top_values_result = await connection.execute(top_values_sql, auth_context=auth_context)
                         if top_values_result.data:
@@ -1047,14 +1136,18 @@ class DataQualityTools:
         for column in temporal_columns:
             col_name = column["column_name"]
             try:
+                safe_column = quote_identifier(col_name, "column name")
+                # SQL sink audit: metadata column -> quote_identifier;
+                # table_expr originates from a safe table/sampler before
+                # DorisConnection.execute.
                 stats_sql = f"""
                 SELECT 
-                    COUNT({col_name}) as non_null_count,
-                    MIN({col_name}) as min_date,
-                    MAX({col_name}) as max_date
+                    COUNT({safe_column}) as non_null_count,
+                    MIN({safe_column}) as min_date,
+                    MAX({safe_column}) as max_date
                 FROM {table_expr}
-                WHERE {col_name} IS NOT NULL
-                """
+                WHERE {safe_column} IS NOT NULL
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 result = await connection.execute(stats_sql, auth_context=auth_context)

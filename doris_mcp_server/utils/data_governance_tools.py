@@ -28,6 +28,7 @@ from .db import DorisConnectionManager
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
+    build_rule_predicate,
     validate_identifier,
     quote_identifier,
     build_table_reference,
@@ -253,7 +254,9 @@ class DataGovernanceTools:
             auth_context = get_auth_context()
             
             # Try to get table row count
-            count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"
+            # SQL sink audit: table_name is produced by build_table_reference
+            # before this private helper reaches DorisConnection.execute.
+            count_sql = f"SELECT COUNT(*) as row_count FROM {table_name}"  # nosec B608
             result = await connection.execute(count_sql, auth_context=auth_context)
             
             if result.data:
@@ -290,6 +293,8 @@ class DataGovernanceTools:
             else:
                 where_conditions.append("table_schema = DATABASE()")
             
+            # SQL sink audit: where fragments are selected locally and all values
+            # are bound through params before DorisConnection.execute.
             columns_sql = f"""
             SELECT 
                 column_name,
@@ -300,7 +305,7 @@ class DataGovernanceTools:
             FROM information_schema.columns 
             WHERE {' AND '.join(where_conditions)}
             ORDER BY ordinal_position
-            """
+            """  # nosec B608
             
             result = await connection.execute(columns_sql, params=tuple(params), auth_context=auth_context)
             return result.data if result.data else []
@@ -336,13 +341,15 @@ class DataGovernanceTools:
                 quoted_column = quote_identifier(column_name, "column name")
                 
                 # Calculate null value statistics
+                # SQL sink audit: metadata column -> quote_identifier; table ->
+                # build_table_reference -> DorisConnection.execute.
                 null_sql = f"""
                 SELECT 
                     COUNT(*) as total_count,
                     COUNT({quoted_column}) as non_null_count,
                     COUNT(*) - COUNT({quoted_column}) as null_count
                 FROM {table_name}
-                """
+                """  # nosec B608
                 
                 result = await connection.execute(null_sql, auth_context=auth_context)
                 if result.data:
@@ -383,22 +390,24 @@ class DataGovernanceTools:
         
         for rule in business_rules:
             rule_name = rule.get("rule_name", "unknown")
-            sql_condition = rule.get("sql_condition", "")
-            
-            if not sql_condition:
-                continue
-                
             try:
+                predicate, predicate_params = build_rule_predicate(rule)
                 # Check number of records meeting conditions
+                # SQL sink audit: structured rule -> allowlisted operator,
+                # quoted identifier and bound values; table -> safe reference.
                 compliance_sql = f"""
                 SELECT 
                     COUNT(*) as total_count,
-                    SUM(CASE WHEN {sql_condition} THEN 1 ELSE 0 END) as pass_count
+                    SUM(CASE WHEN {predicate} THEN 1 ELSE 0 END) as pass_count
                 FROM {table_name}
-                """
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
-                result = await connection.execute(compliance_sql, auth_context=auth_context)
+                result = await connection.execute(
+                    compliance_sql,
+                    params=predicate_params or None,
+                    auth_context=auth_context,
+                )
                 if result.data:
                     stats = result.data[0]
                     pass_count = stats["pass_count"] or 0
@@ -406,7 +415,10 @@ class DataGovernanceTools:
                     pass_rate = pass_count / total_rows if total_rows > 0 else 0
                     
                     compliance_results[rule_name] = {
-                        "rule_condition": sql_condition,
+                        "rule_condition": {
+                            "column": rule.get("column"),
+                            "operator": rule.get("operator", "="),
+                        },
                         "total_records": total_rows,
                         "pass_count": pass_count,
                         "fail_count": fail_count,
@@ -414,6 +426,12 @@ class DataGovernanceTools:
                         "compliance_score": round(pass_rate, 4)
                     }
                     
+            except SQLSecurityError as e:
+                logger.warning(f"Rejected unsafe business rule {rule_name}: {str(e)}")
+                compliance_results[rule_name] = {
+                    "error": str(e),
+                    "compliance_score": 0.0,
+                }
             except Exception as e:
                 logger.warning(f"Failed to check business rule {rule_name}: {str(e)}")
                 compliance_results[rule_name] = {
@@ -432,16 +450,19 @@ class DataGovernanceTools:
             primary_key_columns = [col["column_name"] for col in columns_info if "primary" in col.get("column_comment", "").lower()]
             
             for pk_col in primary_key_columns:
+                safe_pk_col = quote_identifier(pk_col, "column name")
+                # SQL sink audit: metadata column -> quote_identifier; table ->
+                # build_table_reference -> DorisConnection.execute.
                 duplicate_sql = f"""
                 SELECT COUNT(*) as duplicate_count
                 FROM (
-                    SELECT {pk_col}, COUNT(*) as cnt
+                    SELECT {safe_pk_col}, COUNT(*) as cnt
                     FROM {table_name}
-                    WHERE {pk_col} IS NOT NULL
-                    GROUP BY {pk_col}
+                    WHERE {safe_pk_col} IS NOT NULL
+                    GROUP BY {safe_pk_col}
                     HAVING COUNT(*) > 1
                 ) t
-                """
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 result = await connection.execute(duplicate_sql, auth_context=auth_context)
@@ -531,7 +552,11 @@ class DataGovernanceTools:
             
             safe_column = quote_identifier(column_name, "column name")
             # table_name is already safe (from _build_full_table_name)
-            verify_sql = f"SELECT {safe_column} FROM {table_name} LIMIT 1"
+            # SQL sink audit: column -> quote_identifier; table ->
+            # build_table_reference -> DorisConnection.execute.
+            verify_sql = (
+                f"SELECT {safe_column} FROM {table_name} LIMIT 1"  # nosec B608
+            )
             auth_context = get_auth_context()
             await connection.execute(verify_sql, auth_context=auth_context)
             return True
@@ -753,13 +778,15 @@ class DataGovernanceTools:
             else:
                 where_clause = "table_schema = DATABASE()"
             
+            # SQL sink audit: where_clause has two fixed local variants and the
+            # optional database value is bound before DorisConnection.execute.
             tables_sql = f"""
             SELECT table_name 
             FROM information_schema.tables 
             WHERE {where_clause}
                 AND table_type = 'BASE TABLE'
             ORDER BY table_name
-            """
+            """  # nosec B608
             
             result = await connection.execute(tables_sql, params=tuple(params) if params else None, auth_context=auth_context)
             return [row["table_name"] for row in result.data] if result.data else []
@@ -872,10 +899,16 @@ class DataGovernanceTools:
             timestamp_columns = await self._find_timestamp_columns(connection, table_name)
             
             if timestamp_columns:
+                safe_timestamp_column = quote_identifier(
+                    timestamp_columns[0],
+                    "column name",
+                )
+                # SQL sink audit: metadata column -> quote_identifier; table ->
+                # build_table_reference -> DorisConnection.execute.
                 max_time_sql = f"""
-                SELECT MAX({timestamp_columns[0]}) as last_update
+                SELECT MAX({safe_timestamp_column}) as last_update
                 FROM {table_name}
-                """
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
                 result = await connection.execute(max_time_sql, auth_context=auth_context)

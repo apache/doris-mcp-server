@@ -151,6 +151,8 @@ class DependencyAnalysisTools:
             
             where_conditions.append(f"table_type IN ({','.join(table_types)})")
             
+            # SQL sink audit: database value -> bound param; table-type and
+            # WHERE fragments are fixed local variants -> DorisConnection.execute.
             metadata_sql = f"""
             SELECT 
                 table_schema as schema_name,
@@ -162,7 +164,7 @@ class DependencyAnalysisTools:
             FROM information_schema.tables
             WHERE {' AND '.join(where_conditions)}
             ORDER BY table_schema, table_name
-            """
+            """  # nosec B608
             
             # SECURITY FIX: Get auth_context and pass to execute for security validation
             auth_context = get_auth_context()
@@ -1022,4 +1024,4 @@ class DependencyAnalysisTools:
                     "action": "Review and implement suggested optimizations for better maintainability"
                 })
         
-        return recommendations 
+        return recommendations
