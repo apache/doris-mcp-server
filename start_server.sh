@@ -66,7 +66,7 @@ fi
 # Set HTTP-specific environment variables
 # FIX for Issue #62 Bug 4: Use SERVER_PORT instead of MCP_PORT for consistency with code
 export MCP_TRANSPORT_TYPE="http"
-export MCP_HOST="${MCP_HOST:-0.0.0.0}"
+export MCP_HOST="${MCP_HOST:-127.0.0.1}"
 export SERVER_PORT="${SERVER_PORT:-3000}"  # Changed from MCP_PORT to SERVER_PORT
 export WORKERS="${WORKERS:-1}"
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"

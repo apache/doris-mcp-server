@@ -52,6 +52,8 @@ under **Unreleased** until a new version is selected and published.
   management endpoints now accept admin credentials only in headers.
 - Removed shipped static credentials and the legacy default secret; static and
   management token modes now require explicit high-entropy credentials.
+- Refused unauthenticated HTTP startup on non-loopback bind addresses unless
+  the operator sets an explicit dangerous override.
 - Released Doris connections on SQL profile, data freshness, and access
   analysis paths.
 - Improved Doris 4 role metadata compatibility and query recovery behavior.
