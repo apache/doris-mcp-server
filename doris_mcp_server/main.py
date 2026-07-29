@@ -92,7 +92,7 @@ class DorisServer:
         # Initialize connection manager, pass in security manager and token manager for token-bound DB config
         token_manager = self.security_manager.auth_provider.token_manager if hasattr(self.security_manager, 'auth_provider') and hasattr(self.security_manager.auth_provider, 'token_manager') else None
         self.connection_manager = DorisConnectionManager(config, self.security_manager, token_manager)
-        
+
         # Set connection manager reference in security manager for database validation
         self.security_manager.connection_manager = self.connection_manager
         self.security_manager.auth_provider.configure_doris_oauth(self.connection_manager)
@@ -122,22 +122,22 @@ class DorisServer:
             # Initialize security manager first (includes JWT setup if enabled)
             await self.security_manager.initialize()
             self.logger.info("Security manager initialization completed")
-            
+
             # For stdio mode, we must establish a working database connection
             # Use the dedicated stdio mode initialization method
             await self.connection_manager.initialize_for_stdio_mode()
             await self.tools_manager.start()
 
             from mcp.server.stdio import stdio_server
-            
+
             self.logger.info("Creating stdio_server transport...")
-            
+
             # Try different startup approaches
             try:
                 async with stdio_server() as streams:
                     read_stream, write_stream = streams
                     self.logger.info("stdio_server streams created successfully")
-                    
+
                     # Run server
                     self.logger.info("Starting to run MCP server...")
                     await self.server.run(
@@ -145,24 +145,24 @@ class DorisServer:
                         write_stream,
                         self.server.create_initialization_options(),
                     )
-                    
+
             except Exception as inner_e:
                 self.logger.error(f"stdio_server internal error: {inner_e}")
                 self.logger.error(f"Error type: {type(inner_e)}")
-                
+
                 # Try to get more error information
                 import traceback
                 self.logger.error("Complete error stack:")
                 self.logger.error(traceback.format_exc())
-                
+
                 # If it's ExceptionGroup, try to parse
                 if hasattr(inner_e, 'exceptions'):
                     self.logger.error(f"ExceptionGroup contains {len(inner_e.exceptions)} exceptions:")
                     for i, exc in enumerate(inner_e.exceptions):
                         self.logger.error(f"  Exception {i+1}: {type(exc).__name__}: {exc}")
-                
+
                 raise inner_e
-                
+
         except Exception as e:
             self.logger.error(f"stdio server startup failed: {e}")
             self.logger.error(f"Error type: {type(e)}")
@@ -189,10 +189,10 @@ class DorisServer:
         self.logger.info(f"Starting Doris MCP Server (Streamable HTTP mode) - {host}:{port}, workers: {workers}")
 
         try:
-            # Initialize security manager first (includes JWT setup if enabled)  
+            # Initialize security manager first (includes JWT setup if enabled)
             await self.security_manager.initialize()
             self.logger.info("Security manager initialization completed")
-            
+
             # For HTTP mode, try to initialize global connection pool with graceful degradation
             global_pool_created = await self.connection_manager.initialize_for_http_mode()
             if global_pool_created:
@@ -228,9 +228,9 @@ class DorisServer:
                     allowed_origins=self.config.mcp_allowed_origins,
                 ),
             )
-            
+
             self.logger.info(f"StreamableHTTP session manager created, will start at http://{host}:{port}")
-            
+
             # Health check endpoint
             async def health_check(request):
                 return JSONResponse(
@@ -256,17 +256,17 @@ class DorisServer:
                     version=__version__,
                 )
                 return JSONResponse(payload, status_code=status_code)
-            
+
             # OAuth endpoints
             from .auth.oauth_handlers import OAuthHandlers
             oauth_handlers = OAuthHandlers(self.security_manager)
-            
+
             async def oauth_login(request):
                 return await oauth_handlers.handle_login(request)
-            
+
             async def oauth_callback(request):
                 return await oauth_handlers.handle_callback(request)
-            
+
             async def oauth_provider_info(request):
                 return await oauth_handlers.handle_provider_info(request)
 
@@ -274,29 +274,29 @@ class DorisServer:
                 return await oauth_handlers.handle_protected_resource_metadata(
                     request
                 )
-                
+
             async def oauth_demo(request):
                 return await oauth_handlers.handle_demo_page(request)
-            
+
             # Token management endpoints
             from .auth.token_handlers import TokenHandlers
             token_handlers = TokenHandlers(self.security_manager, self.config)
-            
+
             async def token_create(request):
                 return await token_handlers.handle_create_token(request)
-            
+
             async def token_revoke(request):
                 return await token_handlers.handle_revoke_token(request)
-            
+
             async def token_list(request):
                 return await token_handlers.handle_list_tokens(request)
-            
+
             async def token_stats(request):
                 return await token_handlers.handle_token_stats(request)
-            
+
             async def token_cleanup(request):
                 return await token_handlers.handle_cleanup_tokens(request)
-                
+
             async def token_management(request):
                 return await token_handlers.handle_management_page(request)
 
@@ -306,7 +306,7 @@ class DorisServer:
                 doris_oauth_handlers = DorisOAuthHandlers(
                     self.security_manager.auth_provider.doris_oauth_provider
                 )
-            
+
             # Lifecycle manager - simplified since we manage session_manager externally
             @contextlib.asynccontextmanager
             async def lifespan(app: Starlette) -> AsyncIterator[None]:
@@ -316,7 +316,7 @@ class DorisServer:
                     yield
                 finally:
                     self.logger.info("Application is shutting down...")
-            
+
             effective_auth = get_effective_auth_config(self.config)
             routes = [
                 Route("/health", health_check, methods=["GET"]),
@@ -371,12 +371,12 @@ class DorisServer:
                 if scope["type"] == "lifespan":
                     await starlette_app(scope, receive, send)
                     return
-                
+
                 # Handle HTTP requests
                 if scope["type"] == "http":
                     path = scope.get("path", "")
                     self.logger.info(f"Received request for path: {path}")
-                    
+
                     try:
                         # Handle health check, auth, OAuth, and token management endpoints.
                         if effective_auth.enable_doris_oauth_auth and path.startswith("/auth/"):
@@ -386,7 +386,7 @@ class DorisServer:
 
                         if (
                             path.rstrip("/") in {"/health", "/live", "/ready"} or
-                            path.startswith("/auth/") or 
+                            path.startswith("/auth/") or
                             path.startswith("/token/") or
                             path.startswith("/.well-known/") or
                             path.startswith("/oauth/") or
@@ -394,12 +394,12 @@ class DorisServer:
                             path.startswith("/api/auth/")):
                             await starlette_app(scope, receive, send)
                             return
-                        
+
                         if path == "/mcp":
                             self.logger.info(f"Handling MCP request for path: {path}")
                             await mcp_auth_middleware(scope, receive, send)
                             return
-                        
+
                         # 404 for other paths
                         self.logger.info(f"Path not found: {path}")
                         response = Response("Not Found", status_code=404)
@@ -414,7 +414,7 @@ class DorisServer:
                     # For other scope types, just return
                     self.logger.warning(f"Unsupported scope type: {scope['type']}")
                     return
-            
+
             # Choose startup method based on worker count
             if workers > 1:
                 self.logger.info(f"Using multi-process mode with {workers} workers")
@@ -440,7 +440,7 @@ class DorisServer:
                     workers=workers,
                     log_level="info"
                 )
-                
+
             else:
                 self.logger.info("Using single-process mode")
                 # Single worker mode, use original logic with session manager lifecycle
@@ -451,7 +451,7 @@ class DorisServer:
                     log_level="info"
                 )
                 server = uvicorn.Server(config)
-                
+
                 # Run session manager and server together
                 async with session_manager.run():
                     self.logger.info("Session manager started, now starting HTTP server")
@@ -462,7 +462,7 @@ class DorisServer:
             import traceback
             self.logger.error("Complete error stack:")
             self.logger.error(traceback.format_exc())
-            
+
             # If it's ExceptionGroup, try to parse
             if hasattr(e, 'exceptions'):
                 self.logger.error(f"ExceptionGroup contains {len(e.exceptions)} exceptions:")
@@ -481,7 +481,7 @@ class DorisServer:
             # Shutdown security manager first (includes JWT cleanup)
             await self.security_manager.shutdown()
             self.logger.info("Security manager shutdown completed")
-            
+
             await self.connection_manager.close()
             self.logger.info("Doris MCP Server has been shut down")
         except Exception as e:
@@ -503,7 +503,7 @@ Examples:
   python -m doris_mcp_server --transport http --host 127.0.0.1 --port 3000
   python -m doris_mcp_server --transport stdio --doris-host localhost --doris-port 9030
   python -m doris_mcp_server --transport http --doris-user admin --doris-database test_db
-  
+
   # Backward compatibility: --db-* parameters are also supported
   python -m doris_mcp_server --transport stdio --db-host localhost --db-port 9030
         """
@@ -617,7 +617,7 @@ def update_configuration(config: DorisConfig):
     # logging
     if cli_has("--log-level"):
         config.logging.level = args.log_level
-    
+
     # workers (add to config for HTTP mode)
     if hasattr(args, 'workers') and cli_has("--workers"):
         config.workers = args.workers
@@ -629,7 +629,7 @@ async def main():
     # Create configuration - priority: command line arguments > env variables > .env file > default values
     # First load from .env file and environment variables
     config = DorisConfig.from_env()
- 
+
     # Then parse the command line arguments, and update the config object.
     update_configuration(config)
 
@@ -637,14 +637,14 @@ async def main():
     from .utils.config import ConfigManager
     config_manager = ConfigManager(config)
     config_manager.setup_logging()
-    
+
     # Get logger with proper configuration
     from .utils.logger import get_logger, log_system_info
     logger = get_logger(__name__)
-    
+
     # Log system information for debugging
     log_system_info()
-    
+
     logger.info("Starting Doris MCP Server...")
     logger.info(f"Transport: {config.transport}")
     logger.info(f"Log Level: {config.logging.level}")
@@ -692,7 +692,7 @@ async def main():
             await server.shutdown()
         except Exception as shutdown_error:
             logger.error(f"Error occurred while shutting down server: {shutdown_error}")
-        
+
         # Shutdown logging system
         from .utils.logger import shutdown_logging
         shutdown_logging()

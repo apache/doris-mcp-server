@@ -23,31 +23,29 @@ listing, and statistics. Used for administrative token management in HTTP mode.
 """
 
 import json
-from typing import Dict, Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse
 
-from ..utils.logger import get_logger
-from ..utils.security import SecurityLevel
 from ..utils.config import DatabaseConfig
+from ..utils.logger import get_logger
 from .token_security_middleware import TokenSecurityMiddleware
 
 
 class TokenHandlers:
     """Token Authentication HTTP Handlers"""
-    
+
     def __init__(self, security_manager, config=None):
         self.security_manager = security_manager
         self.logger = get_logger(__name__)
-        
+
         # Initialize security middleware if config is provided
         if config:
             self.security_middleware = TokenSecurityMiddleware(config)
         else:
             self.security_middleware = None
             self.logger.warning("Token handlers initialized without security middleware - access control disabled")
-    
+
     async def handle_create_token(self, request: Request) -> JSONResponse:
         """Handle token creation request"""
         # Apply security checks
@@ -55,14 +53,14 @@ class TokenHandlers:
             security_response = await self.security_middleware.check_token_management_access(request)
             if security_response:
                 return security_response
-        
+
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
                 return JSONResponse({
                     "error": "Token authentication is not enabled"
                 }, status_code=503)
-            
+
             # Parse request data
             if request.method == "GET":
                 # GET request with query parameters
@@ -86,11 +84,11 @@ class TokenHandlers:
                 # POST request with JSON body
                 try:
                     body = await request.json()
-                except:
+                except Exception:
                     return JSONResponse({
                         "error": "Invalid JSON body"
                     }, status_code=400)
-                
+
                 token_id = body.get("token_id")
                 expires_hours_str = body.get("expires_hours")
                 description = body.get("description", "")
@@ -112,13 +110,13 @@ class TokenHandlers:
                         return JSONResponse({
                             "error": "Invalid database configuration"
                         }, status_code=400)
-            
+
             # Validate required fields
             if not token_id:
                 return JSONResponse({
                     "error": "token_id is required"
                 }, status_code=400)
-            
+
             # Parse expires_hours
             expires_hours = None
             if expires_hours_str:
@@ -128,7 +126,7 @@ class TokenHandlers:
                     return JSONResponse({
                         "error": "expires_hours must be an integer"
                     }, status_code=400)
-            
+
             # Create token using the actual API
             try:
                 token = await self.security_manager.create_token(
@@ -138,7 +136,7 @@ class TokenHandlers:
                     custom_token=custom_token,
                     database_config=db_config
                 )
-                
+
                 return JSONResponse({
                     "success": True,
                     "token_id": token_id,
@@ -147,7 +145,7 @@ class TokenHandlers:
                     "description": description,
                     "message": "Token created successfully"
                 })
-                
+
             except Exception as e:
                 self.logger.error(
                     "Token creation failed (%s)",
@@ -156,7 +154,7 @@ class TokenHandlers:
                 return JSONResponse({
                     "error": "Token creation failed"
                 }, status_code=400)
-            
+
         except Exception as e:
             self.logger.error(
                 "Error in handle_create_token (%s)",
@@ -165,7 +163,7 @@ class TokenHandlers:
             return JSONResponse({
                 "error": "Internal server error"
             }, status_code=500)
-    
+
     async def handle_revoke_token(self, request: Request) -> JSONResponse:
         """Handle token revocation request"""
         # Apply security checks
@@ -173,14 +171,14 @@ class TokenHandlers:
             security_response = await self.security_middleware.check_token_management_access(request)
             if security_response:
                 return security_response
-        
+
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
                 return JSONResponse({
                     "error": "Token authentication is not enabled"
                 }, status_code=503)
-            
+
             # Get token_id from query parameters or path
             token_id = request.query_params.get("token_id")
             if not token_id and request.method == "DELETE":
@@ -188,15 +186,15 @@ class TokenHandlers:
                 path_parts = str(request.url.path).split("/")
                 if len(path_parts) >= 4:
                     token_id = path_parts[-1]
-            
+
             if not token_id:
                 return JSONResponse({
                     "error": "token_id is required"
                 }, status_code=400)
-            
+
             # Revoke token
             success = await self.security_manager.revoke_token(token_id)
-            
+
             if success:
                 return JSONResponse({
                     "success": True,
@@ -209,7 +207,7 @@ class TokenHandlers:
                     "token_id": token_id,
                     "message": "Token not found or already revoked"
                 }, status_code=404)
-            
+
         except Exception as e:
             self.logger.error(
                 "Error in handle_revoke_token (%s)",
@@ -218,7 +216,7 @@ class TokenHandlers:
             return JSONResponse({
                 "error": "Internal server error"
             }, status_code=500)
-    
+
     async def handle_list_tokens(self, request: Request) -> JSONResponse:
         """Handle token listing request"""
         # Apply security checks
@@ -226,23 +224,23 @@ class TokenHandlers:
             security_response = await self.security_middleware.check_token_management_access(request)
             if security_response:
                 return security_response
-        
+
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
                 return JSONResponse({
                     "error": "Token authentication is not enabled"
                 }, status_code=503)
-            
+
             # Get tokens list
             tokens = await self.security_manager.list_tokens()
-            
+
             return JSONResponse({
                 "success": True,
                 "count": len(tokens),
                 "tokens": tokens
             })
-            
+
         except Exception as e:
             self.logger.error(
                 "Error in handle_list_tokens (%s)",
@@ -251,7 +249,7 @@ class TokenHandlers:
             return JSONResponse({
                 "error": "Internal server error"
             }, status_code=500)
-    
+
     async def handle_token_stats(self, request: Request) -> JSONResponse:
         """Handle token statistics request"""
         # Apply security checks
@@ -259,22 +257,22 @@ class TokenHandlers:
             security_response = await self.security_middleware.check_token_management_access(request)
             if security_response:
                 return security_response
-        
+
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
                 return JSONResponse({
                     "error": "Token authentication is not enabled"
                 }, status_code=503)
-            
+
             # Get token statistics
             stats = self.security_manager.get_token_stats()
-            
+
             return JSONResponse({
                 "success": True,
                 "stats": stats
             })
-            
+
         except Exception as e:
             self.logger.error(
                 "Error in handle_token_stats (%s)",
@@ -283,7 +281,7 @@ class TokenHandlers:
             return JSONResponse({
                 "error": "Internal server error"
             }, status_code=500)
-    
+
     async def handle_cleanup_tokens(self, request: Request) -> JSONResponse:
         """Handle expired tokens cleanup request"""
         # Apply security checks
@@ -291,23 +289,23 @@ class TokenHandlers:
             security_response = await self.security_middleware.check_token_management_access(request)
             if security_response:
                 return security_response
-        
+
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
                 return JSONResponse({
                     "error": "Token authentication is not enabled"
                 }, status_code=503)
-            
+
             # Cleanup expired tokens
             cleaned_count = await self.security_manager.cleanup_expired_tokens()
-            
+
             return JSONResponse({
                 "success": True,
                 "cleaned_count": cleaned_count,
                 "message": f"Cleaned up {cleaned_count} expired tokens"
             })
-            
+
         except Exception as e:
             self.logger.error(
                 "Error in handle_cleanup_tokens (%s)",
@@ -316,7 +314,7 @@ class TokenHandlers:
             return JSONResponse({
                 "error": "Internal server error"
             }, status_code=500)
-    
+
     async def handle_management_page(self, request: Request) -> HTMLResponse:
         """Handle token management demo page"""
         # Apply security checks
@@ -327,9 +325,9 @@ class TokenHandlers:
                 error_data = security_response.body.decode('utf-8') if hasattr(security_response, 'body') else '{"error": "Access denied"}'
                 try:
                     error_info = json.loads(error_data)
-                except:
+                except json.JSONDecodeError:
                     error_info = {"error": "Access denied"}
-                
+
                 error_html = f"""
                 <!DOCTYPE html>
                 <html>
@@ -351,7 +349,7 @@ class TokenHandlers:
                             <p><strong>Message:</strong> {error_info.get('message', 'Token management access is restricted')}</p>
                             {'<p><strong>Your IP:</strong> ' + str(error_info.get('client_ip', 'Unknown')) + '</p>' if 'client_ip' in error_info else ''}
                         </div>
-                        
+
                         <div class="security-info">
                             <h3>🛡️ Security Information</h3>
                             <p>Token management endpoints are protected by the following security measures:</p>
@@ -372,7 +370,7 @@ class TokenHandlers:
                 </html>
                 """
                 return HTMLResponse(error_html, status_code=security_response.status_code)
-        
+
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
@@ -393,10 +391,10 @@ class TokenHandlers:
                 </html>
                 """
                 return HTMLResponse(html_content)
-            
+
             # Get current stats for demo
             stats = self.security_manager.get_token_stats()
-            
+
             html_content = f"""
             <!DOCTYPE html>
             <html>
@@ -437,7 +435,7 @@ class TokenHandlers:
                             <small style="color: #666; display: block; margin-top: 5px;">The token stays in this page and is sent only in the Authorization header.</small>
                         </div>
                     </div>
-                    
+
                     <div class="section">
                         <h2>📊 Token Statistics</h2>
                         <div class="stats">
@@ -457,7 +455,7 @@ class TokenHandlers:
                         <p><strong>Token Expiry:</strong> {'Enabled' if stats.get('expiry_enabled') else 'Disabled'}</p>
                         <p><strong>Default Expiry:</strong> {stats.get('default_expiry_hours', 0)} hours</p>
                     </div>
-                    
+
                     <div class="section">
                         <h2>➕ Create New Token</h2>
                         <form id="createTokenForm">
@@ -478,11 +476,11 @@ class TokenHandlers:
                                 <input type="text" id="custom_token" name="custom_token" placeholder="Leave empty to auto-generate">
                                 <small style="color: #666; display: block; margin-top: 5px;">If not provided, a secure token will be generated automatically</small>
                             </div>
-                            
+
                             <div class="section" style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 5px;">
                                 <h3>🗄️ Database Configuration (Optional)</h3>
                                 <p style="color: #666; font-size: 14px; margin-bottom: 15px;">Configure database connection for this token. Leave empty to use system defaults.</p>
-                                
+
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
                                     <div class="form-group">
                                         <label for="db_host">Host:</label>
@@ -510,18 +508,18 @@ class TokenHandlers:
                                     </div>
                                 </div>
                             </div>
-                            
+
                             <button type="submit" class="btn-primary">Create Token</button>
                         </form>
                         <div id="createTokenResponse"></div>
                     </div>
-                    
+
                     <div class="section">
                         <h2>📋 Token Management</h2>
                         <button id="listTokensBtn" class="btn-success">Refresh Token List</button>
                         <button id="cleanupTokensBtn" class="btn-primary">Cleanup Expired Tokens</button>
                         <div id="tokenListResponse"></div>
-                        
+
                         <h3>Revoke Token</h3>
                         <div class="form-group">
                             <input type="text" id="revokeTokenId" placeholder="Enter token ID to revoke">
@@ -529,7 +527,7 @@ class TokenHandlers:
                         </div>
                         <div id="revokeTokenResponse"></div>
                     </div>
-                    
+
                     <div class="section">
                         <h2>🔧 API Endpoints</h2>
                         <p>Use these endpoints for programmatic token management:</p>
@@ -542,7 +540,7 @@ class TokenHandlers:
                         </ul>
                     </div>
                 </div>
-                
+
                 <script>
                     // Read the token only from the in-page password field.
                     function getAuthHeaders() {{
@@ -556,24 +554,24 @@ class TokenHandlers:
                             return {{'Content-Type': 'application/json'}};
                         }}
                     }}
-                    
+
                     function showResponse(elementId, data, isSuccess = true) {{
                         const element = document.getElementById(elementId);
                         element.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
                         element.className = 'response ' + (isSuccess ? 'success' : 'error');
                     }}
-                    
+
                     // Create token form - updated to match actual API
                     document.getElementById('createTokenForm').addEventListener('submit', async (e) => {{
                         e.preventDefault();
                         const formData = new FormData(e.target);
                         const data = Object.fromEntries(formData.entries());
-                        
+
                         // Remove empty fields for optional parameters
                         if (!data.expires_hours) delete data.expires_hours;
                         if (!data.description) delete data.description;
                         if (!data.custom_token) delete data.custom_token;
-                        
+
                         // Handle database configuration
                         if (data.db_host) {{
                             data.database_config = {{
@@ -585,7 +583,7 @@ class TokenHandlers:
                                 fe_http_port: data.db_fe_http_port ? parseInt(data.db_fe_http_port) : 8030
                             }};
                         }}
-                        
+
                         // Remove individual database fields from data
                         delete data.db_host;
                         delete data.db_port;
@@ -593,7 +591,7 @@ class TokenHandlers:
                         delete data.db_password;
                         delete data.db_database;
                         delete data.db_fe_http_port;
-                        
+
                         try {{
                             const response = await fetch('/token/create', {{
                                 method: 'POST',
@@ -602,7 +600,7 @@ class TokenHandlers:
                             }});
                             const result = await response.json();
                             showResponse('createTokenResponse', result, response.ok);
-                            
+
                             // Refresh token list if creation was successful
                             if (response.ok) {{
                                 document.getElementById('listTokensBtn').click();
@@ -611,7 +609,7 @@ class TokenHandlers:
                             showResponse('createTokenResponse', {{error: error.message}}, false);
                         }}
                     }});
-                    
+
                     // List tokens
                     document.getElementById('listTokensBtn').addEventListener('click', async () => {{
                         try {{
@@ -624,7 +622,7 @@ class TokenHandlers:
                             showResponse('tokenListResponse', {{error: error.message}}, false);
                         }}
                     }});
-                    
+
                     // Cleanup tokens
                     document.getElementById('cleanupTokensBtn').addEventListener('click', async () => {{
                         try {{
@@ -638,7 +636,7 @@ class TokenHandlers:
                             showResponse('tokenListResponse', {{error: error.message}}, false);
                         }}
                     }});
-                    
+
                     // Revoke token
                     document.getElementById('revokeTokenBtn').addEventListener('click', async () => {{
                         const tokenId = document.getElementById('revokeTokenId').value;
@@ -646,7 +644,7 @@ class TokenHandlers:
                             showResponse('revokeTokenResponse', {{error: 'Token ID is required'}}, false);
                             return;
                         }}
-                        
+
                         try {{
                             const response = await fetch(`/token/revoke?token_id=${{encodeURIComponent(tokenId)}}`, {{
                                 method: 'DELETE',
@@ -654,7 +652,7 @@ class TokenHandlers:
                             }});
                             const result = await response.json();
                             showResponse('revokeTokenResponse', result, response.ok);
-                            
+
                             // Refresh token list if revocation was successful
                             if (response.ok) {{
                                 document.getElementById('listTokensBtn').click();
@@ -664,25 +662,25 @@ class TokenHandlers:
                             showResponse('revokeTokenResponse', {{error: error.message}}, false);
                         }}
                     }});
-                    
+
                 </script>
             </body>
             </html>
             """
-            
+
             return HTMLResponse(html_content)
-            
+
         except Exception as e:
             self.logger.error(
                 "Error in handle_demo_page (%s)",
                 type(e).__name__,
             )
-            error_html = f"""
+            error_html = """
             <!DOCTYPE html>
             <html>
             <head>
                 <title>Token Management Error</title>
-                <style>body {{ font-family: Arial, sans-serif; margin: 50px; }}</style>
+                <style>body { font-family: Arial, sans-serif; margin: 50px; }</style>
             </head>
             <body>
                 <h1>Token Management Error</h1>

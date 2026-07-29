@@ -21,15 +21,19 @@ Tests the query execution functionality through actual MCP client-server communi
 Assumes the server is already running and configured properly
 """
 
-import pytest
 import os
 import sys
-from typing import Dict, Any
+
+import pytest
 
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from test.test_config_loader import get_test_config, create_test_client, test_server_connectivity
+from test.test_config_loader import (
+    create_test_client,
+    get_test_config,
+    test_server_connectivity,
+)
 
 
 class TestQueryExecutorClientServer:
@@ -56,48 +60,48 @@ class TestQueryExecutorClientServer:
     async def test_simple_select_query_via_client(self, client, test_config):
         """Test simple SELECT query through client"""
         sample_queries = test_config.get_sample_queries()
-        
+
         async def test_callback(client_instance):
             result = await client_instance.execute_sql(sample_queries[0])  # "SELECT 1 as test_value"
-            
+
             # Verify result structure
             assert "success" in result, "Result should contain 'success' field"
-            
+
             if result["success"]:
                 assert "data" in result, "Successful result should contain 'data' field"
             else:
                 assert "error" in result, "Failed result should contain 'error' field"
-            
+
             return result
-        
+
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_show_databases_query_via_client(self, client, test_config):
         """Test SHOW DATABASES query through client"""
         sample_queries = test_config.get_sample_queries()
-        
+
         async def test_callback(client_instance):
             result = await client_instance.execute_sql(sample_queries[1])  # "SHOW DATABASES"
-            
+
             # Verify result structure
             assert "success" in result, "Result should contain 'success' field"
             return result
-        
+
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
     async def test_information_schema_query_via_client(self, client, test_config):
         """Test information_schema query through client"""
         sample_queries = test_config.get_sample_queries()
-        
+
         async def test_callback(client_instance):
             result = await client_instance.execute_sql(sample_queries[2])  # "SELECT COUNT(*) FROM information_schema.tables"
-            
+
             # Verify result structure
             assert "success" in result, "Result should contain 'success' field"
             return result
-        
+
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
@@ -108,11 +112,11 @@ class TestQueryExecutorClientServer:
                 "sql": "SELECT 1 as test_value",
                 "max_rows": 10
             })
-            
+
             # Verify result structure
             assert "success" in result, "Result should contain 'success' field"
             return result
-        
+
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
@@ -120,11 +124,11 @@ class TestQueryExecutorClientServer:
         """Test query error handling through client"""
         async def test_callback(client_instance):
             result = await client_instance.execute_sql("INVALID SQL SYNTAX")
-            
+
             # Should get a result (either success or error)
             assert "success" in result, "Result should contain 'success' field"
             return result
-        
+
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
@@ -132,17 +136,17 @@ class TestQueryExecutorClientServer:
         """Test query with authentication token"""
         if not test_config.is_security_tests_enabled():
             pytest.skip("Security tests are disabled")
-        
+
         auth_tokens = test_config.get_auth_tokens()
-        
+
         async def test_callback(client_instance):
             result = await client_instance.call_tool("exec_query", {
                 "sql": "SELECT 1 as test_value",
                 "auth_token": auth_tokens["valid_token"]
             })
-            
+
             # Verify result structure
             assert "success" in result, "Result should contain 'success' field"
             return result
-        
+
         await client.connect_and_run(test_callback)

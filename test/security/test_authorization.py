@@ -22,9 +22,9 @@ Authorization module tests
 import pytest
 
 from doris_mcp_server.utils.security import (
-    AuthorizationProvider,
     AuthContext,
-    SecurityLevel
+    AuthorizationProvider,
+    SecurityLevel,
 )
 
 
@@ -62,9 +62,9 @@ class TestAuthorizationProvider:
     async def test_analyst_access_public_resource(self, authz_provider, analyst_context):
         """Test analyst accessing public resource"""
         resource_uri = "/api/table/public_reports"
-        
+
         result = await authz_provider.check_permission(analyst_context, resource_uri, "read")
-        
+
         assert result is True
 
     @pytest.mark.asyncio
@@ -78,20 +78,20 @@ class TestAuthorizationProvider:
             session_id="session_123",
             security_level=SecurityLevel.PUBLIC  # Lower than CONFIDENTIAL
         )
-        
+
         resource_uri = "/api/table/user_info"
-        
+
         result = await authz_provider.check_permission(analyst_context, resource_uri, "read")
-        
+
         assert result is False
 
     @pytest.mark.asyncio
     async def test_admin_access_secret_resource(self, authz_provider, admin_context):
         """Test admin accessing secret resource"""
         resource_uri = "/api/table/payment_records"
-        
+
         result = await authz_provider.check_permission(admin_context, resource_uri, "read")
-        
+
         assert result is True
 
     @pytest.mark.asyncio
@@ -105,13 +105,13 @@ class TestAuthorizationProvider:
             session_id="session_123",
             security_level=SecurityLevel.INTERNAL
         )
-        
+
         resource_uri = "/api/table/some_table"
-        
+
         # Analyst should have read permission
         result = await authz_provider.check_permission(analyst_context, resource_uri, "read")
         assert result is True
-        
+
         # Analyst should not have write permission
         result = await authz_provider.check_permission(analyst_context, resource_uri, "write")
         assert result is False
@@ -120,20 +120,20 @@ class TestAuthorizationProvider:
     async def test_admin_override(self, authz_provider, admin_context):
         """Test admin permission override"""
         resource_uri = "/api/table/any_table"
-        
+
         # Admin should have all permissions
         result = await authz_provider.check_permission(admin_context, resource_uri, "read")
         assert result is True
-        
+
         result = await authz_provider.check_permission(admin_context, resource_uri, "write")
         assert result is True
 
     def test_parse_resource_uri(self, authz_provider):
         """Test resource URI parsing"""
         uri = "/api/table/user_info/default"
-        
+
         result = authz_provider._parse_resource_uri(uri)
-        
+
         assert result["type"] == "table"
         assert result["name"] == "user_info"
         assert result["schema"] == "default"
@@ -141,7 +141,7 @@ class TestAuthorizationProvider:
     def test_get_resource_security_level(self, authz_provider):
         """Test getting resource security level"""
         resource_info = {"name": "user_info", "type": "table"}
-        
+
         level = authz_provider._get_resource_security_level(resource_info)
-        
-        assert level == SecurityLevel.CONFIDENTIAL 
+
+        assert level == SecurityLevel.CONFIDENTIAL

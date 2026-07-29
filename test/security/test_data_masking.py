@@ -22,10 +22,10 @@ Data masking tests
 import pytest
 
 from doris_mcp_server.utils.security import (
-    DataMaskingProcessor,
     AuthContext,
+    DataMaskingProcessor,
+    MaskingRule,
     SecurityLevel,
-    MaskingRule
 )
 
 
@@ -63,7 +63,7 @@ class TestDataMaskingProcessor:
     async def test_phone_masking_for_internal_user(self, masking_processor, internal_user_context, sample_data):
         """Test phone number masking for internal user"""
         result = await masking_processor.process(sample_data, internal_user_context)
-        
+
         # Phone numbers should be masked
         assert result[0]["phone"] == "138****5678"
         assert result[1]["phone"] == "139****4321"
@@ -72,7 +72,7 @@ class TestDataMaskingProcessor:
     async def test_email_masking_for_internal_user(self, masking_processor, internal_user_context, sample_data):
         """Test email masking for internal user"""
         result = await masking_processor.process(sample_data, internal_user_context)
-        
+
         # Emails should be masked
         assert result[0]["email"] == "z******n@example.com"
         assert result[1]["email"] == "l**i@example.com"
@@ -81,7 +81,7 @@ class TestDataMaskingProcessor:
     async def test_no_masking_for_admin(self, masking_processor, admin_context, sample_data):
         """Test no masking for admin user"""
         result = await masking_processor.process(sample_data, admin_context)
-        
+
         # Admin should see original data
         assert result[0]["phone"] == "13812345678"
         assert result[0]["email"] == "zhangsan@example.com"
@@ -93,7 +93,7 @@ class TestDataMaskingProcessor:
         """Test ID card masking for confidential data"""
         # Internal user should not see ID card details (confidential level)
         result = await masking_processor.process(sample_data, internal_user_context)
-        
+
         # ID cards should be masked for internal users
         assert result[0]["id_card"] == "110101********1234"
         assert result[1]["id_card"] == "110101********2345"
@@ -102,9 +102,9 @@ class TestDataMaskingProcessor:
     async def test_empty_data_handling(self, masking_processor, internal_user_context):
         """Test empty data handling"""
         empty_data = []
-        
+
         result = await masking_processor.process(empty_data, internal_user_context)
-        
+
         assert result == []
 
     @pytest.mark.asyncio
@@ -119,9 +119,9 @@ class TestDataMaskingProcessor:
                 "id_card": None
             }
         ]
-        
+
         result = await masking_processor.process(data_with_nulls, internal_user_context)
-        
+
         # Null values should remain null
         assert result[0]["phone"] is None
         assert result[0]["email"] is None
@@ -130,35 +130,35 @@ class TestDataMaskingProcessor:
     def test_phone_masking_algorithm(self, masking_processor):
         """Test phone masking algorithm"""
         params = {"mask_char": "*", "keep_prefix": 3, "keep_suffix": 4}
-        
+
         result = masking_processor._mask_phone("13812345678", params)
-        
+
         assert result == "138****5678"
 
     def test_email_masking_algorithm(self, masking_processor):
         """Test email masking algorithm"""
         params = {"mask_char": "*"}
-        
+
         result = masking_processor._mask_email("zhangsan@example.com", params)
-        
+
         assert result == "z******n@example.com"
 
     def test_id_card_masking_algorithm(self, masking_processor):
         """Test ID card masking algorithm"""
         params = {"mask_char": "*", "keep_prefix": 6, "keep_suffix": 4}
-        
+
         result = masking_processor._mask_id_card("110101199001011234", params)
-        
+
         assert result == "110101********1234"
 
     def test_name_masking_algorithm(self, masking_processor):
         """Test name masking algorithm"""
         params = {"mask_char": "*"}
-        
+
         # Test 2-character name
         result = masking_processor._mask_name("张三", params)
         assert result == "张*"
-        
+
         # Test 3-character name
         result = masking_processor._mask_name("李小明", params)
         assert result == "李*明"
@@ -166,9 +166,9 @@ class TestDataMaskingProcessor:
     def test_partial_masking_algorithm(self, masking_processor):
         """Test partial masking algorithm"""
         params = {"mask_char": "*", "mask_ratio": 0.5}
-        
+
         result = masking_processor._mask_partial("1234567890", params)
-        
+
         # Should mask middle 50% of the string
         assert "*" in result
         assert len(result) == 10
@@ -181,17 +181,17 @@ class TestDataMaskingProcessor:
             parameters={"mask_char": "*", "keep_prefix": 3, "keep_suffix": 4},
             security_level=SecurityLevel.INTERNAL
         )
-        
+
         # Internal user should have rule applied
         assert masking_processor._should_apply_rule(rule, internal_user_context) is True
-        
+
         # Admin should not have rule applied
         assert masking_processor._should_apply_rule(rule, admin_context) is False
 
     def test_get_applicable_rules(self, masking_processor, internal_user_context):
         """Test getting applicable rules"""
         rules = masking_processor._get_applicable_rules(internal_user_context)
-        
+
         # Should return some rules for internal user
         assert len(rules) > 0
-        assert all(isinstance(rule, MaskingRule) for rule in rules) 
+        assert all(isinstance(rule, MaskingRule) for rule in rules)

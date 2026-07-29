@@ -23,7 +23,7 @@ Provides data types and models for OAuth authentication flow
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional, List
+from typing import Any
 
 from ..utils.datetime_utils import utc_now
 
@@ -46,13 +46,13 @@ class OAuthGrantType(Enum):
 class OAuthState:
     """OAuth state parameter for CSRF protection"""
     state: str
-    nonce: Optional[str] = None
-    pkce_verifier: Optional[str] = None
-    pkce_challenge: Optional[str] = None
+    nonce: str | None = None
+    pkce_verifier: str | None = None
+    pkce_challenge: str | None = None
     redirect_uri: str = ""
     created_at: datetime = None
     expires_at: datetime = None
-    
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = utc_now()
@@ -63,12 +63,12 @@ class OAuthTokens:
     """OAuth token response"""
     access_token: str
     token_type: str = "Bearer"
-    expires_in: Optional[int] = None
-    refresh_token: Optional[str] = None
-    scope: Optional[str] = None
-    id_token: Optional[str] = None  # OIDC ID token
+    expires_in: int | None = None
+    refresh_token: str | None = None
+    scope: str | None = None
+    id_token: str | None = None  # OIDC ID token
     created_at: datetime = None
-    
+
     def __post_init__(self):
         if self.created_at is None:
             self.created_at = utc_now()
@@ -78,16 +78,16 @@ class OAuthTokens:
 class OAuthUserInfo:
     """OAuth/OIDC user information"""
     sub: str  # Subject identifier
-    email: Optional[str] = None
-    email_verified: Optional[bool] = None
-    name: Optional[str] = None
-    given_name: Optional[str] = None
-    family_name: Optional[str] = None
-    picture: Optional[str] = None
-    locale: Optional[str] = None
-    roles: List[str] = None
-    raw_claims: Dict[str, Any] = None
-    
+    email: str | None = None
+    email_verified: bool | None = None
+    name: str | None = None
+    given_name: str | None = None
+    family_name: str | None = None
+    picture: str | None = None
+    locale: str | None = None
+    roles: list[str] = None
+    raw_claims: dict[str, Any] = None
+
     def __post_init__(self):
         if self.roles is None:
             self.roles = []
@@ -102,13 +102,13 @@ class OIDCDiscovery:
     authorization_endpoint: str
     token_endpoint: str
     introspection_endpoint: str | None = None
-    userinfo_endpoint: Optional[str] = None
-    jwks_uri: Optional[str] = None
-    scopes_supported: List[str] = None
-    response_types_supported: List[str] = None
-    subject_types_supported: List[str] = None
-    id_token_signing_alg_values_supported: List[str] = None
-    
+    userinfo_endpoint: str | None = None
+    jwks_uri: str | None = None
+    scopes_supported: list[str] = None
+    response_types_supported: list[str] = None
+    subject_types_supported: list[str] = None
+    id_token_signing_alg_values_supported: list[str] = None
+
     def __post_init__(self):
         if self.scopes_supported is None:
             self.scopes_supported = ["openid"]
@@ -124,9 +124,9 @@ class OIDCDiscovery:
 class OAuthError:
     """OAuth error response"""
     error: str
-    error_description: Optional[str] = None
-    error_uri: Optional[str] = None
-    state: Optional[str] = None
+    error_description: str | None = None
+    error_uri: str | None = None
+    state: str | None = None
 
 
 @dataclass
@@ -136,35 +136,35 @@ class OAuthProviderConfig:
     client_id: str
     client_secret: str
     redirect_uri: str
-    scopes: List[str]
+    scopes: list[str]
     required_scopes: list[str]
     issuer: str
     resource: str
     audience: str
-    
+
     # Endpoints
     authorization_endpoint: str
     token_endpoint: str
     introspection_endpoint: str | None = None
     introspection_client_id: str = ""
     introspection_client_secret: str = ""
-    userinfo_endpoint: Optional[str] = None
-    jwks_uri: Optional[str] = None
-    
+    userinfo_endpoint: str | None = None
+    jwks_uri: str | None = None
+
     # Discovery
-    discovery_url: Optional[str] = None
-    
+    discovery_url: str | None = None
+
     # Settings
     pkce_enabled: bool = True
     nonce_enabled: bool = True
-    
+
     # User mapping
     user_id_claim: str = "sub"
     email_claim: str = "email"
     name_claim: str = "name"
     roles_claim: str = "roles"
-    default_roles: List[str] = None
-    
+    default_roles: list[str] = None
+
     def __post_init__(self):
         if self.default_roles is None:
             self.default_roles = ["oauth_user"]

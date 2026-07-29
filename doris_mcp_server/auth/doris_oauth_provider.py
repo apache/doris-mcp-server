@@ -25,11 +25,9 @@ from .doris_oauth_redirects import DorisOAuthRedirectPolicy, is_loopback_url
 from .doris_oauth_scope_policy import DorisOAuthScopePolicy
 from .doris_oauth_store import DorisOAuthStore
 from .doris_oauth_types import (
-    AccessTokenRecord,
     AuthorizeError,
     AuthTransactionRecord,
     ProtectedResourceAuthError,
-    RefreshTokenRecord,
     RevocationEndpointError,
     TokenEndpointError,
 )

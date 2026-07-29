@@ -23,20 +23,16 @@ Implements query optimization, cache management and performance monitoring funct
 import asyncio
 import hashlib
 import json
-import logging
 import time
-import os
-import uuid
-import traceback
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, date
-from typing import Any, Dict
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import sqlparse
 
-from .db import DorisConnectionManager, QueryResult, get_first_sql_keyword
 from .datetime_utils import utc_now
+from .db import DorisConnectionManager, QueryResult, get_first_sql_keyword
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -357,7 +353,7 @@ class DorisQueryExecutor:
         class DefaultConfig:
             def __init__(self):
                 self.performance = DefaultPerformanceConfig()
-                
+
         class DefaultPerformanceConfig:
             def __init__(self):
                 self.max_cache_size = 1000
@@ -446,10 +442,10 @@ class DorisQueryExecutor:
         self, query_request: QueryRequest, auth_context
     ) -> QueryResult:
         """Internal query execution"""
-        
+
         # Database configuration should already be handled during authentication
         # No need to configure again during query execution
-        
+
         # Optimize query
         optimized_sql = await self.query_optimizer.optimize_query(
             query_request.sql, {"user_roles": getattr(auth_context, 'roles', [])}
@@ -463,7 +459,7 @@ class DorisQueryExecutor:
                     self.connection_manager.execute_query(query_request.session_id, optimized_sql, query_request.parameters, auth_context),
                     timeout=query_request.timeout
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise Exception(f"Query timeout after {query_request.timeout} seconds")
         else:
             result = await self.connection_manager.execute_query(query_request.session_id, optimized_sql, query_request.parameters, auth_context)
@@ -626,7 +622,7 @@ class DorisQueryExecutor:
         session_id: str = "mcp_session",
         user_id: str = "mcp_user",
         auth_context=None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute optional catalog/db context and target SQL on one routed connection."""
         try:
             context_statements = self._build_context_statements(db_name, catalog_name)
@@ -751,7 +747,7 @@ class DorisQueryExecutor:
         db_name: str | None = None,
         catalog_name: str | None = None,
         auth_context = None  # FIX for Issue #62 Bug 1: Accept auth_context with token
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute SQL query for MCP interface - unified method
 
         FIX for Issue #62 Bug 1: Now accepts auth_context parameter to support token-bound database configuration
@@ -769,7 +765,7 @@ class DorisQueryExecutor:
                     }
 
                 # Import required security modules
-                from .security import DorisSecurityManager, AuthContext, SecurityLevel
+                from .security import AuthContext, DorisSecurityManager, SecurityLevel
 
                 # FIX: Use provided auth_context if available (contains token for DB config)
                 # Otherwise create default auth context for backward compatibility
@@ -879,10 +875,10 @@ class DorisQueryExecutor:
                     timeout=timeout,
                     cache_enabled=False  # Disable cache for MCP calls to ensure fresh data
                 )
-                
+
                 # Execute query with retry logic
                 result = await self.execute_query(query_request, auth_context)
-                
+
                 # Serialize data for JSON response
                 serialized_data = []
                 for row in result.data:
@@ -898,36 +894,36 @@ class DorisQueryExecutor:
                         "query": sql
                     }
                 }
-                
+
             except Exception as e:
                 error_msg = str(e)
                 error_str = error_msg.lower()
-                
+
                 # Check if it's a connection-related error that we should retry
                 connection_errors = [
-                    "at_eof", "connection", "closed", "nonetype", 
+                    "at_eof", "connection", "closed", "nonetype",
                     "transport", "reader", "broken pipe", "connection reset"
                 ]
-                
+
                 is_connection_error = any(err in error_str for err in connection_errors)
-                
+
                 if is_connection_error and retry_count < max_retries:
                     retry_count += 1
                     self.logger.warning(f"Connection error detected, retrying ({retry_count}/{max_retries}): {e}")
-                    
+
                     # Release the problematic connection
                     try:
                         await self.connection_manager.release_connection(session_id)
                     except Exception:
                         pass  # Ignore cleanup errors
-                    
+
                     # Wait a bit before retry
                     await asyncio.sleep(0.5 * retry_count)
                     continue
                 else:
                     # If we've exhausted retries or it's not a connection error, return error
                     error_analysis = self._analyze_error(error_msg)
-                    
+
                     return {
                         "success": False,
                         "error": error_analysis.get("user_message", error_msg),
@@ -939,7 +935,7 @@ class DorisQueryExecutor:
                             "retry_count": retry_count
                         }
                     }
-        
+
         # This should never be reached, but just in case
         return {
             "success": False,
@@ -951,18 +947,18 @@ class DorisQueryExecutor:
             }
         }
 
-    def _serialize_row_data(self, row_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _serialize_row_data(self, row_data: dict[str, Any]) -> dict[str, Any]:
         """Serialize row data for JSON response"""
         serialized = {}
-        
+
         for key, value in row_data.items():
             if value is None:
                 serialized[key] = None
-            elif isinstance(value, (str, int, float, bool)):
+            elif isinstance(value, str | int | float | bool):
                 serialized[key] = value
             elif isinstance(value, Decimal):
                 serialized[key] = float(value)
-            elif isinstance(value, (datetime, date)):
+            elif isinstance(value, datetime | date):
                 serialized[key] = value.isoformat()
             elif isinstance(value, bytes):
                 try:
@@ -971,13 +967,13 @@ class DorisQueryExecutor:
                     serialized[key] = str(value)
             else:
                 serialized[key] = str(value)
-                
+
         return serialized
 
-    def _analyze_error(self, error_message: str) -> Dict[str, str]:
+    def _analyze_error(self, error_message: str) -> dict[str, str]:
         """Analyze error message and provide user-friendly feedback"""
         error_msg_lower = error_message.lower()
-        
+
         if "at_eof" in error_msg_lower or "nonetype" in error_msg_lower and "at_eof" in error_msg_lower:
             return {
                 "error_type": "connection_lost",
@@ -990,7 +986,7 @@ class DorisQueryExecutor:
             }
         elif "column" in error_msg_lower and ("unknown" in error_msg_lower or "doesn't exist" in error_msg_lower):
             return {
-                "error_type": "column_not_found", 
+                "error_type": "column_not_found",
                 "user_message": "One or more columns in the query do not exist. Please check column names."
             }
         elif "syntax error" in error_msg_lower or "sql syntax" in error_msg_lower:
@@ -1126,7 +1122,7 @@ class QueryPerformanceMonitor:
 
 
 # Unified convenience function for MCP integration
-async def execute_sql_query(sql: str, connection_manager: DorisConnectionManager, **kwargs) -> Dict[str, Any]:
+async def execute_sql_query(sql: str, connection_manager: DorisConnectionManager, **kwargs) -> dict[str, Any]:
     """Execute SQL query - unified convenience function for MCP tools
 
     This function now includes security validation to ensure safe query execution.

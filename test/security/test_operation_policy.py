@@ -2,15 +2,15 @@ from types import SimpleNamespace
 
 import pytest
 
+from doris_mcp_server.auth.doris_oauth_scope_policy import DorisOAuthScopePolicy
+from doris_mcp_server.auth.doris_oauth_types import TokenEndpointError
 from doris_mcp_server.auth.operation_policy import (
     HIGH_RISK_TOOLS,
-    OperationAuthorizationError,
     P4_DORIS_OAUTH_METADATA_TOOLS,
+    OperationAuthorizationError,
     authorize_operation,
     filter_tools_for_auth_context,
 )
-from doris_mcp_server.auth.doris_oauth_scope_policy import DorisOAuthScopePolicy
-from doris_mcp_server.auth.doris_oauth_types import TokenEndpointError
 from doris_mcp_server.utils.security import AuthContext
 
 

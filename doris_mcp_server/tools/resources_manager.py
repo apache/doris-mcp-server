@@ -32,7 +32,6 @@ from ..utils.logger import get_logger
 from ..utils.redaction import redact_uri
 from ..utils.sql_security_utils import get_auth_context, quote_identifier
 
-
 logger = get_logger(__name__)
 
 
@@ -149,7 +148,7 @@ class DorisResourcesManager:
     def _first_row_value(self, row: Any) -> Any:
         if isinstance(row, dict):
             return next(iter(row.values()), None)
-        if isinstance(row, (list, tuple)):
+        if isinstance(row, list | tuple):
             return row[0] if row else None
         return row
 
@@ -386,7 +385,7 @@ class DorisResourcesManager:
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # SQL sink audit: schema column -> quote_identifier and database value
         # -> bound param; fixed template -> DorisConnection.execute.
-        tables_query = """
+        tables_query = f"""
         SELECT
             table_name,
             table_comment,
@@ -396,7 +395,7 @@ class DorisResourcesManager:
         WHERE {schema_filter}
         AND table_type = 'BASE TABLE'
         ORDER BY table_name
-        """.format(schema_filter=schema_filter)  # nosec B608
+        """  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -428,7 +427,7 @@ class DorisResourcesManager:
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # SQL sink audit: schema column -> quote_identifier; database/table
         # values -> bound params; fixed template -> DorisConnection.execute.
-        columns_query = """
+        columns_query = f"""
         SELECT
             column_name,
             data_type,
@@ -440,7 +439,7 @@ class DorisResourcesManager:
         WHERE {schema_filter}
         AND table_name = %s
         ORDER BY ordinal_position
-        """.format(schema_filter=schema_filter)  # nosec B608
+        """  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -470,7 +469,7 @@ class DorisResourcesManager:
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # SQL sink audit: schema column -> quote_identifier and database value
         # -> bound param; fixed template -> DorisConnection.execute.
-        views_query = """
+        views_query = f"""
         SELECT
             table_name,
             table_comment,
@@ -478,7 +477,7 @@ class DorisResourcesManager:
         FROM information_schema.views
         WHERE {schema_filter}
         ORDER BY table_name
-        """.format(schema_filter=schema_filter)  # nosec B608
+        """  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -505,7 +504,7 @@ class DorisResourcesManager:
         # Get basic table information
         # SQL sink audit: schema column -> quote_identifier; database/table
         # values -> bound params; fixed template -> DorisConnection.execute.
-        table_info_query = """
+        table_info_query = f"""
         SELECT
             table_name,
             table_comment,
@@ -515,7 +514,7 @@ class DorisResourcesManager:
         FROM information_schema.tables
         WHERE {schema_filter}
         AND table_name = %s
-        """.format(schema_filter=schema_filter)  # nosec B608
+        """  # nosec B608
 
         async with self._connection_context("system") as connection:
             auth_context = get_auth_context()
@@ -556,7 +555,7 @@ class DorisResourcesManager:
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # SQL sink audit: schema column -> quote_identifier; database/table
         # values -> bound params; fixed template -> DorisConnection.execute.
-        indexes_query = """
+        indexes_query = f"""
         SELECT
             index_name,
             column_name,
@@ -566,7 +565,7 @@ class DorisResourcesManager:
         WHERE {schema_filter}
         AND table_name = %s
         ORDER BY index_name, seq_in_index
-        """.format(schema_filter=schema_filter)  # nosec B608
+        """  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -581,7 +580,7 @@ class DorisResourcesManager:
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # SQL sink audit: schema column -> quote_identifier; database/view
         # values -> bound params; fixed template -> DorisConnection.execute.
-        view_query = """
+        view_query = f"""
         SELECT
             table_name,
             table_comment,
@@ -589,7 +588,7 @@ class DorisResourcesManager:
         FROM information_schema.views
         WHERE {schema_filter}
         AND table_name = %s
-        """.format(schema_filter=schema_filter)  # nosec B608
+        """  # nosec B608
 
         async with self._connection_context("system") as connection:
             auth_context = get_auth_context()
@@ -619,14 +618,14 @@ class DorisResourcesManager:
         # Get table statistics
         # SQL sink audit: schema column -> quote_identifier and database value
         # -> bound param; fixed template -> DorisConnection.execute.
-        table_stats_query = """
+        table_stats_query = f"""
         SELECT
             COUNT(*) as table_count,
             SUM(table_rows) as total_rows
         FROM information_schema.tables
         WHERE {schema_filter}
         AND table_type = 'BASE TABLE'
-        """.format(schema_filter=schema_filter)  # nosec B608
+        """  # nosec B608
 
         async with self._connection_context("system") as connection:
             auth_context = get_auth_context()
@@ -639,11 +638,11 @@ class DorisResourcesManager:
 
             # Get view statistics
             # SQL sink audit: same quoted schema column and bound database value.
-            view_stats_query = """
+            view_stats_query = f"""
             SELECT COUNT(*) as view_count
             FROM information_schema.views
             WHERE {schema_filter}
-            """.format(schema_filter=schema_filter)  # nosec B608
+            """  # nosec B608
 
             view_result = await connection.execute(
                 view_stats_query,

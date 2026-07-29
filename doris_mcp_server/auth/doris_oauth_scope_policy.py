@@ -3,7 +3,6 @@
 
 from .doris_oauth_types import TokenEndpointError
 
-
 BASE_DORIS_OAUTH_SCOPES = frozenset({"tool:list"})
 RESOURCE_SCOPES = frozenset({"resource:list", "resource:read"})
 

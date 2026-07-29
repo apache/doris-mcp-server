@@ -19,13 +19,18 @@
 Query executor tests
 """
 
-import pytest
 from datetime import UTC, datetime
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from doris_mcp_server.utils.query_executor import CachedQuery, DorisQueryExecutor, QueryRequest
+import pytest
+
 from doris_mcp_server.utils.config import DorisConfig
 from doris_mcp_server.utils.db import QueryResult
+from doris_mcp_server.utils.query_executor import (
+    CachedQuery,
+    DorisQueryExecutor,
+    QueryRequest,
+)
 from doris_mcp_server.utils.security import AuthContext
 
 
@@ -36,9 +41,9 @@ class TestDorisQueryExecutor:
     def mock_config(self):
         """Create mock configuration"""
         from doris_mcp_server.utils.config import DatabaseConfig, SecurityConfig
-        
+
         config = Mock(spec=DorisConfig)
-        
+
         # Add database config
         config.database = Mock(spec=DatabaseConfig)
         config.database.host = "localhost"
@@ -50,14 +55,14 @@ class TestDorisQueryExecutor:
         config.database.max_connections = 20
         config.database.connection_timeout = 30
         config.database.max_connection_age = 3600
-        
+
         # Add security config
         config.security = Mock(spec=SecurityConfig)
         config.security.enable_masking = True
         config.security.auth_type = "token"
         config.security.token_secret = "test_secret"
         config.security.token_expiry = 3600
-        
+
         return config
 
     @pytest.fixture
@@ -97,10 +102,10 @@ class TestDorisQueryExecutor:
                 "execution_time": 0.15,
                 "columns": ["id", "name", "email"]
             }
-            
+
             sql = "SELECT id, name, email FROM users LIMIT 2"
             result = await query_executor.execute_sql_for_mcp(sql)
-            
+
             # Verify results
             assert result["success"] is True
             assert result["row_count"] == 2
@@ -119,10 +124,10 @@ class TestDorisQueryExecutor:
                 "row_count": 1,
                 "execution_time": 0.1
             }
-            
+
             sql = "SELECT id, name FROM users WHERE department = 'sales'"
             result = await query_executor.execute_sql_for_mcp(sql)
-            
+
             # Verify results
             assert result["success"] is True
             assert result["row_count"] == 1
@@ -137,10 +142,10 @@ class TestDorisQueryExecutor:
                 "error": "Connection failed",
                 "data": None
             }
-            
+
             sql = "SELECT * FROM users"
             result = await query_executor.execute_sql_for_mcp(sql)
-            
+
             assert result["success"] is False
             assert "Connection failed" in result["error"]
 
@@ -153,10 +158,10 @@ class TestDorisQueryExecutor:
                 "error": "SQL syntax error",
                 "data": None
             }
-            
+
             sql = "SELECT * FROM non_existent_table"
             result = await query_executor.execute_sql_for_mcp(sql)
-            
+
             assert result["success"] is False
             assert "SQL syntax error" in result["error"]
 
@@ -170,10 +175,10 @@ class TestDorisQueryExecutor:
                 "row_count": 0,
                 "execution_time": 0.05
             }
-            
+
             sql = "SELECT * FROM users WHERE id = 999"
             result = await query_executor.execute_sql_for_mcp(sql)
-            
+
             assert result["success"] is True
             assert result["data"] == []
             assert result["row_count"] == 0
@@ -190,10 +195,10 @@ class TestDorisQueryExecutor:
                 "row_count": 100,
                 "execution_time": 0.2
             }
-            
+
             sql = "SELECT id, name FROM users"
             result = await query_executor.execute_sql_for_mcp(sql, limit=100)
-            
+
             # Should be limited to max_rows
             assert result["success"] is True
             assert len(result["data"]) == 100
@@ -211,24 +216,24 @@ class TestDorisQueryExecutor:
                 metadata={}
             )
             mock_get_conn.return_value = mock_connection
-            
+
             sql = "SELECT id, name FROM users LIMIT 1"
             result = await query_executor.execute_sql_for_mcp(sql)
-            
+
             # Should return success format
             assert "success" in result
             if result["success"]:
                 assert "data" in result
-                assert "row_count" in result 
+                assert "row_count" in result
 
     @pytest.mark.asyncio
     async def test_execute_multi_sql_statements(self, query_executor):
         """Test execution of multiple SQL statements"""
         from doris_mcp_server.utils.query_executor import QueryResult
-        
+
         # Disable security check for this test
         query_executor.connection_manager.config.security.enable_security_check = False
-        
+
         with patch.object(query_executor, 'execute_query') as mock_execute:
             # Mock results for three SQL statements
             mock_execute.side_effect = [
@@ -254,40 +259,40 @@ class TestDorisQueryExecutor:
                     metadata={"columns": ["count"]}
                 )
             ]
-            
+
             # Execute multiple SQL statements separated by semicolons
             multi_sql = """
                 SELECT id, name FROM users WHERE id = 1;
                 SELECT id, name FROM users WHERE id = 2;
                 SELECT COUNT(*) as count FROM users;
             """
-            
+
             result = await query_executor.execute_sql_for_mcp(multi_sql)
-            
+
             # Verify the result structure for multiple statements
             assert result["success"] is True
             assert result["multiple_results"] is True
             assert "results" in result
             assert len(result["results"]) == 3
-            
+
             # Verify first query result
             assert result["results"][0]["data"] == [{"id": 1, "name": "张三"}]
             assert result["results"][0]["row_count"] == 1
             assert result["results"][0]["metadata"]["columns"] == ["id", "name"]
             assert result["results"][0]["metadata"]["query"] == "SELECT id, name FROM users WHERE id = 1"
-            
+
             # Verify second query result
             assert result["results"][1]["data"] == [{"id": 2, "name": "李四"}]
             assert result["results"][1]["row_count"] == 1
             assert result["results"][1]["metadata"]["columns"] == ["id", "name"]
             assert result["results"][1]["metadata"]["query"] == "SELECT id, name FROM users WHERE id = 2"
-            
+
             # Verify third query result
             assert result["results"][2]["data"] == [{"count": 100}]
             assert result["results"][2]["row_count"] == 1
             assert result["results"][2]["metadata"]["columns"] == ["count"]
             assert result["results"][2]["metadata"]["query"] == "SELECT COUNT(*) as count FROM users"
-            
+
             # Verify execute_query was called three times
             assert mock_execute.call_count == 3
 

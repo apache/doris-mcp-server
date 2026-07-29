@@ -67,7 +67,7 @@ class TestEndToEndIntegration:
         """Test complete query workflow with security"""
         with patch.object(doris_server.tools_manager.query_executor, 'execute_query') as mock_execute:
             mock_execute.return_value = sample_data
-            
+
             # Mock authentication
             with patch.object(doris_server.security_manager, 'authenticate_request') as mock_auth:
                 mock_auth.return_value = AuthContext(
@@ -77,16 +77,16 @@ class TestEndToEndIntegration:
                     session_id="session_123",
                     security_level=SecurityLevel.INTERNAL
                 )
-                
+
                 # Mock authorization
                 with patch.object(doris_server.security_manager, 'authorize_resource_access') as mock_authz:
                     mock_authz.return_value = True
-                    
+
                     # Mock SQL validation
                     with patch.object(doris_server.security_manager, 'validate_sql_security') as mock_validate:
                         from doris_mcp_server.utils.security import ValidationResult
                         mock_validate.return_value = ValidationResult(is_valid=True)
-                        
+
                         # Mock data masking
                         with patch.object(doris_server.security_manager, 'apply_data_masking') as mock_mask:
                             masked_data = [
@@ -100,28 +100,28 @@ class TestEndToEndIntegration:
                                 }
                             ]
                             mock_mask.return_value = masked_data
-                            
+
                             # Simulate complete workflow
                             auth_info = {"type": "token", "token": "valid_token_123"}
                             auth_context = await doris_server.security_manager.authenticate_request(auth_info)
-                            
+
                             resource_uri = "/api/table/users"
                             has_access = await doris_server.security_manager.authorize_resource_access(
                                 auth_context, resource_uri
                             )
                             assert has_access is True
-                            
+
                             sql = "SELECT * FROM users LIMIT 1"
                             validation = await doris_server.security_manager.validate_sql_security(
                                 sql, auth_context
                             )
                             assert validation.is_valid is True
-                            
+
                             raw_data = await doris_server.tools_manager.query_executor.execute_query(sql)
                             final_data = await doris_server.security_manager.apply_data_masking(
                                 raw_data, auth_context
                             )
-                            
+
                             # Verify data is properly masked
                             assert final_data[0]["phone"] == "138****5678"
                             assert final_data[0]["email"] == "z*******n@example.com"
@@ -137,21 +137,21 @@ class TestEndToEndIntegration:
                 session_id="session_123",
                 security_level=SecurityLevel.INTERNAL
             )
-            
+
             # Test unauthorized resource access
             with patch.object(doris_server.security_manager, 'authorize_resource_access') as mock_authz:
                 mock_authz.return_value = False
-                
+
                 auth_context = await doris_server.security_manager.authenticate_request({
                     "type": "token", "token": "valid_token_123"
                 })
-                
+
                 # Try to access confidential resource
                 resource_uri = "/api/table/payment_records"
                 has_access = await doris_server.security_manager.authorize_resource_access(
                     auth_context, resource_uri
                 )
-                
+
                 assert has_access is False
 
     @pytest.mark.asyncio
@@ -165,17 +165,17 @@ class TestEndToEndIntegration:
                 session_id="session_123",
                 security_level=SecurityLevel.INTERNAL
             )
-            
+
             auth_context = await doris_server.security_manager.authenticate_request({
                 "type": "token", "token": "valid_token_123"
             })
-            
+
             # Test SQL injection attempt
             malicious_sql = "SELECT * FROM users WHERE id = 1; DROP TABLE users;"
             validation = await doris_server.security_manager.validate_sql_security(
                 malicious_sql, auth_context
             )
-            
+
             assert validation.is_valid is False
             assert validation.risk_level == "high"
 
@@ -184,7 +184,7 @@ class TestEndToEndIntegration:
         """Test admin user bypassing restrictions"""
         with patch.object(doris_server.tools_manager.query_executor, 'execute_query') as mock_execute:
             mock_execute.return_value = sample_data
-            
+
             with patch.object(doris_server.security_manager, 'authenticate_request') as mock_auth:
                 mock_auth.return_value = AuthContext(
                     user_id="admin1",
@@ -193,26 +193,26 @@ class TestEndToEndIntegration:
                     session_id="session_456",
                     security_level=SecurityLevel.SECRET
                 )
-                
+
                 # Admin should access any resource
                 with patch.object(doris_server.security_manager, 'authorize_resource_access') as mock_authz:
                     mock_authz.return_value = True
-                    
+
                     # Admin should see original data (no masking)
                     with patch.object(doris_server.security_manager, 'apply_data_masking') as mock_mask:
                         mock_mask.return_value = sample_data  # Original data
-                        
+
                         auth_context = await doris_server.security_manager.authenticate_request({
                             "type": "basic", "username": "admin", "password": "admin123"
                         })
-                        
+
                         # Admin accesses secret resource
                         resource_uri = "/api/table/payment_records"
                         has_access = await doris_server.security_manager.authorize_resource_access(
                             auth_context, resource_uri
                         )
                         assert has_access is True
-                        
+
                         # Admin sees original data
                         raw_data = await doris_server.tools_manager.query_executor.execute_query(
                             "SELECT * FROM users LIMIT 1"
@@ -220,7 +220,7 @@ class TestEndToEndIntegration:
                         final_data = await doris_server.security_manager.apply_data_masking(
                             raw_data, auth_context
                         )
-                        
+
                         # Should be original data (no masking)
                         assert final_data[0]["phone"] == "13812345678"
                         assert final_data[0]["email"] == "zhangsan@example.com"
@@ -230,11 +230,11 @@ class TestEndToEndIntegration:
         """Test tool execution with security checks"""
         with patch.object(doris_server.tools_manager.connection_manager, 'execute_query') as mock_execute:
             mock_execute.return_value = [{"Database": "test_db"}]
-            
+
             # Test tool execution through tools manager
             result = await doris_server.tools_manager.call_tool("get_db_list", {})
             result_data = json.loads(result)
-            
+
             # Accept either success result or error (due to mock environment)
             assert "result" in result_data or "error" in result_data
 
@@ -244,12 +244,12 @@ class TestEndToEndIntegration:
         # Test authentication failure
         with patch.object(doris_server.security_manager, 'authenticate_request') as mock_auth:
             mock_auth.side_effect = Exception("Invalid token")
-            
+
             with pytest.raises(Exception) as exc_info:
                 await doris_server.security_manager.authenticate_request({
                     "type": "token", "token": "invalid_token"
                 })
-            
+
             assert "Invalid token" in str(exc_info.value)
 
     @pytest.mark.asyncio
@@ -264,11 +264,11 @@ class TestEndToEndIntegration:
                     "error_count": 2
                 }
             ]
-            
+
             # Test performance stats tool
             result = await doris_server.tools_manager.call_tool("get_db_list", {})
             result_data = json.loads(result)
-            
+
             # Accept either success result or error (due to mock environment)
             assert "result" in result_data or "error" in result_data
 
@@ -279,7 +279,7 @@ class TestEndToEndIntegration:
         assert doris_server.config is not None
         assert doris_server.tools_manager is not None
         assert doris_server.security_manager is not None
-        
+
         # Verify tools are available - use list_tools instead
         tools = await doris_server.tools_manager.list_tools()
-        assert len(tools) > 0 
+        assert len(tools) > 0

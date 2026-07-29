@@ -2,8 +2,11 @@ import pytest
 
 from doris_mcp_server.utils.db import DorisUserPoolMissingError, QueryResult
 from doris_mcp_server.utils.schema_extractor import MetadataExtractor
-from doris_mcp_server.utils.security import AuthContext, reset_auth_context, set_current_auth_context
-
+from doris_mcp_server.utils.security import (
+    AuthContext,
+    reset_auth_context,
+    set_current_auth_context,
+)
 
 METADATA_TOOL_CASES = [
     ("get_db_list", "get_db_list_for_mcp", (None,)),

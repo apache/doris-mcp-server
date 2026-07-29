@@ -60,43 +60,43 @@ _doris_oauth_handlers = None
 async def initialize_worker():
     """Initialize MCP server and managers for this worker process"""
     global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_security_manager, _worker_tools_manager, _worker_session_manager_context, _worker_initialized, _oauth_handlers, _token_handlers, _worker_effective_auth, _doris_oauth_handlers
-    
+
     if _worker_initialized:
         return
-    
+
     try:
         # Import logger properly
         from .utils.logger import get_logger
         logger = get_logger(__name__)
-        
+
         logger.info(f"Initializing MCP worker process {os.getpid()}")
-        
+
         # Create configuration
         config = DorisConfig.from_env()
         _worker_effective_auth = normalize_effective_auth_config(
             config, requested_workers=getattr(config, "workers", 1)
         )
-        
+
         # Initialize enhanced logging system
         from .utils.config import ConfigManager
         config_manager = ConfigManager(config)
         config_manager.setup_logging()
-        
+
         # Create security manager
         _worker_security_manager = DorisSecurityManager(config)
-        
+
         # Initialize security manager first (includes JWT setup if enabled)
         await _worker_security_manager.initialize()
         logger.info(f"Worker {os.getpid()} security manager initialization completed")
-        
+
         # Create connection manager with token manager for token-bound DB config
         token_manager = _worker_security_manager.auth_provider.token_manager if hasattr(_worker_security_manager, 'auth_provider') and hasattr(_worker_security_manager.auth_provider, 'token_manager') else None
         _worker_connection_manager = DorisConnectionManager(config, _worker_security_manager, token_manager)
-        
+
         # Set connection manager reference in security manager for database validation
         _worker_security_manager.connection_manager = _worker_connection_manager
         _worker_security_manager.auth_provider.configure_doris_oauth(_worker_connection_manager)
-        
+
         global_pool_created = (
             await _worker_connection_manager.initialize_for_http_mode()
         )
@@ -108,7 +108,7 @@ async def initialize_worker():
                 "Doris OAuth requires the configured service/global Doris account "
                 "to initialize successfully"
             )
-        
+
         # Create managers
         resources_manager = DorisResourcesManager(_worker_connection_manager)
         _worker_tools_manager = DorisToolsManager(_worker_connection_manager)
@@ -123,10 +123,10 @@ async def initialize_worker():
             version=config.server_version,
             logger=logger,
         )
-        
+
         # Create session manager for this worker
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-        
+
         _worker_session_manager = StreamableHTTPSessionManager(
             app=_worker_server,
             json_response=True,
@@ -137,11 +137,11 @@ async def initialize_worker():
                 allowed_origins=config.mcp_allowed_origins,
             ),
         )
-        
+
         # Start the session manager context
         _worker_session_manager_context = _worker_session_manager.run()
         await _worker_session_manager_context.__aenter__()
-        
+
         # Initialize OAuth and Token handlers
         from .auth.oauth_handlers import OAuthHandlers
         from .auth.token_handlers import TokenHandlers
@@ -152,10 +152,10 @@ async def initialize_worker():
             _doris_oauth_handlers = DorisOAuthHandlers(
                 _worker_security_manager.auth_provider.doris_oauth_provider
             )
-        
+
         _worker_initialized = True
         logger.info(f"Worker {os.getpid()} MCP initialization completed successfully")
-        
+
     except Exception as e:
         from .utils.logger import get_logger
         logger = get_logger(__name__)
@@ -372,14 +372,14 @@ async def lifespan(app):
         from .utils.logger import get_logger
         logger = get_logger(__name__)
         logger.info(f"Worker {os.getpid()} startup completed")
-        
+
         yield
-        
+
     finally:
         # Shutdown
         from .utils.logger import get_logger
         logger = get_logger(__name__)
-        
+
         # Close session manager context
         if _worker_session_manager_context:
             try:
@@ -394,21 +394,21 @@ async def lifespan(app):
                 logger.info(f"Worker {os.getpid()} tools manager closed")
             except Exception as e:
                 logger.error(f"Error closing worker tools manager: {e}")
-        
+
         if _worker_connection_manager:
             try:
                 await _worker_connection_manager.close()
                 logger.info(f"Worker {os.getpid()} connection manager closed")
             except Exception as e:
                 logger.error(f"Error closing worker connection manager: {e}")
-        
+
         if _worker_security_manager:
             try:
                 await _worker_security_manager.shutdown()
                 logger.info(f"Worker {os.getpid()} security manager shutdown completed")
             except Exception as e:
                 logger.error(f"Error shutting down worker security manager: {e}")
-        
+
         # Shutdown logging system
         try:
             from .utils.logger import shutdown_logging
@@ -430,16 +430,16 @@ async def mcp_asgi_app(scope, receive, send):
             'body': b'{"error": "Worker not initialized"}'
         })
         return
-    
+
     # Import logger properly
     from .utils.logger import get_logger
     logger = get_logger(__name__)
-    
+
     # Get request path for logging
     path = scope.get('path', '')
     method = scope.get('method', 'UNKNOWN')
     logger.debug(f"Worker {os.getpid()} handling MCP request: {method} {path}")
-    
+
     from .auth.mcp_auth_middleware import MCPAuthASGIMiddleware
 
     async def downstream(authenticated_scope, authenticated_receive, authenticated_send):
@@ -496,7 +496,7 @@ basic_app = Starlette(
 async def app(scope, receive, send):
     """Main ASGI app that routes requests"""
     path = scope.get('path', '/')
-    
+
     if path == "/mcp":
         await mcp_asgi_app(scope, receive, send)
     elif path.startswith("/auth/") and _worker_effective_auth and not _worker_effective_auth.enable_external_oauth_auth:

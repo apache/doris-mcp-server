@@ -76,8 +76,7 @@ P4_DORIS_OAUTH_METADATA_TOOLS = frozenset(
 
 P4_DORIS_OAUTH_QUERY_TOOLS = frozenset({"exec_query"})
 P4_DORIS_OAUTH_EXPLAIN_TOOLS = frozenset({"get_sql_explain"})
-P4_DORIS_OAUTH_DEFAULT_METADATA_TOOL_ALLOWLIST = tuple(
-    [
+P4_DORIS_OAUTH_DEFAULT_METADATA_TOOL_ALLOWLIST = (
         "get_db_list",
         "get_db_table_list",
         "get_table_schema",
@@ -85,8 +84,7 @@ P4_DORIS_OAUTH_DEFAULT_METADATA_TOOL_ALLOWLIST = tuple(
         "get_table_column_comments",
         "get_table_indexes",
         "get_catalog_list",
-    ]
-)
+    )
 
 # Phase 4 keeps DB-backed Doris OAuth tools fail-closed unless configuration and
 # exact tool scope both allow a reviewed metadata tool.

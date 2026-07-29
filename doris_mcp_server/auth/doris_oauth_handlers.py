@@ -20,7 +20,6 @@ from .doris_oauth_types import (
     TokenEndpointError,
 )
 
-
 LOGIN_CSRF_COOKIE = "doris_oauth_login_csrf"
 
 

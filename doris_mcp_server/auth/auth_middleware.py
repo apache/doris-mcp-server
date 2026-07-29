@@ -26,8 +26,8 @@ from ..utils.auth_credentials import (
     BearerCredentials,
     normalize_bearer_credentials,
 )
-from ..utils.logger import get_logger
 from ..utils.datetime_utils import utc_now
+from ..utils.logger import get_logger
 from ..utils.security import AuthContext, SecurityLevel
 from .jwt_manager import JWTManager
 
@@ -36,43 +36,43 @@ logger = get_logger(__name__)
 
 class AuthMiddleware:
     """Authentication Middleware
-    
+
     Provides JWT authentication functionality for HTTP and MCP requests
     """
-    
+
     def __init__(self, jwt_manager: JWTManager):
         """Initialize authentication middleware
-        
+
         Args:
             jwt_manager: JWT manager instance
         """
         self.jwt_manager = jwt_manager
         logger.info("AuthMiddleware initialized")
-    
+
     def extract_token_from_header(self, authorization: str) -> str | None:
         """Extract JWT token from Authorization header
-        
+
         Args:
             authorization: Authorization header value
-            
+
         Returns:
             JWT token string, or None if not found
         """
         credentials = BearerCredentials.from_authorization(authorization)
         return credentials.token or None
-    
+
     async def authenticate_request(
         self,
         credentials: BearerCredentials,
     ) -> AuthContext:
         """Authenticate request and return authentication context
-        
+
         Args:
             credentials: Normalized bearer credentials
-            
+
         Returns:
             AuthContext authentication context
-            
+
         Raises:
             ValueError: Authentication failed
         """
@@ -81,28 +81,28 @@ class AuthMiddleware:
         except Exception as e:
             logger.error(f"Request authentication failed: {e}")
             raise
-    
+
     async def _authenticate_jwt(
         self,
         credentials: BearerCredentials,
     ) -> AuthContext:
         """JWT authentication processing
-        
+
         Args:
             credentials: Normalized bearer credentials
-            
+
         Returns:
             AuthContext authentication context
         """
         if not credentials.is_bearer:
             raise ValueError("Missing JWT token")
         token = credentials.token
-        
+
         try:
             # Validate token
             validation_result = await self.jwt_manager.validate_token(token, 'access')
             payload = validation_result['payload']
-            
+
             # Build authentication context
             auth_context = AuthContext(
                 token_id=payload.get('jti', ''),
@@ -117,23 +117,23 @@ class AuthMiddleware:
                 auth_method="jwt",
                 pool_key="global",
             )
-            
+
             logger.info(f"JWT authentication successful for user: {auth_context.user_id}")
             return auth_context
-            
+
         except Exception as e:
             logger.error(f"JWT authentication failed: {e}")
             raise ValueError(f"JWT authentication failed: {str(e)}")
-    
+
     async def create_auth_response_headers(
         self,
         auth_context: AuthContext,
     ) -> dict[str, str]:
         """Create authentication response headers
-        
+
         Args:
             auth_context: Authentication context
-            
+
         Returns:
             Response headers dictionary
         """
@@ -143,13 +143,13 @@ class AuthMiddleware:
             'X-Auth-Session': auth_context.session_id,
             'X-Auth-Security-Level': auth_context.security_level.value
         }
-    
+
     def create_http_middleware(self, skip_paths: list | None = None):
         """Create HTTP middleware function
-        
+
         Args:
             skip_paths: List of paths to skip authentication
-            
+
         Returns:
             ASGI middleware function
         """
@@ -160,56 +160,56 @@ class AuthMiddleware:
             '/docs',
             '/openapi.json',
         ]
-        
+
         async def middleware(scope, receive, send):
             """HTTP authentication middleware"""
             if scope['type'] != 'http':
                 # Pass through non-HTTP requests directly
                 return await self.app(scope, receive, send)
-            
+
             path = scope.get('path', '')
-            
+
             # Check if authentication should be skipped
             if any(
                 path == skip or path.startswith(f"{skip}/")
                 for skip in skip_paths
             ):
                 return await self.app(scope, receive, send)
-            
+
             # Extract authentication information
             headers = dict(scope.get('headers', []))
             authorization = headers.get(b'authorization', b'').decode()
-            
+
             try:
                 # Perform authentication
                 credentials = BearerCredentials.from_authorization(authorization)
                 auth_context = await self.authenticate_request(credentials)
-                
+
                 # Add authentication context to scope
                 scope['auth_context'] = auth_context
-                
+
                 # Create response wrapper to add authentication headers
                 async def send_wrapper(message):
                     if message['type'] == 'http.response.start':
                         headers = dict(message.get('headers', []))
                         auth_headers = await self.create_auth_response_headers(auth_context)
-                        
+
                         for key, value in auth_headers.items():
                             headers[key.encode()] = value.encode()
-                        
+
                         message['headers'] = list(headers.items())
-                    
+
                     await send(message)
-                
+
                 return await self.app(scope, receive, send_wrapper)
-                
+
             except Exception:
                 # Authentication failed, return 401 error
                 response_body = (
                     '{"error": "Authentication failed", '
                     '"message": "Authentication failed"}'
                 )
-                
+
                 await send({
                     'type': 'http.response.start',
                     'status': 401,
@@ -222,30 +222,30 @@ class AuthMiddleware:
                     'type': 'http.response.body',
                     'body': response_body.encode()
                 })
-        
+
         return middleware
-    
+
     async def authenticate_mcp_request(
         self,
         headers: dict[str, str],
     ) -> AuthContext:
         """Authenticate MCP request
-        
+
         Args:
             headers: MCP request headers
-            
+
         Returns:
             AuthContext authentication context
         """
         try:
             # Extract authentication information from multiple possible header fields
             authorization = (
-                headers.get('Authorization') or 
+                headers.get('Authorization') or
                 headers.get('authorization') or
                 headers.get('X-Auth-Token') or
                 headers.get('x-auth-token')
             )
-            
+
             credentials = normalize_bearer_credentials(
                 {
                     "authorization": authorization,
@@ -254,7 +254,7 @@ class AuthMiddleware:
                 }
             )
             return await self.authenticate_request(credentials)
-            
+
         except Exception as e:
             logger.error(f"MCP request authentication failed: {e}")
             raise
@@ -262,7 +262,7 @@ class AuthMiddleware:
 
 class AuthenticationError(Exception):
     """Authentication error exception"""
-    
+
     def __init__(self, message: str, error_code: str = "AUTH_FAILED"):
         self.message = message
         self.error_code = error_code
@@ -271,7 +271,7 @@ class AuthenticationError(Exception):
 
 class AuthorizationError(Exception):
     """Authorization error exception"""
-    
+
     def __init__(self, message: str, error_code: str = "ACCESS_DENIED"):
         self.message = message
         self.error_code = error_code

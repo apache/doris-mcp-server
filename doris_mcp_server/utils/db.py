@@ -33,14 +33,13 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 import aiomysql
 from aiomysql import Connection, Pool
 
 from .datetime_utils import utc_now
 from .logger import get_logger
-
 
 _SQL_COMMENT_RE = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
 
@@ -235,7 +234,7 @@ class DorisConnection:
             if not self.connection or self.connection.closed:
                 self.is_healthy = False
                 return False
-            
+
             # Check 2: Use ONLY safe operations - avoid internal state access
             # Instead of checking _reader state directly, use a simple query test
             try:
@@ -251,8 +250,8 @@ class DorisConnection:
                             self.logger.debug(f"Connection {self.session_id} ping query returned unexpected result")
                             self.is_healthy = False
                             return False
-            
-            except asyncio.TimeoutError:
+
+            except TimeoutError:
                 self.logger.debug(f"Connection {self.session_id} ping timed out")
                 self.is_healthy = False
                 return False
@@ -265,7 +264,7 @@ class DorisConnection:
                     self.logger.debug(f"Connection {self.session_id} ping failed: {query_error}")
                 self.is_healthy = False
                 return False
-            
+
         except Exception as e:
             # Catch any other unexpected errors
             self.logger.debug(f"Connection {self.session_id} ping failed with unexpected error: {e}")
@@ -301,7 +300,7 @@ class DorisSessionCache:
         if self._should_cache(connection.session_id):
             self.cached[connection.session_id] = connection
 
-    def get(self, session_id: str) -> Optional[DorisConnection]:
+    def get(self, session_id: str) -> DorisConnection | None:
         self.logger.debug(f"Use cached connection: {session_id}")
         return self.cached.get(session_id)
 
@@ -344,18 +343,18 @@ class DorisConnectionManager:
 
         # 🔧 FIX for multi-tenant concurrency: Per-token connection pool isolation
         # Each token gets its own connection pool to prevent configuration conflicts
-        self.token_pools: Dict[str, Pool] = {}  # token_hash -> pool
-        self.token_configs: Dict[str, dict] = {}  # token_hash -> db_config
-        self._token_pool_locks: Dict[str, asyncio.Lock] = {}  # token_hash -> lock
+        self.token_pools: dict[str, Pool] = {}  # token_hash -> pool
+        self.token_configs: dict[str, dict] = {}  # token_hash -> db_config
+        self._token_pool_locks: dict[str, asyncio.Lock] = {}  # token_hash -> lock
         self._token_pools_lock = asyncio.Lock()  # Lock for managing token_pools dict
-        self._token_pool_owner_ids: Dict[str, str] = {}  # token_hash -> owner id
-        self._token_pool_generations: Dict[str, int] = {}  # token_hash -> physical pool generation
+        self._token_pool_owner_ids: dict[str, str] = {}  # token_hash -> owner id
+        self._token_pool_generations: dict[str, int] = {}  # token_hash -> physical pool generation
 
         # Doris OAuth user-owned pool state. Raw Doris passwords are never stored.
-        self.doris_user_pools: Dict[str, Pool] = {}  # normalized Doris user -> active pool
-        self.doris_user_pool_meta: Dict[str, DorisUserPoolMeta] = {}
-        self._retired_doris_user_pools: Dict[str, Pool] = {}  # owner_id -> retired pool
-        self._doris_user_pool_locks: Dict[str, asyncio.Lock] = {}
+        self.doris_user_pools: dict[str, Pool] = {}  # normalized Doris user -> active pool
+        self.doris_user_pool_meta: dict[str, DorisUserPoolMeta] = {}
+        self._retired_doris_user_pools: dict[str, Pool] = {}  # owner_id -> retired pool
+        self._doris_user_pool_locks: dict[str, asyncio.Lock] = {}
         self._doris_user_pools_lock = asyncio.Lock()
         self._doris_user_pool_secret = secrets.token_bytes(32)
         self._global_pool_owner_id = "global:0"
@@ -370,17 +369,17 @@ class DorisConnectionManager:
             cache_system_session=False,  # Disabled to prevent multi-thread issues
             cache_user_session=False     # Disabled to prevent multi-thread issues
         )
-        
+
         # Store original database config for fallback
         self.original_db_config = {
             'host': config.database.host,
-            'port': config.database.port, 
+            'port': config.database.port,
             'user': config.database.user,
             'password': config.database.password,
             'database': config.database.database,
             'charset': config.database.charset
         }
-        
+
         # Current active database config (may be overridden by token-bound config)
         # NOTE: This is kept for backward compatibility with non-token requests
         self.active_db_config = self.original_db_config.copy()
@@ -389,31 +388,31 @@ class DorisConnectionManager:
         self.pool_recovering = False
         self.pool_health_check_task = None
         self.pool_cleanup_task = None
-        
+
         # Metrics tracking
         self.metrics = ConnectionMetrics()
-        
+
         # 🔧 FIX: Add connection acquisition lock to prevent race conditions
         self._connection_lock = asyncio.Lock()
         self._recovery_lock = asyncio.Lock()
-        
+
         # 🔧 FIX: Add connection acquisition queue to serialize requests
         self._connection_semaphore = asyncio.Semaphore(value=20)  # Max concurrent acquisitions
-        
+
         # Database connection parameters from config.database
         self.pool_recovery_lock = self._recovery_lock  # Compatibility alias
         self._update_db_params_from_config(self.active_db_config)
         self.connect_timeout = config.database.connection_timeout
-        
+
         # Connection pool parameters - more conservative settings
         self.minsize = config.database.min_connections  # This is always 0
         self.maxsize = config.database.max_connections or 20
         self.pool_recycle = config.database.max_connection_age or 3600  # 1 hour, more conservative
-        
+
         # 🔧 FIX: Add missing monitoring parameters that were removed during refactoring
         self.health_check_interval = 30  # seconds
         self.pool_warmup_size = 3  # connections to maintain
-    
+
     def _update_db_params_from_config(self, db_config: dict):
         """Update database connection parameters from config dictionary"""
         self.host = db_config['host']
@@ -424,29 +423,29 @@ class DorisConnectionManager:
         # Convert charset to aiomysql compatible format
         charset_map = {"UTF8": "utf8", "UTF8MB4": "utf8mb4"}
         self.charset = charset_map.get(db_config['charset'].upper(), db_config['charset'].lower())
-    
+
     def _is_config_empty(self, config_value) -> bool:
         """Check if a config value is empty (None, empty string, or 'null')"""
         return config_value is None or config_value == '' or str(config_value).lower() == 'null'
-    
+
     def _has_valid_global_config(self) -> bool:
         """Check if global database configuration is valid and non-empty"""
         return (not self._is_config_empty(self.original_db_config['host']) and
                 not self._is_config_empty(self.original_db_config['user']))
-    
+
     def _get_token_hash(self, token: str) -> str:
         """Get hash of token for use as dictionary key"""
         import hashlib
         return hashlib.sha256(token.encode()).hexdigest()[:16]
-    
+
     def _get_current_token_db_config(self, token: str) -> dict | None:
         """Get current database config for token from TokenManager
-        
+
         This is used to check if config has changed for hot reload support.
         """
         if not self.token_manager:
             return None
-        
+
         token_db_config = self.token_manager.get_database_config_by_token(token)
         if token_db_config:
             return {
@@ -458,12 +457,12 @@ class DorisConnectionManager:
                 'charset': token_db_config.charset
             }
         return None
-    
+
     def _config_changed(self, old_config: dict, new_config: dict) -> bool:
         """Check if database configuration has changed"""
         if old_config is None or new_config is None:
             return old_config != new_config
-        
+
         # Compare key fields
         for key in ['host', 'port', 'user', 'password', 'database']:
             if old_config.get(key) != new_config.get(key):
@@ -542,7 +541,7 @@ class DorisConnectionManager:
             if wait_closed:
                 try:
                     await asyncio.wait_for(wait_closed(), timeout=timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     self.logger.warning(f"Timeout waiting for {label} pool to close")
         except Exception as e:
             self.logger.warning(f"Error closing {label} pool: {e}")
@@ -817,32 +816,32 @@ class DorisConnectionManager:
                 continue
             seen_pool_ids.add(id(pool))
             await self._close_pool_safely(pool, f"Doris user {owner_id}")
-    
+
     async def get_pool_for_token(self, token: str) -> tuple[Pool, dict]:
         """Get or create a dedicated connection pool for a specific token
-        
+
         This method implements per-token connection pool isolation to prevent
         concurrent requests from different tokens interfering with each other.
-        
+
         🔧 FIX: Supports hot reload - if tokens.json config changes,
         the old pool is closed and a new one is created automatically.
-        
+
         Args:
             token: Authentication token
-            
+
         Returns:
             (pool, db_config): The dedicated pool and its configuration
-            
+
         Raises:
             RuntimeError: If no valid database configuration is available
         """
         token_hash = self._get_token_hash(token)
-        
+
         # Fast path: pool already exists
         if token_hash in self.token_pools:
             pool = self.token_pools[token_hash]
             cached_config = self.token_configs.get(token_hash)
-            
+
             # 🔧 FIX: Check if config has changed (hot reload support)
             current_config = self._get_current_token_db_config(token)
             if current_config and cached_config and self._config_changed(cached_config, current_config):
@@ -862,7 +861,7 @@ class DorisConnectionManager:
                 # Continue to slow path to create new pool
             elif pool and not pool.closed:
                 return pool, cached_config
-        
+
         # Slow path: need to create pool (with lock to prevent race conditions)
         async with self._token_pools_lock:
             # Double-check after acquiring lock
@@ -870,11 +869,11 @@ class DorisConnectionManager:
                 pool = self.token_pools[token_hash]
                 if pool and not pool.closed:
                     return pool, self.token_configs[token_hash]
-            
+
             # Get database config for this token
             db_config = None
             config_source = "unknown"
-            
+
             if self.token_manager:
                 token_db_config = self.token_manager.get_database_config_by_token(token)
                 if token_db_config:
@@ -887,7 +886,7 @@ class DorisConnectionManager:
                         'charset': token_db_config.charset
                     }
                     config_source = "token-bound"
-            
+
             # Fallback to global config if token has no specific config
             if not db_config or self._is_config_empty(db_config.get('host')) or self._is_config_empty(db_config.get('user')):
                 if self._has_valid_global_config():
@@ -895,16 +894,16 @@ class DorisConnectionManager:
                     config_source = "global-env"
                 else:
                     raise RuntimeError(
-                        f"No valid database configuration available for token. "
-                        f"Please configure database in tokens.json or .env file."
+                        "No valid database configuration available for token. "
+                        "Please configure database in tokens.json or .env file."
                     )
-            
+
             # Create dedicated pool for this token
             self.logger.info(f"Creating dedicated connection pool for token (hash: {token_hash[:8]}...) "
                            f"using {config_source} config: {db_config['user']}@{db_config['host']}:{db_config['port']}")
-            
+
             pool = await self._create_pool_with_config(db_config)
-            
+
             # Store pool and config
             self.token_pools[token_hash] = pool
             self.token_configs[token_hash] = db_config
@@ -913,28 +912,28 @@ class DorisConnectionManager:
             self._token_pool_owner_ids[token_hash] = (
                 f"static_token:{token_hash}:gen:{token_generation}:{uuid.uuid4().hex}"
             )
-            
+
             # Create lock for this token if not exists
             if token_hash not in self._token_pool_locks:
                 self._token_pool_locks[token_hash] = asyncio.Lock()
-            
+
             return pool, db_config
-    
+
     async def _create_pool_with_config(self, db_config: dict) -> Pool:
         """Create a connection pool with specified configuration
-        
+
         Args:
             db_config: Database configuration dictionary
-            
+
         Returns:
             Created connection pool
         """
         # Convert charset to aiomysql compatible format
         charset_map = {"UTF8": "utf8", "UTF8MB4": "utf8mb4"}
         charset = charset_map.get(db_config['charset'].upper(), db_config['charset'].lower())
-        
+
         self.logger.debug(f"Creating pool for {db_config['user']}@{db_config['host']}:{db_config['port']}/{db_config['database']}")
-        
+
         try:
             pool = await asyncio.wait_for(
                 aiomysql.create_pool(
@@ -954,34 +953,34 @@ class DorisConnectionManager:
             )
             self.logger.info(f"Successfully created pool for {db_config['user']}@{db_config['host']}:{db_config['port']}")
             return pool
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.error(f"Timeout creating pool for {db_config['user']}@{db_config['host']}:{db_config['port']}")
             raise RuntimeError(f"Timeout creating connection pool for {db_config['user']}@{db_config['host']}:{db_config['port']}")
         except Exception as e:
             self.logger.error(f"Failed to create pool for {db_config['user']}@{db_config['host']}:{db_config['port']}: {type(e).__name__}: {e}")
             raise
-    
+
     async def get_connection_for_token(self, token: str, session_id: str) -> 'DorisConnection':
         """Get a connection from the token's dedicated pool
-        
+
         Args:
             token: Authentication token
             session_id: Session identifier for logging
-            
+
         Returns:
             DorisConnection wrapper
         """
         pool, db_config = await self.get_pool_for_token(token)
-        
+
         try:
             connection = await asyncio.wait_for(
                 pool.acquire(),
                 timeout=self.connect_timeout
             )
-            
+
             self.logger.debug(f"Session {session_id}: Acquired connection from token pool "
                             f"(user: {db_config['user']}@{db_config['host']})")
-            
+
             token_hash = self._get_token_hash(token)
             return DorisConnection(
                 connection,
@@ -993,14 +992,14 @@ class DorisConnectionManager:
                 generation=self._token_pool_generations.get(token_hash, 0),
                 owner_pool=pool,
             )
-            
+
         except Exception as e:
             self.logger.error(f"Session {session_id}: Failed to acquire connection from token pool: {e}")
             raise
-    
+
     async def release_connection_for_token(self, token: str, connection: 'DorisConnection'):
         """Release a connection back to the token's dedicated pool
-        
+
         Args:
             token: Authentication token
             connection: DorisConnection wrapper to release
@@ -1019,16 +1018,16 @@ class DorisConnectionManager:
                 getattr(connection, "pool_kind", ""),
             )
         await self.release_routed_connection(connection)
-    
+
     async def cleanup_token_pools(self, max_idle_time: int = 3600):
         """Clean up idle token connection pools
-        
+
         Args:
             max_idle_time: Maximum idle time in seconds before closing a pool
         """
         async with self._token_pools_lock:
             pools_to_remove = []
-            
+
             for token_hash, pool in self.token_pools.items():
                 if pool and not pool.closed:
                     # Check if pool is idle (no active connections)
@@ -1036,7 +1035,7 @@ class DorisConnectionManager:
                         pools_to_remove.append(token_hash)
                 elif pool and pool.closed:
                     pools_to_remove.append(token_hash)
-            
+
             for token_hash in pools_to_remove:
                 try:
                     pool = self.token_pools.pop(token_hash, None)
@@ -1050,7 +1049,7 @@ class DorisConnectionManager:
                     self.logger.info(f"Cleaned up idle token pool (hash: {token_hash[:8]}...)")
                 except Exception as e:
                     self.logger.warning(f"Error cleaning up token pool: {e}")
-    
+
     async def close_all_token_pools(self):
         """Close all token connection pools (for shutdown)"""
         # Use timeout to prevent blocking on lock acquisition during shutdown
@@ -1064,18 +1063,18 @@ class DorisConnectionManager:
                                 # Use timeout for wait_closed to prevent hanging
                                 try:
                                     await asyncio.wait_for(pool.wait_closed(), timeout=2.0)
-                                except asyncio.TimeoutError:
+                                except TimeoutError:
                                     self.logger.warning(f"Timeout waiting for token pool to close (hash: {token_hash[:8]}...)")
                                 self.logger.info(f"Closed token pool (hash: {token_hash[:8]}...)")
                         except Exception as e:
                             self.logger.warning(f"Error closing token pool: {e}")
-                    
+
                     self.token_pools.clear()
                     self.token_configs.clear()
                     self._token_pool_locks.clear()
                     self._token_pool_owner_ids.clear()
                     self._token_pool_generations.clear()
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.warning("Timeout acquiring lock for token pool cleanup, forcing clear")
             # Force clear without lock
             self.token_pools.clear()
@@ -1086,15 +1085,15 @@ class DorisConnectionManager:
 
     async def configure_for_token(self, token: str) -> tuple[bool, str]:
         """Configure connection manager for token with new priority logic
-        
+
         Priority: Token-bound DB config > .env config > error
-        
+
         Args:
             token: Authentication token to get database config for
-            
+
         Returns:
             (success: bool, config_source: str): Result and which config was used
-            
+
         Raises:
             RuntimeError: If no valid database configuration is available
         """
@@ -1112,30 +1111,30 @@ class DorisConnectionManager:
                         'database': db_config.database,
                         'charset': db_config.charset
                     }
-                    
+
                     # Check if token-bound config is valid
                     if (not self._is_config_empty(token_db_config['host']) and
                         not self._is_config_empty(token_db_config['user'])):
                         self.logger.info(f"Using token-bound database configuration for host: {token_db_config['host']}")
                         self.active_db_config = token_db_config
                         self._update_db_params_from_config(self.active_db_config)
-                        
+
                         # Create/recreate connection pool with token-bound config
                         await self._ensure_pool_with_current_config()
-                        
+
                         return True, "token-bound"
-            
+
             # Priority 2: Use global .env config if available
             if self._has_valid_global_config():
                 self.logger.info("Using global .env database configuration")
                 self.active_db_config = self.original_db_config.copy()
                 self._update_db_params_from_config(self.active_db_config)
-                
+
                 # Create/recreate connection pool with global config
                 await self._ensure_pool_with_current_config()
-                
+
                 return True, "global-env"
-            
+
             # Priority 3: No valid configuration available
             error_msg = (
                 "No valid database configuration available for this token. "
@@ -1146,48 +1145,48 @@ class DorisConnectionManager:
             )
             self.logger.error(error_msg)
             raise RuntimeError(error_msg)
-            
+
         except Exception as e:
             self.logger.error(f"Failed to configure database for token: {e}")
             raise
-    
+
     async def _ensure_pool_with_current_config(self):
         """Ensure connection pool exists with current configuration"""
         try:
             # If pool exists with different config, need to recreate it
             # If no pool exists, create one with current config
             if self.pool and not self.pool.closed:
-                # Since we can't reliably check pool config attributes, 
+                # Since we can't reliably check pool config attributes,
                 # we'll recreate the pool if we detect a potential config change
                 # by checking if current config differs from what we stored
                 pool_needs_recreation = False
-                
+
                 # Compare current config with what we might have used before
                 if hasattr(self, '_last_pool_config'):
                     current_config = {
                         'host': self.host,
-                        'port': self.port, 
+                        'port': self.port,
                         'user': self.user,
                         'database': self.database
                     }
                     if current_config != self._last_pool_config:
                         pool_needs_recreation = True
-                
+
                 if pool_needs_recreation:
                     self.logger.info("Database configuration changed, recreating connection pool")
                     await self._recreate_pool()
             elif not self.pool:
                 self.logger.info("Creating connection pool with current configuration")
                 await self._create_pool_with_current_config()
-                
+
             # Test the connection immediately
             if not await self._test_pool_health():
                 raise RuntimeError(f"Database connection test failed for {self.host}:{self.port}")
-                
+
         except Exception as e:
             self.logger.error(f"Failed to ensure connection pool: {e}")
             raise
-    
+
     async def _create_pool_with_current_config(self):
         """Create connection pool with current database configuration"""
         try:
@@ -1205,7 +1204,7 @@ class DorisConnectionManager:
                 autocommit=True
             )
             self._mark_global_pool_created()
-            
+
             # Store the current config for comparison later
             self._last_pool_config = {
                 'host': self.host,
@@ -1213,7 +1212,7 @@ class DorisConnectionManager:
                 'user': self.user,
                 'database': self.database
             }
-            
+
             # Test initial connection
             if not await self._test_pool_health():
                 raise RuntimeError("Connection pool health check failed")
@@ -1223,12 +1222,12 @@ class DorisConnectionManager:
                 self.pool_health_check_task = asyncio.create_task(self._pool_health_monitor())
             if not self.pool_cleanup_task or self.pool_cleanup_task.done():
                 self.pool_cleanup_task = asyncio.create_task(self._pool_cleanup_monitor())
-            
+
             # Perform initial pool warmup
             await self._warmup_pool()
-            
+
             self.logger.info(f"Connection pool created successfully with {self.host}:{self.port}")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to create connection pool: {e}")
             raise
@@ -1241,46 +1240,46 @@ class DorisConnectionManager:
                 self.pool.close()
                 await self.pool.wait_closed()
                 self.pool = None
-            
+
             # Create new pool with current config
             await self._create_pool_with_current_config()
-            
+
         except Exception as e:
             self.logger.error(f"Failed to recreate connection pool: {e}")
             raise
 
     def validate_database_configuration(self) -> tuple[bool, str]:
         """Validate database configuration completeness
-        
+
         Returns:
             (is_valid, error_message): Configuration validation result
         """
         # Check if Token authentication is enabled
         token_auth_enabled = getattr(self.config.security, 'enable_token_auth', False)
-        
+
         # Check if tokens.json exists and has valid tokens with database configs
         tokens_file_available = False
         token_bound_configs_available = False
-        
+
         if self.token_manager:
             try:
                 # Check if tokens.json file exists
                 import os
                 tokens_file_path = getattr(self.token_manager, 'token_file_path', 'tokens.json')
                 tokens_file_available = os.path.exists(tokens_file_path)
-                
+
                 # Check if any tokens have database configurations
                 if tokens_file_available or self.token_manager._tokens:
-                    for token_hash, token_info in self.token_manager._tokens.items():
+                    for _token_hash, token_info in self.token_manager._tokens.items():
                         if token_info.database_config:
                             token_bound_configs_available = True
                             break
             except Exception:
                 pass
-        
+
         # Validate .env database configuration
         env_config_valid = self._has_valid_global_config()
-        
+
         # Decision logic
         if token_auth_enabled:
             if tokens_file_available:
@@ -1323,16 +1322,16 @@ class DorisConnectionManager:
             if not is_valid:
                 self.logger.error(f"Database configuration validation failed: {error_message}")
                 raise RuntimeError(f"Database configuration validation failed:\n{error_message}")
-            
-            self.logger.info(f"Database configuration validated successfully")
+
+            self.logger.info("Database configuration validated successfully")
             self.logger.info(f"Initializing connection pool to {self.host}:{self.port}")
-            
+
             # Only create connection pool if we have valid global config
             # Token-bound configs will be handled dynamically during requests
             if not self._has_valid_global_config():
                 self.logger.info("No valid global database config, pool will be created dynamically for token-bound configs")
                 return
-            
+
             # Create connection pool
             self.pool = await aiomysql.create_pool(
                 host=self.host,
@@ -1348,7 +1347,7 @@ class DorisConnectionManager:
                 autocommit=True
             )
             self._mark_global_pool_created()
-            
+
             # Test initial connection
             if not await self._test_pool_health():
                 raise RuntimeError("Connection pool health check failed")
@@ -1356,12 +1355,12 @@ class DorisConnectionManager:
             # Start background monitoring tasks
             self.pool_health_check_task = asyncio.create_task(self._pool_health_monitor())
             self.pool_cleanup_task = asyncio.create_task(self._pool_cleanup_monitor())
-            
+
             # Perform initial pool warmup
             await self._warmup_pool()
-            
+
             self.logger.info(f"Connection pool initialized successfully, min connections: {self.minsize}, max connections: {self.maxsize}")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to initialize connection pool: {e}")
             raise
@@ -1369,14 +1368,14 @@ class DorisConnectionManager:
     async def initialize_for_stdio_mode(self, timeout: float = 30.0) -> None:
         """
         Initialize connection pool for stdio mode with strict validation
-        
+
         stdio mode requires a working database connection because:
         - No HTTP authentication mechanism to support token-bound configs
         - All database operations depend on the global connection pool
-        
+
         Args:
             timeout: Maximum time to wait for connection establishment
-            
+
         Raises:
             RuntimeError: If configuration is invalid or connection fails
         """
@@ -1390,16 +1389,16 @@ class DorisConnectionManager:
                 )
                 self.logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            
+
             self.logger.info(f"stdio mode database config validated: {self.host}:{self.port}")
-            
+
             # Validate configuration format
             is_valid, error_message = self.validate_database_configuration()
             if not is_valid:
                 error_msg = f"Database configuration validation failed: {error_message}"
                 self.logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            
+
             # Test connectivity with timeout
             self.logger.info("Testing database connectivity for stdio mode...")
             if not await self._test_connectivity_with_timeout(timeout):
@@ -1410,38 +1409,38 @@ class DorisConnectionManager:
                 )
                 self.logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            
+
             # Initialize the connection pool
             await self._create_connection_pool()
-            
+
             # Verify that we have a working connection pool
             if not self.pool:
                 error_msg = "Database connection pool was not created successfully."
                 self.logger.error(error_msg)
                 raise RuntimeError(error_msg)
-            
+
             # Start background monitoring tasks
             self.pool_health_check_task = asyncio.create_task(self._pool_health_monitor())
             self.pool_cleanup_task = asyncio.create_task(self._pool_cleanup_monitor())
-            
+
             # Perform initial pool warmup
             await self._warmup_pool()
-            
+
             self.logger.info("Database connection established successfully for stdio mode")
-            
+
         except Exception as e:
             self.logger.error(f"stdio mode database initialization failed: {e}")
             raise
-    
+
     async def initialize_for_http_mode(self) -> bool:
         """
         Initialize connection pool for HTTP mode with graceful degradation
-        
+
         HTTP mode can work without global database configuration because:
         - Supports token-bound database configurations
         - Can handle authentication and use per-request database configs
         - Has fallback mechanisms for database operations
-        
+
         Returns:
             bool: True if global database pool was created, False if gracefully degraded
         """
@@ -1453,29 +1452,29 @@ class DorisConnectionManager:
                     self.logger.warning(f"Global database configuration invalid: {error_message}")
                     self.logger.info("HTTP mode will rely on token-bound database configurations")
                     return False
-                
+
                 # Try to establish global connection pool
                 self.logger.info(f"Attempting to create global connection pool: {self.host}:{self.port}")
-                
+
                 try:
                     # Test connectivity with shorter timeout for HTTP mode
                     if await self._test_connectivity_with_timeout(10.0):
                         await self._create_connection_pool()
-                        
+
                         if self.pool:
                             # Start background monitoring tasks
                             self.pool_health_check_task = asyncio.create_task(self._pool_health_monitor())
                             self.pool_cleanup_task = asyncio.create_task(self._pool_cleanup_monitor())
-                            
+
                             # Perform initial pool warmup
                             await self._warmup_pool()
-                            
+
                             self.logger.info("Global database connection pool created successfully for HTTP mode")
                             return True
                     else:
                         self.logger.warning("Global database connection test failed, will use token-bound configs")
                         return False
-                        
+
                 except Exception as pool_error:
                     self.logger.warning(f"Failed to create global connection pool: {pool_error}")
                     self.logger.info("HTTP mode will rely on token-bound database configurations")
@@ -1483,26 +1482,26 @@ class DorisConnectionManager:
             else:
                 self.logger.info("No valid global database config found, HTTP mode will use token-bound configurations")
                 return False
-                
+
         except Exception as e:
             self.logger.warning(f"HTTP mode database initialization encountered error: {e}")
             self.logger.info("HTTP mode will rely on token-bound database configurations")
             return False
-    
+
     async def _test_connectivity_with_timeout(self, timeout: float) -> bool:
         """
         Test database connectivity with timeout
-        
+
         Args:
             timeout: Maximum time to wait for connection test
-            
+
         Returns:
             bool: True if connection successful, False otherwise
         """
         try:
             await asyncio.wait_for(self._test_basic_connectivity(), timeout=timeout)
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.logger.error(f"Database connectivity test timed out after {timeout} seconds")
             return False
         except Exception as e:
@@ -1537,12 +1536,12 @@ class DorisConnectionManager:
     async def _test_basic_connectivity(self) -> None:
         """
         Test basic database connectivity without connection pool
-        
+
         Raises:
             Exception: If connection fails
         """
         import aiomysql
-        
+
         conn = None
         try:
             conn = await aiomysql.connect(
@@ -1555,23 +1554,23 @@ class DorisConnectionManager:
                 connect_timeout=self.connect_timeout,
                 autocommit=True
             )
-            
+
             async with conn.cursor() as cursor:
                 await cursor.execute("SELECT 1")
                 result = await cursor.fetchone()
                 if not result or result[0] != 1:
                     raise RuntimeError("Database connectivity test query failed")
-                    
+
         except Exception as e:
             raise RuntimeError(f"Database connectivity test failed: {e}")
         finally:
             if conn:
                 conn.close()
-    
+
     async def _create_connection_pool(self) -> None:
         """
         Create the connection pool
-        
+
         Raises:
             Exception: If pool creation fails
         """
@@ -1589,7 +1588,7 @@ class DorisConnectionManager:
             autocommit=True
         )
         self._mark_global_pool_created()
-        
+
         # Test pool health
         if not await self._test_pool_health():
             # Clean up the pool if health test fails
@@ -1615,7 +1614,7 @@ class DorisConnectionManager:
         """Warm up connection pool by creating initial connections"""
         warmup_size = min(self.pool_warmup_size, self.maxsize)
         self.logger.info(f"🔥 Warming up connection pool with {warmup_size} connections")
-        
+
         warmup_connections = []
         try:
             # Acquire connections to force pool to create them
@@ -1627,14 +1626,14 @@ class DorisConnectionManager:
                 except Exception as e:
                     self.logger.warning(f"Failed to warm up connection {i+1}: {e}")
                     break
-            
+
             # Release all warmup connections back to pool
             for conn in warmup_connections:
                 try:
                     self.pool.release(conn)
                 except Exception as e:
                     self.logger.warning(f"Failed to release warmup connection: {e}")
-            
+
             self.logger.info(f"✅ Pool warmup completed, {len(warmup_connections)} connections created")
 
         except Exception as e:
@@ -1649,7 +1648,7 @@ class DorisConnectionManager:
     async def _pool_health_monitor(self):
         """Background task to monitor pool health"""
         self.logger.info("🩺 Starting pool health monitor")
-        
+
         while True:
             try:
                 await asyncio.sleep(self.health_check_interval)
@@ -1663,7 +1662,7 @@ class DorisConnectionManager:
     async def _pool_cleanup_monitor(self):
         """Background task to clean up stale connections"""
         self.logger.info("🧹 Starting pool cleanup monitor")
-        
+
         while True:
             try:
                 await asyncio.sleep(self.health_check_interval * 2)  # Less frequent cleanup
@@ -1681,17 +1680,17 @@ class DorisConnectionManager:
             if self.pool_recovering:
                 self.logger.debug("Pool recovery in progress, skipping health check")
                 return
-                
+
             # Test pool with a simple query
             health_ok = await self._test_pool_health()
-            
+
             if health_ok:
                 self.logger.debug("✅ Pool health check passed")
                 self.metrics.last_health_check = utc_now()
             else:
                 self.logger.warning("❌ Pool health check failed, attempting recovery")
                 await self._recover_pool()
-                
+
         except Exception as e:
             self.logger.error(f"Pool health check error: {e}")
             await self._recover_pool()
@@ -1700,29 +1699,28 @@ class DorisConnectionManager:
         """Proactively clean up potentially stale connections"""
         try:
             self.logger.debug("🧹 Checking for stale connections")
-            
+
             # Get pool statistics
-            pool_size = self.pool.size
             pool_free = self.pool.freesize
-            
+
             # If pool has idle connections, test some of them
             if pool_free > 0:
                 test_count = min(pool_free, 2)  # Test up to 2 idle connections
-                
+
                 for i in range(test_count):
                     try:
                         # Acquire connection, test it, and release
                         conn = await asyncio.wait_for(self.pool.acquire(), timeout=5)
-                        
+
                         # Quick test
                         async with conn.cursor() as cursor:
                             await asyncio.wait_for(cursor.execute("SELECT 1"), timeout=3)
                             await cursor.fetchone()
-                        
+
                         # Connection is healthy, release it
                         self.pool.release(conn)
-                        
-                    except asyncio.TimeoutError:
+
+                    except TimeoutError:
                         self.logger.debug(f"Stale connection test {i+1} timed out")
                         try:
                             await conn.ensure_closed()
@@ -1734,9 +1732,9 @@ class DorisConnectionManager:
                             await conn.ensure_closed()
                         except Exception:
                             pass
-                
+
                 self.logger.debug(f"Stale connection cleanup completed, tested {test_count} connections")
-                
+
         except Exception as e:
             self.logger.error(f"Stale connection cleanup error: {e}")
 
@@ -1748,16 +1746,15 @@ class DorisConnectionManager:
             if self.pool_recovering:
                 self.logger.debug("Pool recovery already in progress, waiting...")
                 return
-                
+
             try:
                 self.pool_recovering = True
                 max_retries = 3
-                retry_delay = 5  # seconds
-                
+
                 for attempt in range(max_retries):
                     try:
                         self.logger.info(f"🔄 Attempting pool recovery (attempt {attempt + 1}/{max_retries})")
-                        
+
                         # Try to close existing pool with timeout
                         if self.pool:
                             try:
@@ -1765,17 +1762,17 @@ class DorisConnectionManager:
                                     self.pool.close()
                                     await asyncio.wait_for(self.pool.wait_closed(), timeout=3.0)
                                 self.logger.debug("Old pool closed successfully")
-                            except asyncio.TimeoutError:
+                            except TimeoutError:
                                 self.logger.warning("Pool close timeout, forcing cleanup")
                             except Exception as e:
                                 self.logger.warning(f"Error closing old pool: {e}")
                             finally:
                                 self.pool = None
-                        
+
                         # Wait before creating new pool (reduced delay)
                         if attempt > 0:
                             await asyncio.sleep(2)  # Reduced from 5 to 2 seconds
-                        
+
                         # Recreate pool with timeout
                         self.logger.debug("Creating new connection pool...")
                         self.pool = await asyncio.wait_for(
@@ -1795,30 +1792,30 @@ class DorisConnectionManager:
                             timeout=10.0
                         )
                         self._mark_global_pool_created()
-                        
+
                         # Test recovered pool with timeout
                         if await asyncio.wait_for(self._test_pool_health(), timeout=5.0):
                             self.logger.info(f"✅ Pool recovery successful on attempt {attempt + 1}")
                             # Re-warm the pool with timeout
                             try:
                                 await asyncio.wait_for(self._warmup_pool(), timeout=5.0)
-                            except asyncio.TimeoutError:
+                            except TimeoutError:
                                 self.logger.warning("Pool warmup timeout, but recovery successful")
                             return
                         else:
                             self.logger.warning(f"❌ Pool recovery health check failed on attempt {attempt + 1}")
-                            
-                    except asyncio.TimeoutError:
+
+                    except TimeoutError:
                         self.logger.error(f"Pool recovery attempt {attempt + 1} timed out")
                         if self.pool:
                             try:
                                 self.pool.close()
-                            except:
+                            except Exception:
                                 pass
                             self.pool = None
                     except Exception as e:
                         self.logger.error(f"Pool recovery error on attempt {attempt + 1}: {e}")
-                        
+
                         # Clean up failed pool
                         if self.pool:
                             try:
@@ -1828,14 +1825,14 @@ class DorisConnectionManager:
                                 pass
                             finally:
                                 self.pool = None
-                
+
                 # All recovery attempts failed
                 self.logger.error("❌ Pool recovery failed after all attempts")
                 self.pool = None
-                
+
             finally:
                 self.pool_recovering = False
-    
+
     async def _recover_pool_with_lock(self):
         """🔧 FIX: Recovery method that uses the new recovery lock to prevent races"""
         async with self._recovery_lock:
@@ -1894,50 +1891,50 @@ class DorisConnectionManager:
             try:
                 # Wait for any ongoing recovery to complete
                 if self.pool_recovering:
-                    self.logger.debug(f"Pool recovery in progress, waiting for completion...")
+                    self.logger.debug("Pool recovery in progress, waiting for completion...")
                     # Wait for recovery to complete (max 10 seconds)
                     start_wait = time.time()
                     while self.pool_recovering and (time.time() - start_wait) < 10:
                         await asyncio.sleep(0.1)  # More frequent checks
-                    
+
                     if self.pool_recovering:
                         self.logger.error("Pool recovery is taking too long, proceeding anyway")
                         # Continue but log the issue
-                
+
                 # Check if pool is available
                 if not self.pool:
                     self.logger.warning("Connection pool is not available, attempting recovery...")
-                    
+
                     # Fallback to recovery
                     if not self.pool:
                         await self._recover_pool_with_lock()
-                    
+
                     if not self.pool:
                         raise RuntimeError("Connection pool is not available and recovery failed")
-                
+
                 # Check if pool is closed
                 if self.pool.closed:
                     self.logger.warning("Connection pool is closed, attempting recovery...")
                     await self._recover_pool_with_lock()
-                    
+
                     if not self.pool or self.pool.closed:
                         raise RuntimeError("Connection pool is closed and recovery failed")
-                
+
                 # 🔧 FIX: Increased timeout to prevent hanging
                 try:
                     raw_conn = await asyncio.wait_for(self.pool.acquire(), timeout=10.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     self.logger.error(f"Connection acquisition timed out for session {session_id}")
                     # Try one recovery attempt
                     await self._recover_pool_with_lock()
                     if self.pool and not self.pool.closed:
                         try:
                             raw_conn = await asyncio.wait_for(self.pool.acquire(), timeout=5.0)
-                        except asyncio.TimeoutError:
+                        except TimeoutError:
                             raise RuntimeError("Connection acquisition timed out after recovery")
                     else:
                         raise RuntimeError("Connection acquisition timed out")
-                
+
                 # Wrap in DorisConnection
                 doris_conn = DorisConnection(
                     raw_conn,
@@ -1949,7 +1946,7 @@ class DorisConnectionManager:
                     generation=self._global_pool_generation,
                     owner_pool=self.pool,
                 )
-                
+
                 # Basic validation - check if connection is open
                 if raw_conn.closed:
                     # Return connection and raise error
@@ -1958,12 +1955,12 @@ class DorisConnectionManager:
                     except Exception:
                         pass
                     raise RuntimeError("Acquired connection is already closed")
-                
+
                 self.logger.debug(f"✅ Acquired fresh connection for session {session_id}")
 
                 self.session_cache.save(doris_conn)
                 return doris_conn
-                
+
             except Exception as e:
                 self.logger.error(f"Failed to get connection for session {session_id}: {e}")
                 raise
@@ -2005,7 +2002,7 @@ class DorisConnectionManager:
         cached_conn = self.session_cache.get(session_id)
         if cached_conn:
             self.session_cache.remove(session_id)
-            if not (cached_conn is connection):
+            if cached_conn is not connection:
                 self.logger.warning("Invalid connection")
                 connection = cached_conn
 
@@ -2020,7 +2017,7 @@ class DorisConnectionManager:
         if getattr(connection, "pool_kind", "global") != "global":
             await self.release_routed_connection(connection)
             return
-            
+
         try:
             # Check pool availability before attempting release
             if not self.pool or self.pool.closed:
@@ -2030,12 +2027,12 @@ class DorisConnectionManager:
                 except Exception:
                     pass
                 return
-            
+
             # Check connection state before release
             if connection.connection.closed:
                 self.logger.debug(f"Connection already closed for session {session_id}")
                 return
-            
+
             # 🔧 FIX: Simplified release operation without thread wrapper
             try:
                 self.pool.release(connection.connection)
@@ -2081,7 +2078,7 @@ class DorisConnectionManager:
                 self.pool.close()
                 try:
                     await asyncio.wait_for(self.pool.wait_closed(), timeout=5.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     self.logger.warning("Timeout waiting for global pool to close")
 
             self.logger.info("Connection manager closed successfully")
@@ -2102,7 +2099,7 @@ class DorisConnectionManager:
             else:
                 self.metrics.idle_connections = 0
                 self.metrics.active_connections = 0
-            
+
             return self.metrics
         except Exception as e:
             self.logger.error(f"Error getting metrics: {e}")
@@ -2114,7 +2111,7 @@ class DorisConnectionManager:
         """Execute query using the same routed acquire/release contract as get_connection()."""
         connection = None
         effective_auth_context = self._get_effective_auth_context(auth_context)
-        
+
         try:
             connection = await self._get_connection_for_auth_context(session_id, effective_auth_context)
 
@@ -2141,7 +2138,7 @@ class DorisConnectionManager:
             if connection:
                 await self.release_connection(session_id, connection)
 
-    async def diagnose_connection_health(self) -> Dict[str, Any]:
+    async def diagnose_connection_health(self) -> dict[str, Any]:
         """Diagnose connection pool health - Simplified Strategy"""
         diagnosis = {
             "timestamp": utc_now().isoformat(),
@@ -2149,19 +2146,19 @@ class DorisConnectionManager:
             "pool_info": {},
             "recommendations": []
         }
-        
+
         try:
             # Check pool status
             if not self.pool:
                 diagnosis["pool_status"] = "not_initialized"
                 diagnosis["recommendations"].append("Initialize connection pool")
                 return diagnosis
-            
+
             if self.pool.closed:
                 diagnosis["pool_status"] = "closed"
                 diagnosis["recommendations"].append("Recreate connection pool")
                 return diagnosis
-            
+
             diagnosis["pool_status"] = "healthy"
             diagnosis["pool_info"] = {
                 "size": self.pool.size,
@@ -2169,20 +2166,20 @@ class DorisConnectionManager:
                 "min_size": self.pool.minsize,
                 "max_size": self.pool.maxsize
             }
-            
+
             # Generate recommendations based on pool status
             if self.pool.freesize == 0 and self.pool.size >= self.pool.maxsize:
                 diagnosis["recommendations"].append("Connection pool exhausted - consider increasing max_connections")
-            
+
             # Test pool health
             if await self._test_pool_health():
                 diagnosis["pool_health"] = "healthy"
             else:
                 diagnosis["pool_health"] = "unhealthy"
                 diagnosis["recommendations"].append("Pool health check failed - may need recovery")
-            
+
             return diagnosis
-            
+
         except Exception as e:
             diagnosis["error"] = str(e)
             diagnosis["recommendations"].append("Manual intervention required")
@@ -2202,7 +2199,7 @@ class ConnectionPoolMonitor:
     async def get_pool_status(self) -> dict[str, Any]:
         """Get connection pool status"""
         metrics = await self.connection_manager.get_metrics()
-        
+
         status = {
             "pool_size": self.connection_manager.pool.size if self.connection_manager.pool else 0,
             "free_connections": self.connection_manager.pool.freesize if self.connection_manager.pool else 0,
@@ -2214,7 +2211,7 @@ class ConnectionPoolMonitor:
             "avg_connection_time": metrics.avg_connection_time,
             "last_health_check": metrics.last_health_check.isoformat() if metrics.last_health_check else None,
         }
-        
+
         return status
 
     async def get_session_details(self) -> list[dict[str, Any]]:
@@ -2226,25 +2223,25 @@ class ConnectionPoolMonitor:
     async def generate_health_report(self) -> dict[str, Any]:
         """Generate connection health report - Simplified Strategy"""
         pool_status = await self.get_pool_status()
-        
+
         # Calculate pool utilization
         pool_utilization = 1.0 - (pool_status["free_connections"] / pool_status["pool_size"]) if pool_status["pool_size"] > 0 else 0.0
-        
+
         report = {
             "timestamp": utc_now().isoformat(),
             "pool_status": pool_status,
             "pool_utilization": pool_utilization,
             "recommendations": [],
         }
-        
+
         # Add recommendations based on pool status
         if pool_status["connection_errors"] > 10:
             report["recommendations"].append("High connection error rate detected, review connection configuration")
-        
+
         if pool_utilization > 0.9:
             report["recommendations"].append("Connection pool utilization is high, consider increasing pool size")
-        
+
         if pool_status["free_connections"] == 0:
             report["recommendations"].append("No free connections available, consider increasing pool size")
-        
+
         return report

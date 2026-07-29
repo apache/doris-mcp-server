@@ -17,10 +17,10 @@
 # under the License.
 """CORS helpers for protected MCP HTTP routes."""
 
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from starlette.responses import Response
-
 
 ASGISend = Callable[[dict[str, Any]], Awaitable[None]]
 

@@ -35,9 +35,9 @@ class TestDorisToolsManager:
     def mock_config(self):
         """Create mock configuration"""
         from doris_mcp_server.utils.config import DatabaseConfig, SecurityConfig
-        
+
         config = Mock(spec=DorisConfig)
-        
+
         # Add database config
         config.database = Mock(spec=DatabaseConfig)
         config.database.host = "localhost"
@@ -49,14 +49,14 @@ class TestDorisToolsManager:
         config.database.max_connections = 20
         config.database.connection_timeout = 30
         config.database.max_connection_age = 3600
-        
+
         # Add security config
         config.security = Mock(spec=SecurityConfig)
         config.security.enable_masking = True
         config.security.auth_type = "token"
         config.security.token_secret = "test_secret"
         config.security.token_expiry = 3600
-        
+
         return config
 
     @pytest.fixture
@@ -71,7 +71,7 @@ class TestDorisToolsManager:
     async def test_get_available_tools(self, tools_manager):
         """Test getting available tools"""
         tools = await tools_manager.list_tools()
-        
+
         # Should have core tools
         tool_names = [tool.name for tool in tools]
         assert "exec_query" in tool_names
@@ -93,15 +93,15 @@ class TestDorisToolsManager:
                 "row_count": 2,
                 "execution_time": 0.15
             }
-            
+
             arguments = {
                 "sql": "SELECT id, name FROM users LIMIT 2",
                 "max_rows": 100
             }
-            
+
             result = await tools_manager.call_tool("exec_query", arguments)
             result_data = json.loads(result) if isinstance(result, str) else result
-            
+
             # The test should handle both success and error cases
             if "success" in result_data and result_data["success"]:
                 # Check if result has data field or result field
@@ -112,7 +112,7 @@ class TestDorisToolsManager:
             else:
                 # If there's an error, just check that error is reported
                 assert "error" in result_data
-            
+
             # Verify the method was called (may not be called if there are errors)
             # Don't assert specific call parameters since the implementation may vary
 
@@ -121,18 +121,18 @@ class TestDorisToolsManager:
         """Test exec_query tool with error"""
         with patch.object(tools_manager.query_executor, 'execute_query') as mock_execute:
             mock_execute.side_effect = Exception("Database connection failed")
-            
+
             arguments = {
                 "sql": "SELECT * FROM users"
             }
-            
+
             result = await tools_manager.call_tool("exec_query", arguments)
             result_data = json.loads(result) if isinstance(result, str) else result
-            
+
             assert "error" in result_data or "success" in result_data
             if "error" in result_data:
                 # Accept any connection-related error message
-                assert any(keyword in result_data["error"].lower() for keyword in 
+                assert any(keyword in result_data["error"].lower() for keyword in
                           ["connection", "failed", "error", "mock"])
 
     @pytest.mark.asyncio
@@ -144,10 +144,10 @@ class TestDorisToolsManager:
                 {"Database": "information_schema"},
                 {"Database": "mysql"}
             ]
-            
+
             result = await tools_manager.call_tool("get_db_list", {})
             result_data = json.loads(result) if isinstance(result, str) else result
-            
+
             # Check if result has databases field or result field
             if "databases" in result_data:
                 assert len(result_data["databases"]) == 3
@@ -163,11 +163,11 @@ class TestDorisToolsManager:
                 {"Tables_in_test_db": "orders"},
                 {"Tables_in_test_db": "products"}
             ]
-            
+
             arguments = {"db_name": "test_db"}
             result = await tools_manager.call_tool("get_db_table_list", arguments)
             result_data = json.loads(result) if isinstance(result, str) else result
-            
+
             # Check if result has tables field or result field
             if "tables" in result_data:
                 assert len(result_data["tables"]) == 3
@@ -197,11 +197,11 @@ class TestDorisToolsManager:
                     "Extra": ""
                 }
             ]
-            
+
             arguments = {"table_name": "users"}
             result = await tools_manager.call_tool("get_table_schema", arguments)
             result_data = json.loads(result) if isinstance(result, str) else result
-            
+
             # Check if result has schema field or result field
             if "schema" in result_data:
                 assert len(result_data["schema"]) == 2
@@ -218,11 +218,11 @@ class TestDorisToolsManager:
                 {"CatalogName": "hive_catalog"},
                 {"CatalogName": "iceberg_catalog"}
             ]
-            
+
             arguments = {"random_string": "test_123"}
             result = await tools_manager.call_tool("get_catalog_list", arguments)
             result_data = json.loads(result) if isinstance(result, str) else result
-            
+
             # Check if result has catalogs field or result field
             if "catalogs" in result_data:
                 assert len(result_data["catalogs"]) == 3
@@ -237,7 +237,7 @@ class TestDorisToolsManager:
         """Test calling invalid tool"""
         result = await tools_manager.call_tool("invalid_tool", {})
         result_data = json.loads(result) if isinstance(result, str) else result
-        
+
         assert "error" in result_data or "success" in result_data
         if "error" in result_data:
             assert result_data["error"] == "Tool execution failed"
@@ -249,7 +249,7 @@ class TestDorisToolsManager:
         # exec_query requires sql parameter
         result = await tools_manager.call_tool("exec_query", {})
         result_data = json.loads(result) if isinstance(result, str) else result
-        
+
         assert "error" in result_data or "success" in result_data
         # The test may pass if the tool handles missing parameters gracefully
 
@@ -257,16 +257,16 @@ class TestDorisToolsManager:
     async def test_tool_definitions_structure(self, tools_manager):
         """Test tool definitions have correct structure"""
         tools = await tools_manager.list_tools()
-        
+
         for tool in tools:
             # Each tool should have required fields
             assert hasattr(tool, 'name')
             assert hasattr(tool, 'description')
             assert hasattr(tool, 'input_schema')
-            
+
             # Input schema should have properties
             assert 'properties' in tool.input_schema
-            
+
             # Required fields should be defined
             if 'required' in tool.input_schema:
                 assert isinstance(tool.input_schema['required'], list)

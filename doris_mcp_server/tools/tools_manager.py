@@ -22,7 +22,7 @@ Responsible for tool registration, management, scheduling and routing, does not 
 import json
 import time
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 
 from mcp.types import Tool
 
@@ -31,20 +31,20 @@ from ..auth.operation_policy import (
     authorize_operation,
     filter_tools_for_auth_context,
 )
-from ..utils.db import DorisConnectionManager
-from ..utils.query_executor import DorisQueryExecutor
-from ..utils.analysis_tools import TableAnalyzer, SQLAnalyzer, MemoryTracker
-from ..utils.monitoring_tools import DorisMonitoringTools
-from ..utils.schema_extractor import MetadataExtractor
-from ..utils.data_governance_tools import DataGovernanceTools
-from ..utils.data_exploration_tools import DataExplorationTools
-from ..utils.data_quality_tools import DataQualityTools
-from ..utils.security_analytics_tools import SecurityAnalyticsTools
-from ..utils.dependency_analysis_tools import DependencyAnalysisTools
-from ..utils.performance_analytics_tools import PerformanceAnalyticsTools
 from ..utils.adbc_query_tools import DorisADBCQueryTools
+from ..utils.analysis_tools import MemoryTracker, SQLAnalyzer, TableAnalyzer
+from ..utils.data_exploration_tools import DataExplorationTools
+from ..utils.data_governance_tools import DataGovernanceTools
+from ..utils.data_quality_tools import DataQualityTools
+from ..utils.db import DorisConnectionManager
+from ..utils.dependency_analysis_tools import DependencyAnalysisTools
 from ..utils.logger import get_logger
+from ..utils.monitoring_tools import DorisMonitoringTools
+from ..utils.performance_analytics_tools import PerformanceAnalyticsTools
+from ..utils.query_executor import DorisQueryExecutor
+from ..utils.schema_extractor import MetadataExtractor
 from ..utils.security import get_current_auth_context
+from ..utils.security_analytics_tools import SecurityAnalyticsTools
 
 logger = get_logger(__name__)
 
@@ -52,10 +52,10 @@ logger = get_logger(__name__)
 
 class DorisToolsManager:
     """Apache Doris Tools Manager"""
-    
+
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-        
+
         # Initialize business logic processors
         self.query_executor = DorisQueryExecutor(connection_manager)
         self.table_analyzer = TableAnalyzer(connection_manager)
@@ -63,7 +63,7 @@ class DorisToolsManager:
         self.metadata_extractor = MetadataExtractor(connection_manager=connection_manager)
         self.monitoring_tools = DorisMonitoringTools(connection_manager)
         self.memory_tracker = MemoryTracker(connection_manager)
-        
+
         # Initialize v0.5.0 advanced analytics tools
         self.data_governance_tools = DataGovernanceTools(connection_manager)
         self.data_exploration_tools = DataExplorationTools(connection_manager)
@@ -71,10 +71,10 @@ class DorisToolsManager:
         self.security_analytics_tools = SecurityAnalyticsTools(connection_manager)
         self.dependency_analysis_tools = DependencyAnalysisTools(connection_manager)
         self.performance_analytics_tools = PerformanceAnalyticsTools(connection_manager)
-        
+
         # Initialize ADBC query tools
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
-        
+
         logger.info("DorisToolsManager initialized with business logic processors, v0.5.0 analytics tools, and ADBC query tools")
 
     async def start(self) -> None:
@@ -84,12 +84,12 @@ class DorisToolsManager:
     async def close(self) -> None:
         """Stop runtime resources owned by the tools manager."""
         await self.query_executor.close()
-    
+
     async def register_tools_with_mcp(self, mcp):
         """Register all tools to MCP server"""
         logger.info("Starting to register MCP tools")
 
-        
+
         # SQL query execution tool (supports catalog federation queries)
         @mcp.tool(
             "exec_query",
@@ -370,7 +370,7 @@ class DorisToolsManager:
         )
         async def get_table_data_size_tool(
             db_name: str = None,
-            table_name: str = None, 
+            table_name: str = None,
             single_replica: bool = False
         ) -> str:
             """Get table data size information"""
@@ -443,7 +443,7 @@ class DorisToolsManager:
   * "overview": Overview type trackers (process memory, tracked memory summary)
   * "global": Global shared memory trackers (cache, metadata)
   * "query": Query-related memory trackers
-  * "load": Load-related memory trackers  
+  * "load": Load-related memory trackers
   * "compaction": Compaction-related memory trackers
   * "all": All memory tracker types
 
@@ -461,7 +461,7 @@ class DorisToolsManager:
         async def get_memory_stats_tool(
             data_type: str = "realtime",
             tracker_type: str = "overview",
-            tracker_names: List[str] = None,
+            tracker_names: list[str] = None,
             time_range: str = "1h",
             include_details: bool = True
         ) -> str:
@@ -475,7 +475,7 @@ class DorisToolsManager:
             })
 
         # ==================== v0.5.0 Advanced Analytics Tools ====================
-        
+
         # 🔄 Unified Data Quality Analysis Tool (New in v0.5.0)
         @mcp.tool(
             "get_table_basic_info",
@@ -520,8 +520,8 @@ class DorisToolsManager:
         )
         async def analyze_columns_tool(
             table_name: str,
-            columns: List[str],
-            analysis_types: List[str] = None,
+            columns: list[str],
+            analysis_types: list[str] = None,
             sample_size: int = 100000,
             catalog_name: str = None,
             db_name: str = None,
@@ -579,7 +579,7 @@ class DorisToolsManager:
 """,
         )
         async def trace_column_lineage_tool(
-            target_columns: List[str],
+            target_columns: list[str],
             analysis_depth: int = 3,
             include_transformations: bool = True,
             catalog_name: str = None
@@ -606,7 +606,7 @@ class DorisToolsManager:
 """,
         )
         async def monitor_data_freshness_tool(
-            table_names: List[str] = None,
+            table_names: list[str] = None,
             freshness_threshold_hours: int = 24,
             include_update_patterns: bool = True,
             catalog_name: str = None,
@@ -718,7 +718,7 @@ class DorisToolsManager:
         )
         async def analyze_resource_growth_curves_tool(
             days: int = 30,
-            resource_types: List[str] = None,
+            resource_types: list[str] = None,
             include_predictions: bool = False,
             detailed_response: bool = False
         ) -> str:
@@ -731,7 +731,7 @@ class DorisToolsManager:
             })
 
         # ==================== ADBC Query Tools ====================
-        
+
         # ADBC Query Execution Tool
         @mcp.tool(
             "exec_adbc_query",
@@ -744,7 +744,7 @@ class DorisToolsManager:
 - timeout (integer) [Optional] - Query timeout in seconds, default is {self.connection_manager.config.adbc.default_timeout}
 - return_format (string) [Optional] - Format for returned data, default is "{self.connection_manager.config.adbc.default_return_format}"
   * "arrow": Return Arrow format with metadata
-  * "pandas": Return Pandas DataFrame format 
+  * "pandas": Return Pandas DataFrame format
   * "dict": Return dictionary format
 
 [Prerequisites]:
@@ -783,11 +783,11 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
         logger.info("Successfully registered 25 tools to MCP server (14 basic + 9 advanced analytics + 2 ADBC tools)")
 
-    async def list_tools(self) -> List[Tool]:
+    async def list_tools(self) -> list[Tool]:
         """List all available query tools (for stdio mode)"""
         # Get ADBC configuration defaults
         adbc_config = self.connection_manager.config.adbc
-        
+
         tools = [
             Tool(
                 name="exec_query",
@@ -1098,7 +1098,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
   * "overview": Overview type trackers (process memory, tracked memory summary)
   * "global": Global shared memory trackers (cache, metadata)
   * "query": Query-related memory trackers
-  * "load": Load-related memory trackers  
+  * "load": Load-related memory trackers
   * "compaction": Compaction-related memory trackers
   * "all": All memory tracker types
 
@@ -1339,7 +1339,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - timeout (integer) [Optional] - Query timeout in seconds, default is {adbc_config.default_timeout}
 - return_format (string) [Optional] - Format for returned data, default is "{adbc_config.default_return_format}"
   * "arrow": Return Arrow format with metadata
-  * "pandas": Return Pandas DataFrame format 
+  * "pandas": Return Pandas DataFrame format
   * "dict": Return dictionary format
 
 [Prerequisites]:
@@ -1372,17 +1372,17 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 },
             ),
         ]
-        
+
         return filter_tools_for_auth_context(get_current_auth_context(), tools)
-        
-    async def call_tool(self, name: str, arguments: Dict[str, Any]) -> str:
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """
         Call the specified query tool (tool routing and scheduling center)
         """
         authorize_operation(get_current_auth_context(), f"tool:{name}")
         try:
             start_time = time.time()
-            
+
             # Tool routing - dispatch requests to corresponding business logic processors
             if name == "exec_query":
                 result = await self._exec_query_tool(arguments)
@@ -1451,9 +1451,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 result = await self._get_adbc_connection_info_tool(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
-            
+
             execution_time = time.time() - start_time
-            
+
             # Add execution information
             if isinstance(result, dict):
                 result["_execution_info"] = {
@@ -1461,9 +1461,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
                     "execution_time": round(execution_time, 3),
                     "timestamp": datetime.now().isoformat(),
                 }
-            
+
             return json.dumps(result, ensure_ascii=False, indent=2)
-            
+
         except OperationAuthorizationError:
             raise
         except Exception as e:
@@ -1477,139 +1477,139 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 "timestamp": datetime.now().isoformat(),
             }
             return json.dumps(error_result, ensure_ascii=False, indent=2)
-    
-    
-    async def _exec_query_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+
+    async def _exec_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL query execution tool routing (supports federation queries)"""
         sql = arguments.get("sql")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
         max_rows = arguments.get("max_rows", 100)
         timeout = arguments.get("timeout", 30)
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.exec_query_for_mcp(
             sql, db_name, catalog_name, max_rows, timeout
         )
-    
-    async def _get_table_schema_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_table_schema_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get table schema tool routing"""
         table_name = arguments.get("table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_table_schema_for_mcp(
             table_name, db_name, catalog_name
         )
-    
-    async def _get_db_table_list_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_db_table_list_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get database table list tool routing"""
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_db_table_list_for_mcp(db_name, catalog_name)
-    
-    async def _get_db_list_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_db_list_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get database list tool routing"""
         catalog_name = arguments.get("catalog_name")
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_db_list_for_mcp(catalog_name)
-    
-    async def _get_table_comment_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_table_comment_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get table comment tool routing"""
         table_name = arguments.get("table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_table_comment_for_mcp(
             table_name, db_name, catalog_name
         )
-    
-    async def _get_table_column_comments_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_table_column_comments_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get table column comments tool routing"""
         table_name = arguments.get("table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_table_column_comments_for_mcp(
             table_name, db_name, catalog_name
         )
-    
-    async def _get_table_indexes_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_table_indexes_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get table indexes tool routing"""
         table_name = arguments.get("table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_table_indexes_for_mcp(
             table_name, db_name, catalog_name
         )
-    
-    async def _get_recent_audit_logs_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_recent_audit_logs_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get audit logs tool routing"""
         days = arguments.get("days", 7)
         limit = arguments.get("limit", 100)
-        
+
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_recent_audit_logs_for_mcp(days, limit)
-    
-    async def _get_catalog_list_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_catalog_list_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get catalog list tool routing"""
         # random_string parameter is required in the source project, but not actually used in business logic
         # Here we ignore it and directly call business logic
-        
+
         # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_catalog_list_for_mcp() 
-    
-    async def _get_sql_explain_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        return await self.metadata_extractor.get_catalog_list_for_mcp()
+
+    async def _get_sql_explain_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL Explain tool routing"""
         sql = arguments.get("sql")
         verbose = arguments.get("verbose", False)
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
-        
+
         # Delegate to SQL analyzer for processing
         return await self.sql_analyzer.get_sql_explain(
             sql, verbose, db_name, catalog_name
         )
-    
-    async def _get_sql_profile_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_sql_profile_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL Profile tool routing"""
         sql = arguments.get("sql")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
         timeout = arguments.get("timeout", 30)
-        
+
         # Delegate to SQL analyzer for processing
         return await self.sql_analyzer.get_sql_profile(
             sql, db_name, catalog_name, timeout
         )
 
-    async def _get_table_data_size_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_table_data_size_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Table data size tool routing"""
         db_name = arguments.get("db_name")
         table_name = arguments.get("table_name")
         single_replica = arguments.get("single_replica", False)
-        
+
         # Delegate to SQL analyzer for processing
         return await self.sql_analyzer.get_table_data_size(
             db_name, table_name, single_replica
         )
 
-    async def _get_monitoring_metrics_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_monitoring_metrics_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Unified monitoring metrics tool routing"""
         content_type = arguments.get("content_type", "data")
         role = arguments.get("role", "all")
         monitor_type = arguments.get("monitor_type", "all")
         priority = arguments.get("priority", "core")
         include_raw_metrics = arguments.get("include_raw_metrics", False)
-        
+
         if content_type == "definitions":
             # Only get definitions
             return await self.monitoring_tools.get_monitoring_metrics(
@@ -1642,14 +1642,14 @@ No parameters required. Returns connection status, configuration, and diagnostic
         else:
             return {"error": f"Invalid content_type: {content_type}. Must be 'definitions', 'data', or 'both'"}
 
-    async def _get_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_memory_stats_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Unified memory statistics tool routing"""
         data_type = arguments.get("data_type", "realtime")
         tracker_type = arguments.get("tracker_type", "overview")
         tracker_names = arguments.get("tracker_names")
         time_range = arguments.get("time_range", "1h")
         include_details = arguments.get("include_details", True)
-        
+
         if data_type == "realtime":
             # Only get real-time data
             return await self.memory_tracker.get_realtime_memory_stats(
@@ -1683,52 +1683,52 @@ No parameters required. Returns connection status, configuration, and diagnostic
             return {"error": f"Invalid data_type: {data_type}. Must be 'realtime', 'historical', or 'both'"}
 
     # Legacy tool methods (for backward compatibility)
-    async def _get_monitoring_metrics_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_monitoring_metrics_info_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """[DEPRECATED] Use get_monitoring_metrics with content_type='definitions'"""
         arguments["content_type"] = "definitions"
         return await self._get_monitoring_metrics_tool(arguments)
 
-    async def _get_monitoring_metrics_data_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_monitoring_metrics_data_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """[DEPRECATED] Use get_monitoring_metrics with content_type='data'"""
         arguments["content_type"] = "data"
         return await self._get_monitoring_metrics_tool(arguments)
 
-    async def _get_realtime_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_realtime_memory_stats_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """[DEPRECATED] Use get_memory_stats with data_type='realtime'"""
         arguments["data_type"] = "realtime"
         return await self._get_memory_stats_tool(arguments)
 
-    async def _get_historical_memory_stats_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_historical_memory_stats_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """[DEPRECATED] Use get_memory_stats with data_type='historical'"""
         arguments["data_type"] = "historical"
         return await self._get_memory_stats_tool(arguments)
-    
+
     # ==================== v0.5.0 Advanced Analytics Tools Private Methods ====================
-    
-    async def _get_table_basic_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_table_basic_info_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get table basic information tool routing"""
         try:
             table_name = arguments.get("table_name")
             catalog_name = arguments.get("catalog_name")
             db_name = arguments.get("db_name")
-            
+
             # Delegate to atomic data quality tools
             result = await self.data_quality_tools.get_table_basic_info(
                 table_name=table_name,
                 catalog_name=catalog_name,
                 db_name=db_name
             )
-            
+
             return result
-            
+
         except Exception as e:
             return {
                 "error": str(e),
                 "analysis_type": "table_basic_info",
                 "timestamp": datetime.now().isoformat()
             }
-    
-    async def _analyze_columns_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _analyze_columns_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Analyze columns tool routing"""
         try:
             table_name = arguments.get("table_name")
@@ -1738,7 +1738,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
             catalog_name = arguments.get("catalog_name")
             db_name = arguments.get("db_name")
             detailed_response = arguments.get("detailed_response", False)
-            
+
             # Delegate to atomic data quality tools
             result = await self.data_quality_tools.analyze_columns(
                 table_name=table_name,
@@ -1749,24 +1749,24 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 db_name=db_name,
                 detailed_response=detailed_response
             )
-            
+
             return result
-            
+
         except Exception as e:
             return {
                 "error": str(e),
                 "analysis_type": "columns_analysis",
                 "timestamp": datetime.now().isoformat()
             }
-    
-    async def _analyze_table_storage_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _analyze_table_storage_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Analyze table storage tool routing"""
         try:
             table_name = arguments.get("table_name")
             catalog_name = arguments.get("catalog_name")
             db_name = arguments.get("db_name")
             detailed_response = arguments.get("detailed_response", False)
-            
+
             # Delegate to atomic data quality tools
             result = await self.data_quality_tools.analyze_table_storage(
                 table_name=table_name,
@@ -1774,28 +1774,27 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 db_name=db_name,
                 detailed_response=detailed_response
             )
-            
+
             return result
-            
+
         except Exception as e:
             return {
                 "error": str(e),
                 "analysis_type": "table_storage_analysis",
                 "timestamp": datetime.now().isoformat()
             }
-    
 
-    
-    async def _trace_column_lineage_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+
+    async def _trace_column_lineage_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Column lineage tracing tool routing"""
         target_columns = arguments.get("target_columns")
         analysis_depth = arguments.get("analysis_depth", 3)
-        include_transformations = arguments.get("include_transformations", True)
         catalog_name = arguments.get("catalog_name")
-        
+
         if not target_columns:
             return {"error": "target_columns parameter is required"}
-        
+
         # Handle multi-column lineage tracing
         if isinstance(target_columns, list):
             results = {}
@@ -1811,7 +1810,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
                     else:
                         results[column_spec] = {"error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"}
                         continue
-                    
+
                     result = await self.data_governance_tools.trace_column_lineage(
                         table_name=table_name,
                         column_name=column_name,
@@ -1820,10 +1819,10 @@ No parameters required. Returns connection status, configuration, and diagnostic
                         db_name=db_name
                     )
                     results[column_spec] = result
-                    
+
                 except Exception as e:
                     results[column_spec] = {"error": f"Failed to trace lineage for {column_spec}: {str(e)}"}
-            
+
             return {
                 "multi_column_lineage": True,
                 "column_count": len(target_columns),
@@ -1841,7 +1840,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 db_name, table_name, column_name = parts
             else:
                 return {"error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"}
-            
+
             return await self.data_governance_tools.trace_column_lineage(
                 table_name=table_name,
                 column_name=column_name,
@@ -1849,90 +1848,89 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 catalog_name=catalog_name,
                 db_name=db_name
             )
-    
-    async def _monitor_data_freshness_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _monitor_data_freshness_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Data freshness monitoring tool routing"""
         table_names = arguments.get("table_names")
         freshness_threshold_hours = arguments.get("freshness_threshold_hours", 24)
         if freshness_threshold_hours is None:
             freshness_threshold_hours = 24
-        include_update_patterns = arguments.get("include_update_patterns", True)
         catalog_name = arguments.get("catalog_name")
         db_name = arguments.get("db_name")
-        
+
         # Delegate to data governance tools for processing
         return await self.data_governance_tools.monitor_data_freshness(
-            tables=table_names, 
-            time_threshold_hours=freshness_threshold_hours, 
-            catalog_name=catalog_name, 
+            tables=table_names,
+            time_threshold_hours=freshness_threshold_hours,
+            catalog_name=catalog_name,
             db_name=db_name
         )
-    
 
-    
-    async def _analyze_data_access_patterns_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+
+    async def _analyze_data_access_patterns_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Data access patterns analysis tool routing"""
         days = arguments.get("days", 7)
         include_system_users = arguments.get("include_system_users", False)
         min_query_threshold = arguments.get("min_query_threshold", 5)
-        
+
         # Delegate to security analytics tools for processing
         return await self.security_analytics_tools.analyze_data_access_patterns(
             days, include_system_users, min_query_threshold
         )
-    
-    async def _analyze_data_flow_dependencies_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _analyze_data_flow_dependencies_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Data flow dependencies analysis tool routing"""
         target_table = arguments.get("target_table")
         analysis_depth = arguments.get("analysis_depth", 3)
         include_views = arguments.get("include_views", True)
         catalog_name = arguments.get("catalog_name")
         db_name = arguments.get("db_name")
-        
+
         # Delegate to dependency analysis tools for processing
         return await self.dependency_analysis_tools.analyze_data_flow_dependencies(
             target_table, analysis_depth, include_views, catalog_name, db_name
         )
-    
-    async def _analyze_slow_queries_topn_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _analyze_slow_queries_topn_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Slow queries Top-N analysis tool routing"""
         days = arguments.get("days", 7)
         top_n = arguments.get("top_n", 20)
         min_execution_time_ms = arguments.get("min_execution_time_ms", 1000)
         include_patterns = arguments.get("include_patterns", True)
-        
+
         # Delegate to performance analytics tools for processing
         return await self.performance_analytics_tools.analyze_slow_queries_topn(
             days, top_n, min_execution_time_ms, include_patterns
         )
-    
-    async def _analyze_resource_growth_curves_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _analyze_resource_growth_curves_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Resource growth curves analysis tool routing"""
         days = arguments.get("days", 30)
         resource_types = arguments.get("resource_types", ["storage", "query_volume", "user_activity"])
         include_predictions = arguments.get("include_predictions", False)
         detailed_response = arguments.get("detailed_response", False)
-        
+
         # Delegate to performance analytics tools for processing
         return await self.performance_analytics_tools.analyze_resource_growth_curves(
             days, resource_types, include_predictions, detailed_response
         )
-    
+
     # ==================== ADBC Query Tools Private Methods ====================
-    
-    async def _exec_adbc_query_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _exec_adbc_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """ADBC query execution tool routing"""
         sql = arguments.get("sql")
         max_rows = arguments.get("max_rows", 100000)
         timeout = arguments.get("timeout", 60)
         return_format = arguments.get("return_format", "arrow")
-        
+
         # Delegate to ADBC query tools for processing
         return await self.adbc_query_tools.exec_adbc_query(
             sql, max_rows, timeout, return_format
         )
-    
-    async def _get_adbc_connection_info_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def _get_adbc_connection_info_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """ADBC connection information tool routing"""
         # Delegate to ADBC query tools for processing
         return await self.adbc_query_tools.get_adbc_connection_info()

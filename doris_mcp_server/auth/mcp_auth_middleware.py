@@ -108,7 +108,7 @@ class MCPAuthASGIMiddleware:
             context_token = set_current_auth_context(auth_context)
             if get_current_auth_context() is not auth_context:
                 raise RuntimeError("AuthContext ContextVar verification failed")
-        except Exception as exc:
+        except Exception:
             if context_token is not None:
                 try:
                     reset_auth_context(context_token)

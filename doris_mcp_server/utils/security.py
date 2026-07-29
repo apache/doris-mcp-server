@@ -27,7 +27,7 @@ from contextvars import Token as ContextToken
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 import sqlparse
 from sqlparse.sql import Statement
@@ -38,8 +38,8 @@ from .config import (
     DatabaseConfig,
     get_effective_auth_config,
 )
-from .logger import get_logger
 from .datetime_utils import utc_now
+from .logger import get_logger
 
 # Global ContextVar for auth_context - must be a single instance shared across all modules
 # This allows token-bound database configuration to work correctly in concurrent requests
@@ -61,7 +61,7 @@ class SecurityLevel(Enum):
 class AuthContext:
     """Authentication context for audit and session tracking"""
 
-    token_id: str = ""  # Token identifier for audit logging  
+    token_id: str = ""  # Token identifier for audit logging
     user_id: str = ""  # User identifier
     roles: list[str] = field(default_factory=list)  # User roles
     permissions: list[str] = field(default_factory=list)  # User permissions
@@ -110,7 +110,7 @@ class ValidationResult:
     error_message: str | None = None
     risk_level: str = "low"
     blocked_operations: list[str] = None
-    
+
     def __post_init__(self):
         if self.blocked_operations is None:
             self.blocked_operations = []
@@ -147,7 +147,7 @@ class DorisSecurityManager:
         self.blocked_keywords = self._load_blocked_keywords()
         self.sensitive_tables = self._load_sensitive_tables()
         self.masking_rules = self._load_masking_rules()
-        
+
         # Track initialization state
         self._initialized = False
 
@@ -155,14 +155,14 @@ class DorisSecurityManager:
         """Initialize security manager components"""
         if self._initialized:
             return
-            
+
         try:
             # Initialize authentication provider (for JWT setup)
             await self.auth_provider.initialize()
-            
+
             self._initialized = True
             self.logger.info("DorisSecurityManager initialized successfully")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to initialize DorisSecurityManager: {e}")
             raise
@@ -176,7 +176,7 @@ class DorisSecurityManager:
             await self.auth_provider.shutdown()
             self._initialized = False
             self.logger.info("DorisSecurityManager shutdown completed")
-            
+
         except Exception as e:
             self.logger.error(f"Error during DorisSecurityManager shutdown: {e}")
             raise
@@ -194,7 +194,7 @@ class DorisSecurityManager:
             # Fallback to default if no configuration available
             blocked_keywords = [
                 "DROP", "CREATE", "ALTER", "TRUNCATE",
-                "DELETE", "INSERT", "UPDATE", 
+                "DELETE", "INSERT", "UPDATE",
                 "GRANT", "REVOKE",
                 "EXEC", "EXECUTE", "SHUTDOWN", "KILL"
             ]
@@ -209,7 +209,7 @@ class DorisSecurityManager:
             "employee_data": SecurityLevel.CONFIDENTIAL,
             "public_reports": SecurityLevel.PUBLIC,
         }
-        
+
         if hasattr(self.config, 'get'):
             config_tables = self.config.get("sensitive_tables", {})
             # Convert string values to SecurityLevel enum
@@ -254,7 +254,7 @@ class DorisSecurityManager:
             custom_rules = self.config.get("masking_rules", [])
         elif hasattr(self.config, 'security') and hasattr(self.config.security, 'masking_rules'):
             custom_rules = self.config.security.masking_rules
-        
+
         for rule_config in custom_rules:
             if isinstance(rule_config, dict):
                 default_rules.append(MaskingRule(**rule_config))
@@ -268,7 +268,7 @@ class DorisSecurityManager:
         auth_input: BearerCredentials | Mapping[str, Any],
     ) -> AuthContext:
         """Validate request authentication information
-        
+
         Tries authentication methods in normalized effective config order.
         Any one method succeeding allows access
         If all methods are disabled, returns anonymous context
@@ -294,7 +294,7 @@ class DorisSecurityManager:
                 auth_method="anonymous",
                 pool_key="global",
             )
-        
+
         last_error = None
 
         for auth_method in effective_auth.auth_methods:
@@ -317,7 +317,7 @@ class DorisSecurityManager:
                     )
                 ):
                     raise
-        
+
         # All enabled authentication methods failed
         from ..auth.oauth_token_validation import (
             OAuthAccessTokenValidationError,
@@ -354,7 +354,7 @@ class DorisSecurityManager:
     # OAuth-specific methods
     def get_oauth_authorization_url(self) -> tuple[str, str]:
         """Get OAuth authorization URL
-        
+
         Returns:
             Tuple of (authorization_url, state)
         """
@@ -364,11 +364,11 @@ class DorisSecurityManager:
 
     async def handle_oauth_callback(self, code: str, state: str) -> AuthContext:
         """Handle OAuth callback
-        
+
         Args:
             code: Authorization code from OAuth provider
             state: State parameter for CSRF protection
-            
+
         Returns:
             AuthContext for authenticated user
         """
@@ -378,7 +378,7 @@ class DorisSecurityManager:
 
     def get_oauth_provider_info(self) -> dict[str, Any]:
         """Get OAuth provider information
-        
+
         Returns:
             OAuth provider information
         """
@@ -390,26 +390,26 @@ class DorisSecurityManager:
     async def create_token(
         self,
         token_id: str,
-        expires_hours: Optional[int] = None,
+        expires_hours: int | None = None,
         description: str = "",
-        custom_token: Optional[str] = None,
-        database_config: Optional[DatabaseConfig] = None
+        custom_token: str | None = None,
+        database_config: DatabaseConfig | None = None
     ) -> str:
         """Create a new API access token
-        
+
         Args:
             token_id: Unique token identifier for audit and management
             expires_hours: Token expiration in hours (None for no expiration)
             description: Token description for management purposes
             custom_token: Custom token string (if None, generates random token)
             database_config: Optional database configuration for this token
-            
+
         Returns:
             Generated token string
         """
         if not self.auth_provider.token_manager:
             raise ValueError("Token manager not initialized")
-        
+
         return await self.auth_provider.token_manager.create_token(
             token_id=token_id,
             expires_hours=expires_hours,
@@ -417,64 +417,64 @@ class DorisSecurityManager:
             custom_token=custom_token,
             database_config=database_config
         )
-    
+
     async def revoke_token(self, token_id: str) -> bool:
         """Revoke a token by token ID
-        
+
         Args:
             token_id: Token ID to revoke
-            
+
         Returns:
             True if token was revoked successfully
         """
         if not self.auth_provider.token_manager:
             raise ValueError("Token manager not initialized")
-        
+
         return await self.auth_provider.token_manager.revoke_token(token_id)
-    
+
     async def list_tokens(self) -> list[dict[str, Any]]:
         """List all tokens (without sensitive data)
-        
+
         Returns:
             List of token information
         """
         if not self.auth_provider.token_manager:
             raise ValueError("Token manager not initialized")
-        
+
         return await self.auth_provider.token_manager.list_tokens()
-    
+
     async def cleanup_expired_tokens(self) -> int:
         """Remove expired tokens and return count
-        
+
         Returns:
             Number of expired tokens removed
         """
         if not self.auth_provider.token_manager:
             return 0
-        
+
         return await self.auth_provider.token_manager.cleanup_expired_tokens()
-    
+
     def get_token_stats(self) -> dict[str, Any]:
         """Get token statistics
-        
+
         Returns:
             Token statistics dictionary
         """
         if not self.auth_provider.token_manager:
             return {"error": "Token manager not initialized"}
-        
+
         return self.auth_provider.token_manager.get_token_stats()
-    
+
     async def _validate_token_database_config(self, token: str, token_info) -> None:
         """Validate database configuration for token immediately during authentication
-        
+
         This ensures database connectivity issues are caught at authentication time,
         not during query execution, providing better user experience.
-        
+
         Args:
             token: Raw authentication token
             token_info: TokenInfo object from token validation
-            
+
         Raises:
             ValueError: If database configuration is invalid or connection fails
         """
@@ -482,15 +482,15 @@ class DorisSecurityManager:
             if not self.connection_manager:
                 self.logger.warning("Connection manager not available for immediate database validation")
                 return
-            
+
             # Configure and test database connection for this token
             success, config_source = await self.connection_manager.configure_for_token(token)
-            
+
             if success:
                 self.logger.info(f"Database configuration validated successfully for token {token_info.token_id} (source: {config_source})")
             else:
                 raise ValueError("Database configuration validation failed")
-                
+
         except Exception as e:
             error_msg = f"Database configuration validation failed for token {token_info.token_id}: {str(e)}"
             self.logger.error(error_msg)
@@ -510,20 +510,20 @@ class AuthenticationProvider:
         self.token_manager = None
         self.security_manager = security_manager
         self.effective_auth = get_effective_auth_config(config)
-        
+
         # Initialize authentication providers based on individual switches
         auth_methods_enabled = []
-        
+
         # Initialize Token manager if enabled
         if self.effective_auth.enable_token_auth:
             self._initialize_token_manager()
             auth_methods_enabled.append("Token")
-            
+
         # Initialize JWT manager if enabled
         if self.effective_auth.enable_jwt_auth:
             self._initialize_jwt_manager()
             auth_methods_enabled.append("JWT")
-            
+
         # Initialize OAuth provider if enabled
         if self.effective_auth.enable_external_oauth_auth:
             self._initialize_oauth_provider()
@@ -532,7 +532,7 @@ class AuthenticationProvider:
         if self.effective_auth.enable_doris_oauth_auth:
             self._initialize_doris_oauth_provider()
             auth_methods_enabled.append("Doris OAuth")
-            
+
         if auth_methods_enabled:
             self.logger.info(f"Authentication enabled with methods: {', '.join(auth_methods_enabled)}")
         else:
@@ -602,11 +602,11 @@ class AuthenticationProvider:
             if not success:
                 raise RuntimeError("Failed to initialize JWT manager")
             self.logger.info("JWT authentication provider initialized successfully")
-        
+
         if self.token_manager:
             # Token manager doesn't need async initialization, just log success
             self.logger.info("Token authentication provider initialized successfully")
-            
+
         if self.oauth_provider:
             success = await self.oauth_provider.initialize()
             if not success:
@@ -618,11 +618,11 @@ class AuthenticationProvider:
         if self.jwt_manager:
             await self.jwt_manager.shutdown()
             self.logger.info("JWT authentication provider shutdown completed")
-        
+
         if self.token_manager:
             # Token manager doesn't need async shutdown, just log
             self.logger.info("Token authentication provider shutdown completed")
-            
+
         if self.oauth_provider:
             await self.oauth_provider.shutdown()
             self.logger.info("OAuth authentication provider shutdown completed")
@@ -680,7 +680,7 @@ class AuthenticationProvider:
         if not self.effective_auth.enable_token_auth:
             raise ValueError("Token authentication is not enabled")
         return await self._authenticate_token(credentials)
-    
+
     async def authenticate_jwt(
         self,
         credentials: BearerCredentials,
@@ -689,7 +689,7 @@ class AuthenticationProvider:
         if not self.effective_auth.enable_jwt_auth:
             raise ValueError("JWT authentication is not enabled")
         return await self._authenticate_jwt(credentials)
-    
+
     async def authenticate_oauth(
         self,
         credentials: BearerCredentials,
@@ -730,7 +730,7 @@ class AuthenticationProvider:
             from ..auth.auth_middleware import AuthMiddleware
             middleware = AuthMiddleware(self.jwt_manager)
             return await middleware.authenticate_request(credentials)
-            
+
         except Exception as e:
             self.logger.error(f"JWT authentication failed: {e}")
             raise ValueError(f"JWT authentication failed: {str(e)}")
@@ -767,16 +767,16 @@ class AuthenticationProvider:
         try:
             # Validate token using TokenManager
             validation_result = await self.token_manager.validate_token(token)
-            
+
             if not validation_result.is_valid:
                 raise ValueError(f"Token validation failed: {validation_result.error_message}")
-            
+
             token_info = validation_result.token_info
-            
+
             # Immediately validate database configuration for this token
             if self.security_manager:
                 await self.security_manager._validate_token_database_config(token, token_info)
-            
+
             return AuthContext(
                 token_id=token_info.token_id,
                 user_id=token_info.token_id,  # Use token_id as user_id for token auth
@@ -791,7 +791,7 @@ class AuthenticationProvider:
                 auth_method="token",
                 pool_key=f"static_token:{token_info.token_id}",
             )
-            
+
         except Exception as e:
             self.logger.error(f"Token authentication failed: {e}")
             raise ValueError(f"Token authentication failed: {str(e)}")
@@ -803,10 +803,10 @@ class AuthorizationProvider:
         self.config = config
         self.logger = get_logger(__name__)
         self.permission_cache = {}
-        
+
         # Load sensitive tables configuration
         self.sensitive_tables = self._load_sensitive_tables()
-    
+
     def _load_sensitive_tables(self) -> dict[str, SecurityLevel]:
         """Load sensitive table configuration"""
         default_tables = {
@@ -815,7 +815,7 @@ class AuthorizationProvider:
             "employee_data": SecurityLevel.CONFIDENTIAL,
             "public_reports": SecurityLevel.PUBLIC,
         }
-        
+
         if hasattr(self.config, 'get'):
             config_tables = self.config.get("sensitive_tables", {})
             # Convert string values to SecurityLevel enum
@@ -924,10 +924,10 @@ class AuthorizationProvider:
         """Get resource security level"""
         # Get table security level from configuration
         table_name = resource_info.get("name", "")
-        
+
         # Use the loaded sensitive tables
         sensitive_tables = self.sensitive_tables
-            
+
         # Convert string values to SecurityLevel enum if needed
         security_level = sensitive_tables.get(table_name, SecurityLevel.INTERNAL)
         if isinstance(security_level, str):
@@ -935,7 +935,7 @@ class AuthorizationProvider:
                 security_level = SecurityLevel(security_level.lower())
             except ValueError:
                 security_level = SecurityLevel.INTERNAL
-                
+
         return security_level
 
 
@@ -945,7 +945,7 @@ class SQLSecurityValidator:
     def __init__(self, config):
         self.config = config
         self.logger = get_logger(__name__)
-        
+
         # Handle DorisConfig object or dictionary configuration
         if hasattr(config, 'get'):
             # Dictionary configuration
@@ -959,12 +959,12 @@ class SQLSecurityValidator:
             self.enable_security_check = getattr(config.security, 'enable_security_check', True)
         else:
             # Fallback to default if no configuration available
-            self.blocked_keywords = set([
+            self.blocked_keywords = {
                 "DROP", "CREATE", "ALTER", "TRUNCATE",
-                "DELETE", "INSERT", "UPDATE", 
+                "DELETE", "INSERT", "UPDATE",
                 "GRANT", "REVOKE",
                 "EXEC", "EXECUTE", "SHUTDOWN", "KILL"
-            ])
+            }
             self.max_query_complexity = 100
             self.enable_security_check = True
 
@@ -1134,11 +1134,9 @@ class SQLSecurityValidator:
             # Check for unmatched quotes ONLY in non-string tokens
             # This prevents false positives from legitimate string content
             non_string_content = []
-            has_string_tokens = False
 
             for token in statement.flatten():
                 if token.ttype in (String.Single, String.Double):
-                    has_string_tokens = True
                     # Skip string content - quotes inside strings are legitimate
                     continue
                 elif token.ttype in (Comment.Single, Comment.Multi):
@@ -1189,8 +1187,8 @@ class SQLSecurityValidator:
         # Check all tokens in the parsed statement
         for token in parsed.flatten():
             # Check if token is a keyword (including DML/DDL) or name that matches blocked operations
-            if (token.ttype is Keyword or 
-                token.ttype is Name or 
+            if (token.ttype is Keyword or
+                token.ttype is Name or
                 (token.ttype and str(token.ttype).startswith('Token.Keyword'))):
                 token_value = token.value.upper().strip()
                 if token_value in self.blocked_keywords:
@@ -1245,7 +1243,7 @@ class SQLSecurityValidator:
         # If no auth_context, skip table access checks (rely on other security checks)
         if auth_context is None:
             return ValidationResult(is_valid=True)
-        
+
         # Extract table names from query
         tables = self._extract_table_names(parsed)
 
@@ -1297,7 +1295,7 @@ class DataMaskingProcessor:
         self.logger = get_logger(__name__)
         self.masking_algorithms = self._init_masking_algorithms()
         self.masking_rules = self._load_masking_rules()
-    
+
     def _load_masking_rules(self) -> list[MaskingRule]:
         """Load data masking rules"""
         default_rules = [

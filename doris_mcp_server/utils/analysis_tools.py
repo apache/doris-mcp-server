@@ -19,12 +19,11 @@ Data Analysis Tools Module
 Provides data analysis functions including table analysis, column statistics, performance monitoring, etc.
 """
 
-import time
-from datetime import datetime
-from typing import Any, Dict, List
-import uuid
 import hashlib
+import uuid
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from .db import DorisConnectionManager
@@ -32,10 +31,9 @@ from .doris_http_client import DorisHTTPClient
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
-    validate_identifier,
-    quote_identifier,
-    build_table_reference,
     get_auth_context,
+    quote_identifier,
+    validate_identifier,
     validate_integer,
 )
 
@@ -44,60 +42,60 @@ logger = get_logger(__name__)
 
 class TableAnalyzer:
     """Table analyzer"""
-    
+
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-    
+
     async def get_table_summary(
-        self, 
-        table_name: str, 
-        include_sample: bool = True, 
+        self,
+        table_name: str,
+        include_sample: bool = True,
         sample_size: int = 10
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get table summary information"""
         # SECURITY FIX: Validate table_name and get auth_context
         try:
             validate_identifier(table_name, "table name")
         except SQLSecurityError as e:
             raise ValueError(f"Invalid table name: {e}")
-        
+
         auth_context = get_auth_context()
         connection = await self.connection_manager.get_connection("query")
-        
+
         # Get table basic information using parameterized query
         table_info_sql = """
-        SELECT 
+        SELECT
             table_name,
             table_comment,
             table_rows,
             create_time,
             engine
-        FROM information_schema.tables 
+        FROM information_schema.tables
         WHERE table_schema = DATABASE()
         AND table_name = %s
         """
-        
+
         table_info_result = await connection.execute(table_info_sql, params=(table_name,), auth_context=auth_context)
         if not table_info_result.data:
             raise ValueError(f"Table {table_name} does not exist")
-        
+
         table_info = table_info_result.data[0]
-        
+
         # Get column information using parameterized query
         columns_sql = """
-        SELECT 
+        SELECT
             column_name,
             data_type,
             is_nullable,
             column_comment
-        FROM information_schema.columns 
+        FROM information_schema.columns
         WHERE table_schema = DATABASE()
         AND table_name = %s
         ORDER BY ordinal_position
         """
-        
+
         columns_result = await connection.execute(columns_sql, params=(table_name,), auth_context=auth_context)
-        
+
         summary = {
             "table_name": table_info["table_name"],
             "comment": table_info.get("table_comment"),
@@ -107,7 +105,7 @@ class TableAnalyzer:
             "column_count": len(columns_result.data),
             "columns": columns_result.data,
         }
-        
+
         # Get sample data using quoted identifier
         safe_sample_size = validate_integer(
             sample_size,
@@ -124,33 +122,33 @@ class TableAnalyzer:
             )
             sample_result = await connection.execute(sample_sql, auth_context=auth_context)
             summary["sample_data"] = sample_result.data
-        
+
         return summary
-    
+
     async def analyze_column(
-        self, 
-        table_name: str, 
-        column_name: str, 
+        self,
+        table_name: str,
+        column_name: str,
         analysis_type: str = "basic"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Analyze column statistics"""
         try:
             safe_table = quote_identifier(table_name, "table name")
             safe_column = quote_identifier(column_name, "column name")
             connection = await self.connection_manager.get_connection("query")
-            
+
             # Basic statistics
             # SQL sink audit: MCP identifiers -> quote_identifier; label value
             # -> bound parameter -> DorisConnection.execute.
             basic_stats_sql = f"""
-            SELECT 
+            SELECT
                 %s as column_name,
                 COUNT(*) as total_count,
                 COUNT({safe_column}) as non_null_count,
                 COUNT(DISTINCT {safe_column}) as distinct_count
             FROM {safe_table}
             """  # nosec B608
-            
+
             auth_context = get_auth_context()
             basic_result = await connection.execute(
                 basic_stats_sql,
@@ -162,17 +160,17 @@ class TableAnalyzer:
                     "success": False,
                     "error": f"Unable to get statistics for table {table_name} column {column_name}"
                 }
-            
+
             analysis = basic_result.data[0].copy()
             analysis["success"] = True
             analysis["analysis_type"] = analysis_type
-        
+
             if analysis_type in ["distribution", "detailed"]:
                 # Data distribution analysis
                 # SQL sink audit: MCP identifiers -> quote_identifier ->
                 # DorisConnection.execute.
                 distribution_sql = f"""
-                SELECT 
+                SELECT
                     {safe_column} as value,
                     COUNT(*) as frequency
                 FROM {safe_table}
@@ -181,33 +179,33 @@ class TableAnalyzer:
                 ORDER BY frequency DESC
                 LIMIT 20
                 """  # nosec B608
-                
+
                 distribution_result = await connection.execute(distribution_sql, auth_context=auth_context)
                 analysis["value_distribution"] = distribution_result.data
-            
+
             if analysis_type == "detailed":
                 # Detailed statistics (for numeric types)
                 try:
                     # SQL sink audit: MCP identifiers -> quote_identifier ->
                     # DorisConnection.execute.
                     numeric_stats_sql = f"""
-                    SELECT 
+                    SELECT
                         MIN({safe_column}) as min_value,
                         MAX({safe_column}) as max_value,
                         AVG({safe_column}) as avg_value
                     FROM {safe_table}
                     WHERE {safe_column} IS NOT NULL
                     """  # nosec B608
-                    
+
                     numeric_result = await connection.execute(numeric_stats_sql, auth_context=auth_context)
                     if numeric_result.data:
                         analysis.update(numeric_result.data[0])
                 except Exception:
                     # Non-numeric columns don't support numeric statistics
                     pass
-            
+
             return analysis
-        
+
         except Exception as e:
             logger.error(f"Column analysis failed: {e}")
             return {
@@ -216,26 +214,26 @@ class TableAnalyzer:
                 "column_name": column_name,
                 "table_name": table_name
             }
-    
+
     async def analyze_table_relationships(
-        self, 
-        table_name: str, 
+        self,
+        table_name: str,
         depth: int = 2
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Analyze table relationships"""
         connection = await self.connection_manager.get_connection("system")
-        
+
         # Get table basic information
         table_info_sql = """
-        SELECT 
+        SELECT
             table_name,
             table_comment,
             table_rows
-        FROM information_schema.tables 
+        FROM information_schema.tables
         WHERE table_schema = DATABASE()
         AND table_name = %s
         """
-        
+
         auth_context = get_auth_context()
         table_result = await connection.execute(
             table_info_sql,
@@ -244,20 +242,20 @@ class TableAnalyzer:
         )
         if not table_result.data:
             raise ValueError(f"Table {table_name} does not exist")
-        
+
         # Get all tables list (for analyzing potential relationships)
         all_tables_sql = """
-        SELECT 
+        SELECT
             table_name,
             table_comment
-        FROM information_schema.tables 
+        FROM information_schema.tables
         WHERE table_schema = DATABASE()
         AND table_type = 'BASE TABLE'
         AND table_name != %s
         """
-        
+
         all_tables_result = await connection.execute(all_tables_sql, params=(table_name,), auth_context=auth_context)
-        
+
         return {
             "center_table": table_result.data[0],
             "related_tables": all_tables_result.data,
@@ -268,28 +266,18 @@ class TableAnalyzer:
 
 class PerformanceMonitor:
     """Performance monitor"""
-    
+
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-    
+
     async def get_performance_stats(
-        self, 
-        metric_type: str = "queries", 
+        self,
+        metric_type: str = "queries",
         time_range: str = "1h"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get performance statistics"""
         connection = await self.connection_manager.get_connection("system")
-        
-        # Convert time range to seconds
-        time_mapping = {
-            "1h": 3600,
-            "6h": 21600,
-            "24h": 86400,
-            "7d": 604800
-        }
-        
-        seconds = time_mapping.get(time_range, 3600)
-        
+
         if metric_type == "queries":
             # Query performance metrics
             stats = {
@@ -302,7 +290,7 @@ class PerformanceMonitor:
                 "error_queries": 0,
                 "note": "Query performance statistics (simulated data)"
             }
-            
+
         elif metric_type == "connections":
             # Connection statistics
             connection_metrics = await self.connection_manager.get_metrics()
@@ -318,24 +306,24 @@ class PerformanceMonitor:
                 "avg_connection_time": connection_metrics.avg_connection_time,
                 "last_health_check": connection_metrics.last_health_check.isoformat() if connection_metrics.last_health_check else None
             }
-            
+
         elif metric_type == "tables":
             # Table-level statistics
             tables_sql = """
-            SELECT 
+            SELECT
                 table_name,
                 table_rows,
                 data_length,
                 index_length,
                 create_time,
                 update_time
-            FROM information_schema.tables 
+            FROM information_schema.tables
             WHERE table_schema = DATABASE()
             AND table_type = 'BASE TABLE'
             ORDER BY table_rows DESC
             LIMIT 20
             """
-            
+
             auth_context = get_auth_context()
             tables_result = await connection.execute(tables_sql, auth_context=auth_context)
             stats = {
@@ -345,7 +333,7 @@ class PerformanceMonitor:
                 "table_count": len(tables_result.data),
                 "tables": tables_result.data
             }
-            
+
         elif metric_type == "system":
             # System-level metrics (simulated)
             stats = {
@@ -361,17 +349,17 @@ class PerformanceMonitor:
                 },
                 "note": "System metrics (simulated data)"
             }
-            
+
         else:
             raise ValueError(f"Unsupported metric type: {metric_type}")
-        
+
         return stats
-    
+
     async def get_query_history(
-        self, 
-        limit: int = 50, 
+        self,
+        limit: int = 50,
         order_by: str = "time"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get query history"""
         # Since Doris doesn't have a built-in query history table,
         # we return simulated data
@@ -386,26 +374,26 @@ class PerformanceMonitor:
 
 class SQLAnalyzer:
     """SQL analyzer for EXPLAIN and PROFILE operations"""
-    
+
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-    
+
     async def get_sql_explain(
-        self, 
+        self,
         sql: str,
         verbose: bool = False,
         db_name: str = None,
         catalog_name: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get SQL execution plan using EXPLAIN command based on Doris syntax
-        
+
         Args:
             sql: SQL statement to explain
             verbose: Whether to show verbose information
             db_name: Target database name
             catalog_name: Target catalog name
-            
+
         Returns:
             Dict containing explain plan file path, content, and basic info
         """
@@ -415,16 +403,16 @@ class SQLAnalyzer:
             query_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
             timestamp = int(time.time())
             query_id = f"{timestamp}_{query_hash}"
-            
+
             # Ensure temp directory exists
             temp_dir = Path(self.connection_manager.config.temp_files_dir)
             temp_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Create explain file path
             explain_file = temp_dir / f"explain_{query_id}.txt"
-            
+
             logger.info(f"Generating SQL explain for query ID: {query_id}")
-            
+
             # 🔧 FIX: Get auth_context for token-bound database configuration
             auth_context = None
             try:
@@ -432,7 +420,7 @@ class SQLAnalyzer:
                 auth_context = mcp_auth_context_var.get()
             except Exception:
                 pass
-            
+
             context_statements = []
             if catalog_name:
                 try:
@@ -451,13 +439,13 @@ class SQLAnalyzer:
                     return {"success": False, "error": f"Invalid database name: {e}"}
                 safe_db = quote_identifier(db_name, "database name")
                 context_statements.append(f"USE {safe_db}")
-            
+
             # Construct EXPLAIN query
             explain_type = "EXPLAIN VERBOSE" if verbose else "EXPLAIN"
             explain_sql = f"{explain_type} {sql.strip().rstrip(';')}"
-            
+
             logger.info("Executing explain query")
-            
+
             # Execute context switching and explain query on one routed connection
             # whenever a database/catalog context is requested.
             if context_statements:
@@ -495,10 +483,10 @@ class SQLAnalyzer:
                         await release_connection("explain_session", connection)
             else:
                 result = await self.connection_manager.execute_query("explain_session", explain_sql, None, auth_context)
-            
+
             # Format explain output
             explain_content = []
-            explain_content.append(f"=== SQL EXPLAIN PLAN ===")
+            explain_content.append("=== SQL EXPLAIN PLAN ===")
             explain_content.append(f"Query ID: {query_id}")
             explain_content.append(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             explain_content.append(f"Database: {db_name or 'current'}")
@@ -511,14 +499,14 @@ class SQLAnalyzer:
             explain_content.append(explain_sql)
             explain_content.append("")
             explain_content.append("=== EXECUTION PLAN ===")
-            
+
             if result and result.data:
                 for row in result.data:
                     if isinstance(row, dict):
                         # Handle dict format
                         for key, value in row.items():
                             explain_content.append(f"{key}: {value}")
-                    elif isinstance(row, (list, tuple)):
+                    elif isinstance(row, list | tuple):
                         # Handle tuple/list format
                         explain_content.append(" | ".join(str(col) for col in row))
                     else:
@@ -526,31 +514,31 @@ class SQLAnalyzer:
                         explain_content.append(str(row))
             else:
                 explain_content.append("No execution plan data returned")
-            
+
             explain_content.append("")
             explain_content.append("=== METADATA ===")
             explain_content.append(f"Execution time: {result.execution_time if result else 'N/A'} seconds")
             explain_content.append(f"Rows returned: {len(result.data) if result and result.data else 0}")
-            
+
             # Get full content
             full_content = '\n'.join(explain_content)
-            
+
             # Write to file
             with open(explain_file, 'w', encoding='utf-8') as f:
                 f.write(full_content)
-            
+
             logger.info(f"Explain plan saved to: {explain_file.absolute()}")
-            
+
             # Get max response size from config
             max_size = self.connection_manager.config.performance.max_response_content_size
-            
+
             # Truncate content if needed
             truncated_content = full_content
             is_truncated = False
             if len(full_content) > max_size:
                 truncated_content = full_content[:max_size] + "\n\n=== CONTENT TRUNCATED ===\n[Content is truncated due to size limit. Full content is saved to file.]"
                 is_truncated = True
-            
+
             return {
                 "success": True,
                 "query_id": query_id,
@@ -568,7 +556,7 @@ class SQLAnalyzer:
                 "execution_time": result.execution_time if result else None,
                 "plan_lines_count": len(result.data) if result and result.data else 0
             }
-                
+
         except Exception as e:
             logger.error(f"Failed to get SQL explain: {str(e)}")
             return {
@@ -577,23 +565,23 @@ class SQLAnalyzer:
                 "sql_preview": sql[:100] + "..." if len(sql) > 100 else sql,
                 "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
             }
-    
+
     async def get_sql_profile(
         self,
         sql: str,
         db_name: str = None,
         catalog_name: str = None,
         timeout: int = 30
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get SQL execution profile by setting trace ID and fetching profile via HTTP API
-        
+
         Args:
             sql: SQL statement to profile
             db_name: Target database name
             catalog_name: Target catalog name
             timeout: Query timeout in seconds
-            
+
         Returns:
             Dict containing profile file path, content, and basic info
         """
@@ -604,20 +592,20 @@ class SQLAnalyzer:
             query_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
             timestamp = int(time.time())
             file_query_id = f"{timestamp}_{query_hash}"
-            
+
             # Ensure temp directory exists
             temp_dir = Path(self.connection_manager.config.temp_files_dir)
             temp_dir.mkdir(parents=True, exist_ok=True)
-            
+
             # Create profile file path
             profile_file = temp_dir / f"profile_{file_query_id}.txt"
-            
+
             logger.info(f"Generated trace ID for SQL profiling: {trace_id}")
             logger.info(f"Profile will be saved to: {profile_file}")
 
             auth_context = get_auth_context()
             connection = await self.connection_manager.get_connection("query")
-            
+
             try:
                 # Switch to specified database/catalog if provided
                 # SECURITY FIX: Validate identifiers before using in SQL
@@ -635,23 +623,23 @@ class SQLAnalyzer:
                         return {"success": False, "error": f"Invalid database name: {e}"}
                     safe_db = quote_identifier(db_name, "database name")
                     await connection.execute(f"USE {safe_db}", auth_context=auth_context)
-                
+
                 # Set trace ID for the session using session variable
                 # According to official docs: set session_context="trace_id:your_trace_id"
                 await connection.execute(f'set session_context="trace_id:{trace_id}"', auth_context=auth_context)
                 logger.info(f"Set trace ID: {trace_id}")
 
                 # Enable profile
-                await connection.execute(f'set enable_profile=true', auth_context=auth_context)
-                logger.info(f"Enabled profile")
-                
+                await connection.execute('set enable_profile=true', auth_context=auth_context)
+                logger.info("Enabled profile")
+
                 # Execute the SQL statement
                 logger.info("Executing SQL with trace ID %s", trace_id)
                 start_time = time.time()
                 sql_result = await connection.execute(sql, auth_context=auth_context)
                 execution_time = time.time() - start_time
                 logger.info(f"SQL execution completed in {execution_time:.3f}s")
-                
+
                 # Get query ID from trace ID via HTTP API
                 query_id = await self._get_query_id_by_trace_id(trace_id)
                 if not query_id:
@@ -662,22 +650,22 @@ class SQLAnalyzer:
                         "sql": sql,
                         "execution_time": execution_time
                     }
-                
+
                 logger.info(f"Retrieved query ID: {query_id}")
 
                 # Get profile data
                 profile_data = await self._get_profile_by_query_id(query_id)
-                
+
                 if not profile_data:
                     # Save error info to file
                     profile_content = [
-                        f"=== SQL PROFILE RESULT ===",
+                        "=== SQL PROFILE RESULT ===",
                         f"File Query ID: {file_query_id}",
                         f"Trace ID: {trace_id}",
                         f"Query ID: {query_id}",
                         f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}",
                         f"Database: {db_name or 'current'}",
-                        f"Status: FAILED",
+                        "Status: FAILED",
                         "",
                         "=== ORIGINAL SQL ===",
                         sql,
@@ -685,31 +673,31 @@ class SQLAnalyzer:
                         "=== ERROR INFO ===",
                         "Failed to get profile data. This may be due to:",
                         "1) Profile data not generated yet",
-                        "2) Query ID expired", 
+                        "2) Query ID expired",
                         "3) Insufficient permissions to access profile data",
                         "",
                         "=== EXECUTION INFO ===",
-                        f"Query execution: SUCCESSFUL",
+                        "Query execution: SUCCESSFUL",
                         f"Execution time: {execution_time:.3f} seconds",
-                        f"Note: Query execution was successful, but profile data is not available"
+                        "Note: Query execution was successful, but profile data is not available"
                     ]
-                    
+
                     # Get full content
                     full_profile_content = '\n'.join(profile_content)
-                    
+
                     with open(profile_file, 'w', encoding='utf-8') as f:
                         f.write(full_profile_content)
-                    
+
                     # Get max response size from config
                     max_size = self.connection_manager.config.performance.max_response_content_size
-                    
+
                     # Truncate content if needed
                     truncated_content = full_profile_content
                     is_truncated = False
                     if len(full_profile_content) > max_size:
                         truncated_content = full_profile_content[:max_size] + "\n\n=== CONTENT TRUNCATED ===\n[Content is truncated due to size limit. Full content is saved to file.]"
                         is_truncated = True
-                    
+
                     return {
                         "success": False,
                         "file_query_id": file_query_id,
@@ -726,16 +714,16 @@ class SQLAnalyzer:
                         "error": "Failed to get profile data",
                         "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
                     }
-                
+
                 # Format profile output
                 profile_content = []
-                profile_content.append(f"=== SQL PROFILE RESULT ===")
+                profile_content.append("=== SQL PROFILE RESULT ===")
                 profile_content.append(f"File Query ID: {file_query_id}")
                 profile_content.append(f"Trace ID: {trace_id}")
                 profile_content.append(f"Query ID: {query_id}")
                 profile_content.append(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
                 profile_content.append(f"Database: {db_name or 'current'}")
-                profile_content.append(f"Status: SUCCESS")
+                profile_content.append("Status: SUCCESS")
                 profile_content.append("")
                 profile_content.append("=== ORIGINAL SQL ===")
                 profile_content.append(sql)
@@ -748,32 +736,32 @@ class SQLAnalyzer:
                         profile_content.append(f"Result columns: {list(sql_result.data[0].keys())}")
                 profile_content.append("")
                 profile_content.append("=== PROFILE DATA ===")
-                
+
                 if isinstance(profile_data, dict):
                     import json
                     profile_content.append(json.dumps(profile_data, indent=2, ensure_ascii=False))
                 else:
                     profile_content.append(str(profile_data))
-                
+
                 # Get full content
                 full_profile_content = '\n'.join(profile_content)
-                
+
                 # Write to file
                 with open(profile_file, 'w', encoding='utf-8') as f:
                     f.write(full_profile_content)
-                
+
                 logger.info(f"Profile data saved to: {profile_file.absolute()}")
-                
+
                 # Get max response size from config
                 max_size = self.connection_manager.config.performance.max_response_content_size
-                
+
                 # Truncate content if needed
                 truncated_content = full_profile_content
                 is_truncated = False
                 if len(full_profile_content) > max_size:
                     truncated_content = full_profile_content[:max_size] + "\n\n=== CONTENT TRUNCATED ===\n[Content is truncated due to size limit. Full content is saved to file.]"
                     is_truncated = True
-                
+
                 return {
                     "success": True,
                     "file_query_id": file_query_id,
@@ -795,17 +783,17 @@ class SQLAnalyzer:
                     },
                     "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
                 }
-                
+
             except Exception as e:
                 logger.error(f"Error during SQL execution or profile retrieval: {str(e)}")
                 # Save error info to file
                 profile_content = [
-                    f"=== SQL PROFILE RESULT ===",
+                    "=== SQL PROFILE RESULT ===",
                     f"File Query ID: {file_query_id}",
                     f"Trace ID: {trace_id}",
                     f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}",
                     f"Database: {db_name or 'current'}",
-                    f"Status: ERROR",
+                    "Status: ERROR",
                     "",
                     "=== ORIGINAL SQL ===",
                     sql,
@@ -816,23 +804,23 @@ class SQLAnalyzer:
                     "=== EXECUTION INFO ===",
                     "Query execution failed during profiling process"
                 ]
-                
+
                 # Get full content
                 full_profile_content = '\n'.join(profile_content)
-                
+
                 with open(profile_file, 'w', encoding='utf-8') as f:
                     f.write(full_profile_content)
-                
+
                 # Get max response size from config
                 max_size = self.connection_manager.config.performance.max_response_content_size
-                
+
                 # Truncate content if needed
                 truncated_content = full_profile_content
                 is_truncated = False
                 if len(full_profile_content) > max_size:
                     truncated_content = full_profile_content[:max_size] + "\n\n=== CONTENT TRUNCATED ===\n[Content is truncated due to size limit. Full content is saved to file.]"
                     is_truncated = True
-                
+
                 return {
                     "success": False,
                     "file_query_id": file_query_id,
@@ -857,7 +845,7 @@ class SQLAnalyzer:
                 )
                 if callable(release_connection):
                     await release_connection("query", connection)
-                
+
         except Exception as e:
             logger.error(f"SQL PROFILE failed: {str(e)}")
             return {
@@ -868,14 +856,14 @@ class SQLAnalyzer:
                 "catalog": catalog_name,
                 "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
             }
-    
+
     async def _get_query_id_by_trace_id(self, trace_id: str) -> str:
         """
         Get query ID by trace ID via FE HTTP API
-        
+
         Args:
             trace_id: The trace ID set during query execution
-            
+
         Returns:
             Query ID string or None if not found
         """
@@ -941,20 +929,20 @@ class SQLAnalyzer:
                     "Query ID HTTP request failed with status %s",
                     response.status,
                 )
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Failed to get query ID by trace ID: {str(e)}")
             return None
-    
-    async def _get_profile_by_query_id(self, query_id: str) -> Dict[str, Any]:
+
+    async def _get_profile_by_query_id(self, query_id: str) -> dict[str, Any]:
         """
         Get profile data by query ID via FE HTTP API
-        
+
         Args:
             query_id: The query ID
-            
+
         Returns:
             Profile data dict or None if failed
         """
@@ -1027,27 +1015,27 @@ class SQLAnalyzer:
                     "Profile HTTP request failed with status %s",
                     response.status,
                 )
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Failed to get profile by query ID: {str(e)}")
             return None
-    
+
     async def get_table_data_size(
-        self, 
+        self,
         db_name: str = None,
         table_name: str = None,
         single_replica: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get table data size information via FE HTTP API
-        
+
         Args:
             db_name: Database name, if not specified returns all databases
             table_name: Table name, if not specified returns all tables in the database
             single_replica: Whether to get single replica data size
-            
+
         Returns:
             Dict containing table data size information
         """
@@ -1133,7 +1121,7 @@ class SQLAnalyzer:
                 "url": response.url,
                 "timestamp": datetime.now().isoformat(),
             }
-                        
+
         except Exception as e:
             logger.error(f"Table data size request failed: {str(e)}")
             return {
@@ -1143,17 +1131,17 @@ class SQLAnalyzer:
                 "table_name": table_name,
                 "timestamp": datetime.now().isoformat()
             }
-    
-    def _format_table_data_size(self, data: Dict[str, Any], db_name: str, table_name: str, single_replica: bool) -> Dict[str, Any]:
+
+    def _format_table_data_size(self, data: dict[str, Any], db_name: str, table_name: str, single_replica: bool) -> dict[str, Any]:
         """
         Format table data size response data
-        
+
         Args:
             data: Raw response data from API
             db_name: Database name filter
             table_name: Table name filter
             single_replica: Single replica flag
-            
+
         Returns:
             Formatted data structure
         """
@@ -1172,7 +1160,7 @@ class SQLAnalyzer:
                 },
                 "databases": {}
             }
-            
+
             # Process the data based on its structure
             if isinstance(data, list):
                 # Data is a list of table records
@@ -1180,7 +1168,7 @@ class SQLAnalyzer:
                     db = record.get("database", "unknown")
                     table = record.get("table", "unknown")
                     size_bytes = int(record.get("size", 0))
-                    
+
                     if db not in formatted["databases"]:
                         formatted["databases"][db] = {
                             "database_name": db,
@@ -1189,7 +1177,7 @@ class SQLAnalyzer:
                             "total_size_formatted": "0 B",
                             "tables": {}
                         }
-                    
+
                     formatted["databases"][db]["tables"][table] = {
                         "table_name": table,
                         "size_bytes": size_bytes,
@@ -1197,11 +1185,11 @@ class SQLAnalyzer:
                         "replica_count": record.get("replica_count", 1),
                         "details": record
                     }
-                    
+
                     formatted["databases"][db]["table_count"] += 1
                     formatted["databases"][db]["total_size_bytes"] += size_bytes
                     formatted["summary"]["total_size_bytes"] += size_bytes
-                
+
             elif isinstance(data, dict):
                 # Data is a dict with database structure
                 for db, db_info in data.items():
@@ -1213,7 +1201,7 @@ class SQLAnalyzer:
                             "total_size_formatted": "0 B",
                             "tables": {}
                         }
-                        
+
                         for table, table_info in db_info["tables"].items():
                             size_bytes = int(table_info.get("size", 0))
                             formatted["databases"][db]["tables"][table] = {
@@ -1225,32 +1213,32 @@ class SQLAnalyzer:
                             }
                             formatted["databases"][db]["total_size_bytes"] += size_bytes
                             formatted["summary"]["total_size_bytes"] += size_bytes
-            
+
             # Update summary
             formatted["summary"]["total_databases"] = len(formatted["databases"])
             formatted["summary"]["total_tables"] = sum(db["table_count"] for db in formatted["databases"].values())
             formatted["summary"]["total_size_formatted"] = self._format_bytes(formatted["summary"]["total_size_bytes"])
-            
+
             # Update database totals formatting
             for db_info in formatted["databases"].values():
                 db_info["total_size_formatted"] = self._format_bytes(db_info["total_size_bytes"])
-            
+
             return formatted
-            
+
         except Exception as e:
             logger.error(f"Failed to format table data size: {str(e)}")
             return {
                 "error": f"Failed to format data: {str(e)}",
                 "raw_data": data
             }
-    
+
     def _format_bytes(self, bytes_value: int) -> str:
         """
         Format bytes value to human readable string
-        
+
         Args:
             bytes_value: Bytes value
-            
+
         Returns:
             Formatted string like "1.23 GB"
         """
@@ -1258,42 +1246,42 @@ class SQLAnalyzer:
             bytes_value = int(bytes_value)
             if bytes_value == 0:
                 return "0 B"
-            
+
             units = ["B", "KB", "MB", "GB", "TB", "PB"]
             unit_index = 0
             size = float(bytes_value)
-            
+
             while size >= 1024 and unit_index < len(units) - 1:
                 size /= 1024
                 unit_index += 1
-            
+
             if unit_index == 0:
                 return f"{int(size)} {units[unit_index]}"
             else:
                 return f"{size:.2f} {units[unit_index]}"
-                
+
         except (ValueError, TypeError):
             return str(bytes_value)
 
 
 class MemoryTracker:
     """Memory tracker for Doris BE memory monitoring"""
-    
+
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-    
+
     async def get_realtime_memory_stats(
         self,
         tracker_type: str = "overview",
         include_details: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get real-time memory statistics
-        
+
         Args:
             tracker_type: Type of memory trackers to retrieve
             include_details: Whether to include detailed information
-            
+
         Returns:
             Dict containing memory statistics
         """
@@ -1313,7 +1301,7 @@ class MemoryTracker:
                 },
                 "note": "Memory tracker functionality requires BE HTTP endpoints to be available"
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get realtime memory stats: {str(e)}")
             return {
@@ -1322,19 +1310,19 @@ class MemoryTracker:
                 "tracker_type": tracker_type,
                 "timestamp": datetime.now().isoformat()
             }
-    
+
     async def get_historical_memory_stats(
         self,
-        tracker_names: List[str] = None,
+        tracker_names: list[str] = None,
         time_range: str = "1h"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get historical memory statistics
-        
+
         Args:
             tracker_names: List of specific tracker names to query
             time_range: Time range for historical data
-            
+
         Returns:
             Dict containing historical memory statistics
         """
@@ -1356,7 +1344,7 @@ class MemoryTracker:
                 },
                 "note": "Historical memory tracking functionality requires BE bvar endpoints to be available"
             }
-            
+
         except Exception as e:
             logger.error(f"Failed to get historical memory stats: {str(e)}")
             return {
@@ -1365,4 +1353,4 @@ class MemoryTracker:
                 "tracker_names": tracker_names,
                 "time_range": time_range,
                 "timestamp": datetime.now().isoformat()
-            } 
+            }

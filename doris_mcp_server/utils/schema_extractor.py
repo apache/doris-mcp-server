@@ -20,23 +20,23 @@ Metadata Extraction Tool
 Responsible for extracting table structures, relationships, and other metadata from the database.
 """
 
-import os
 import json
-import pandas as pd
+import os
 import re
-import uuid
 import time
-from typing import Dict, List, Any, Optional, Tuple
-from dotenv import load_dotenv
+import uuid
 from datetime import datetime, timedelta
+from typing import Any
+
+import pandas as pd
 
 # Import unified logging configuration
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
+    quote_identifier,
     validate_identifier,
     validate_integer,
-    quote_identifier,
 )
 
 # Configure logging
@@ -47,7 +47,6 @@ ENABLE_MULTI_DATABASE=os.getenv("ENABLE_MULTI_DATABASE",True)
 MULTI_DATABASE_NAMES=os.getenv("MULTI_DATABASE_NAMES","")
 
 # Import local modules
-from .db import DorisConnectionManager
 
 
 class DorisOAuthMetadataError(RuntimeError):
@@ -61,11 +60,11 @@ class DorisOAuthMetadataError(RuntimeError):
 
 class MetadataExtractor:
     """Apache Doris Metadata Extractor"""
-    
+
     def __init__(self, db_name: str = None, catalog_name: str = None, connection_manager=None):
         """
         Initialize the metadata extractor
-        
+
         Args:
             db_name: Default database name, uses the currently connected database if not specified
             catalog_name: Default catalog name for federation queries, uses the current catalog if not specified
@@ -76,28 +75,28 @@ class MetadataExtractor:
         self.catalog_name = catalog_name  # Store catalog name for federation support
         self.metadata_db = METADATA_DB_NAME  # Use constant
         self.connection_manager = connection_manager
-        
+
         # Caching system
         self.metadata_cache = {}
         self.metadata_cache_time = {}
         self.cache_ttl = int(os.getenv("METADATA_CACHE_TTL", "3600"))  # Default cache 1 hour
-        
+
         # Refresh time
         self.last_refresh_time = None
-        
+
         # Enable multi-database support - use variable imported from db.py
         self.enable_multi_database = ENABLE_MULTI_DATABASE
-        
+
         # Load table hierarchy matching configuration
         self.enable_table_hierarchy = os.getenv("ENABLE_TABLE_HIERARCHY", "false").lower() == "true"
         if self.enable_table_hierarchy:
             self.table_hierarchy_patterns = self._load_table_hierarchy_patterns()
         else:
             self.table_hierarchy_patterns = []
-        
+
         # List of excluded system databases
         self.excluded_databases = self._load_excluded_databases()
-        
+
         # Session ID for database queries
         self._session_id = f"metadata_extractor_{uuid.uuid4().hex[:8]}"
 
@@ -211,15 +210,15 @@ class MetadataExtractor:
         )
         if not result or not result[0]:
             raise self._doris_oauth_table_not_visible_error(table_name, effective_db, effective_catalog)
-        
-    def _load_excluded_databases(self) -> List[str]:
+
+    def _load_excluded_databases(self) -> list[str]:
         """
         Load the list of excluded databases configuration
-        
+
         Returns:
             List of excluded databases
         """
-        excluded_dbs_str = os.getenv("EXCLUDED_DATABASES", 
+        excluded_dbs_str = os.getenv("EXCLUDED_DATABASES",
                                '["information_schema", "mysql", "performance_schema", "sys", "doris_metadata"]')
         try:
             excluded_dbs = json.loads(excluded_dbs_str)
@@ -230,19 +229,19 @@ class MetadataExtractor:
                 logger.warning("Excluded database list configuration is not in list format, using default value")
         except json.JSONDecodeError:
             logger.warning("Error parsing excluded database list JSON, using default value")
-        
+
         # Default value
         default_excluded_dbs = ["information_schema", "mysql", "performance_schema", "sys", "doris_metadata"]
         return default_excluded_dbs
-        
-    def _load_table_hierarchy_patterns(self) -> List[str]:
+
+    def _load_table_hierarchy_patterns(self) -> list[str]:
         """
         Load table hierarchy matching pattern configuration
-        
+
         Returns:
             List of table hierarchy matching regular expressions
         """
-        patterns_str = os.getenv("TABLE_HIERARCHY_PATTERNS", 
+        patterns_str = os.getenv("TABLE_HIERARCHY_PATTERNS",
                                '["^ads_.*$","^dim_.*$","^dws_.*$","^dwd_.*$","^ods_.*$","^tmp_.*$","^stg_.*$","^.*$"]')
         try:
             patterns = json.loads(patterns_str)
@@ -255,25 +254,25 @@ class MetadataExtractor:
                         validated_patterns.append(pattern)
                     except re.error:
                         logger.warning(f"Invalid regular expression pattern: {pattern}")
-                
+
                 logger.info(f"Loaded table hierarchy matching patterns: {validated_patterns}")
                 return validated_patterns
             else:
                 logger.warning("Table hierarchy matching pattern configuration is not in list format, using default value")
         except json.JSONDecodeError:
             logger.warning("Error parsing table hierarchy matching pattern JSON, using default value")
-        
+
         # Default value
         default_patterns = ["^ads_.*$", "^dim_.*$", "^dws_.*$", "^dwd_.*$", "^ods_.*$", "^.*$"]
         return default_patterns
-        
-    def get_all_databases(self, catalog_name: str = None) -> List[str]:
+
+    def get_all_databases(self, catalog_name: str = None) -> list[str]:
         """
         Get a list of all databases
-        
+
         Args:
             catalog_name: Catalog name for federation queries, uses instance catalog if None
-            
+
         Returns:
             List of database names
         """
@@ -281,51 +280,51 @@ class MetadataExtractor:
         cache_key = f"databases_{effective_catalog or 'default'}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Use information_schema.schemata table to get database list
             query = """
-            SELECT 
-                SCHEMA_NAME 
-            FROM 
-                information_schema.schemata 
-            WHERE 
+            SELECT
+                SCHEMA_NAME
+            FROM
+                information_schema.schemata
+            WHERE
                 SCHEMA_NAME NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
-            ORDER BY 
+            ORDER BY
                 SCHEMA_NAME
             """
-            
+
             result = self._execute_query_with_catalog(query, self.db_name, effective_catalog)
-            
+
             if not result:
                 databases = []
             else:
                 databases = [db["SCHEMA_NAME"] for db in result]
                 logger.info(f"Retrieved database list from catalog {effective_catalog or 'default'}: {databases}")
-            
+
             # Update cache
             self.metadata_cache[cache_key] = databases
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return databases
         except Exception as e:
             logger.error(f"Error getting database list: {str(e)}")
             return []
 
-    def get_all_target_databases(self) -> List[str]:
+    def get_all_target_databases(self) -> list[str]:
         """
         Get all target databases
-        
+
         If multi-database support is enabled, returns all databases from the configuration;
         Otherwise, returns the current database
-        
+
         Returns:
             List of target databases
         """
         if self.enable_multi_database:
             # Get multi-database list from configuration
             from doris_mcp_server.utils.db import MULTI_DATABASE_NAMES
-            
+
             # If configuration is empty, return current database and all databases in the system
             if not MULTI_DATABASE_NAMES:
                 all_dbs = self.get_all_databases()
@@ -333,7 +332,7 @@ class MetadataExtractor:
                 if self.db_name in all_dbs:
                     all_dbs.remove(self.db_name)
                     all_dbs = [self.db_name] + all_dbs
-                
+
                 # Filter out excluded databases
                 all_dbs = [db for db in all_dbs if db not in self.excluded_databases]
                 logger.info(f"Multi-database list not configured, getting database list from system: {all_dbs}")
@@ -347,7 +346,7 @@ class MetadataExtractor:
                     # If current database is in the list but not first, adjust position
                     db_names.remove(self.db_name)
                     db_names.insert(0, self.db_name)
-                
+
                 # Filter out excluded databases
                 db_names = [db for db in db_names if db not in self.excluded_databases]
                 logger.info(f"Using configured multi-database list: {db_names}")
@@ -357,15 +356,15 @@ class MetadataExtractor:
             if self.db_name in self.excluded_databases:
                 logger.warning(f"Current database {self.db_name} is in the excluded list, metadata retrieval might not work properly")
             return [self.db_name] if self.db_name else []
-    
-    def get_database_tables(self, db_name: Optional[str] = None, catalog_name: str = None) -> List[str]:
+
+    def get_database_tables(self, db_name: str | None = None, catalog_name: str = None) -> list[str]:
         """
         Get a list of all tables in the database
-        
+
         Args:
             db_name: Database name, uses current database if None
             catalog_name: Catalog name for federation queries, uses instance catalog if None
-            
+
         Returns:
             List of table names
         """
@@ -382,66 +381,66 @@ class MetadataExtractor:
         except SQLSecurityError as exc:
             logger.warning(f"Invalid identifier rejected: {exc}")
             return []
-        
+
         cache_key = f"tables_{effective_catalog or 'default'}_{db_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Use information_schema.tables table to get table list
             # SQL sink audit: deprecated sync path validates both identifiers
             # before the fixed metadata query reaches its legacy executor.
             query = f"""
-            SELECT 
-                TABLE_NAME 
-            FROM 
-                information_schema.tables 
-            WHERE 
-                TABLE_SCHEMA = '{db_name}' 
+            SELECT
+                TABLE_NAME
+            FROM
+                information_schema.tables
+            WHERE
+                TABLE_SCHEMA = '{db_name}'
                 AND TABLE_TYPE = 'BASE TABLE'
             """  # nosec B608
-            
+
             result = self._execute_query_with_catalog(query, db_name, effective_catalog)
             logger.info(
                 "%s.%s.information_schema.tables query completed",
                 effective_catalog or "default",
                 db_name,
             )
-            
+
             if not result:
                 tables = []
             else:
                 tables = [table['TABLE_NAME'] for table in result]
                 logger.info(f"Table names retrieved from {effective_catalog or 'default'}.{db_name}.information_schema.tables: {tables}")
-            
+
             # Sort tables by hierarchy matching (if enabled)
             if self.enable_table_hierarchy and tables:
                 tables = self._sort_tables_by_hierarchy(tables)
-            
+
             # Update cache
             self.metadata_cache[cache_key] = tables
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return tables
         except Exception as e:
             logger.error(f"Error getting table list: {str(e)}")
             return []
-    
-    def get_all_tables_and_columns(self) -> Dict[str, Any]:
+
+    def get_all_tables_and_columns(self) -> dict[str, Any]:
         """
         Get information for all tables and columns
-        
+
         Returns:
             Dict[str, Any]: Dictionary containing information for all tables and columns
         """
         cache_key = f"all_tables_columns_{self.db_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             result = {}
             tables = self.get_database_tables(self.db_name)
-            
+
             for table_name in tables:
                 schema = self.get_table_schema(table_name, self.db_name)
                 if schema:
@@ -449,86 +448,86 @@ class MetadataExtractor:
                     column_names = [col.get("name") for col in columns if col.get("name")]
                     column_types = {col.get("name"): col.get("type") for col in columns if col.get("name") and col.get("type")}
                     column_comments = {col.get("name"): col.get("comment") for col in columns if col.get("name")}
-                    
+
                     result[table_name] = {
                         "comment": schema.get("comment", ""),
                         "columns": column_names,
                         "column_types": column_types,
                         "column_comments": column_comments
                     }
-            
+
             # Update cache
             self.metadata_cache[cache_key] = result
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return result
         except Exception as e:
             logger.error(f"Error getting all tables and columns information: {str(e)}")
             return {}
-    
-    def _sort_tables_by_hierarchy(self, tables: List[str]) -> List[str]:
+
+    def _sort_tables_by_hierarchy(self, tables: list[str]) -> list[str]:
         """
         Sort tables based on hierarchy matching patterns
-        
+
         Args:
             tables: List of table names
-            
+
         Returns:
             Sorted list of table names
         """
         if not self.enable_table_hierarchy or not self.table_hierarchy_patterns:
             return tables
-        
+
         # Group tables by pattern priority
         table_groups = []
         remaining_tables = set(tables)
-        
+
         for pattern in self.table_hierarchy_patterns:
             matching_tables = []
             regex = re.compile(pattern)
-            
+
             for table in list(remaining_tables):
                 if regex.match(table):
                     matching_tables.append(table)
                     remaining_tables.remove(table)
-            
+
             if matching_tables:
                 # Within each group, sort alphabetically
                 matching_tables.sort()
                 table_groups.append(matching_tables)
-        
+
         # Add remaining tables to the end
         if remaining_tables:
-            table_groups.append(sorted(list(remaining_tables)))
-        
+            table_groups.append(sorted(remaining_tables))
+
         # Flatten the groups
         return [table for group in table_groups for table in group]
-    
-    def get_all_tables_from_all_databases(self) -> Dict[str, List[str]]:
+
+    def get_all_tables_from_all_databases(self) -> dict[str, list[str]]:
         """
         Get all tables from all target databases
-        
+
         Returns:
             Mapping from database name to list of table names
         """
         all_tables = {}
         target_dbs = self.get_all_target_databases()
-        
+
         for db_name in target_dbs:
             tables = self.get_database_tables(db_name)
             if tables:
                 all_tables[db_name] = tables
-        
+
         return all_tables
-    
-    def find_tables_by_pattern(self, pattern: str, db_name: Optional[str] = None) -> List[Tuple[str, str]]:
+
+    def find_tables_by_pattern(self, pattern: str, db_name: str | None = None) -> list[tuple[str, str]]:
         """
         Find matching tables in the database based on a pattern
-        
+
         Args:
             pattern: Table name pattern (regular expression)
             db_name: Database name, searches all target databases if None
-            
+
         Returns:
             List of matching (database_name, table_name) tuples
         """
@@ -537,9 +536,9 @@ class MetadataExtractor:
         except re.error:
             logger.error(f"Invalid regular expression pattern: {pattern}")
             return []
-        
+
         matches = []
-        
+
         if db_name:
             # Search only in the specified database
             tables = self.get_database_tables(db_name)
@@ -547,22 +546,22 @@ class MetadataExtractor:
         else:
             # Search in all target databases
             all_tables = self.get_all_tables_from_all_databases()
-            
+
             for db, tables in all_tables.items():
                 db_matches = [(db, table) for table in tables if regex.match(table)]
                 matches.extend(db_matches)
-        
+
         return matches
-    
-    async def get_table_schema(self, table_name: str, db_name: Optional[str] = None, catalog_name: str = None) -> Dict[str, Any]:
+
+    async def get_table_schema(self, table_name: str, db_name: str | None = None, catalog_name: str = None) -> dict[str, Any]:
         """
         Get the schema information for a table
-        
+
         Args:
             table_name: Table name
             db_name: Database name, uses current database if None
             catalog_name: Catalog name for federation queries, uses instance catalog if None
-            
+
         Returns:
             Table schema information, including column names, types, nullability, defaults, comments, etc.
         """
@@ -571,7 +570,7 @@ class MetadataExtractor:
         if not db_name:
             logger.warning("Database name not specified")
             return {}
-        
+
         # SECURITY FIX: Validate identifiers to prevent SQL injection
         try:
             validate_identifier(table_name, "table name")
@@ -581,29 +580,29 @@ class MetadataExtractor:
         except SQLSecurityError as e:
             logger.warning(f"Invalid identifier rejected in get_table_schema: {e}")
             return {}
-        
+
         cache_key = f"schema_{effective_catalog or 'default'}_{db_name}_{table_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Use information_schema.columns table to get table schema (async)
             query = """
-            SELECT 
-                COLUMN_NAME, 
-                DATA_TYPE, 
-                IS_NULLABLE, 
-                COLUMN_DEFAULT, 
+            SELECT
+                COLUMN_NAME,
+                DATA_TYPE,
+                IS_NULLABLE,
+                COLUMN_DEFAULT,
                 COLUMN_COMMENT,
                 ORDINAL_POSITION,
                 COLUMN_KEY,
                 EXTRA
-            FROM 
-                information_schema.columns 
-            WHERE 
+            FROM
+                information_schema.columns
+            WHERE
                 TABLE_SCHEMA = %s
                 AND TABLE_NAME = %s
-            ORDER BY 
+            ORDER BY
                 ORDINAL_POSITION
             """
 
@@ -648,12 +647,12 @@ class MetadataExtractor:
             # Get table type information (async)
             try:
                 table_type_query = """
-                SELECT 
+                SELECT
                     TABLE_TYPE,
-                    ENGINE 
-                FROM 
-                    information_schema.tables 
-                WHERE 
+                    ENGINE
+                FROM
+                    information_schema.tables
+                WHERE
                     TABLE_SCHEMA = %s
                     AND TABLE_NAME = %s
                 """
@@ -675,17 +674,17 @@ class MetadataExtractor:
         except Exception as e:
             logger.error(f"Error getting table schema: {str(e)}")
             return {}
-    
+
     # Deprecated: sync method (kept for compatibility, will be removed)
-    def get_table_comment(self, table_name: str, db_name: Optional[str] = None, catalog_name: str = None) -> str:
+    def get_table_comment(self, table_name: str, db_name: str | None = None, catalog_name: str = None) -> str:
         """
         Get the comment for a table
-        
+
         Args:
             table_name: Table name
             db_name: Database name, uses current database if None
             catalog_name: Catalog name for federation queries, uses instance catalog if None
-            
+
         Returns:
             Table comment
         """
@@ -694,7 +693,7 @@ class MetadataExtractor:
         if not db_name:
             logger.warning("Database name not specified")
             return ""
-        
+
         # SECURITY FIX: Validate identifiers
         try:
             validate_identifier(table_name, "table name")
@@ -704,51 +703,51 @@ class MetadataExtractor:
         except SQLSecurityError as e:
             logger.warning(f"Invalid identifier rejected: {e}")
             return ""
-        
+
         cache_key = f"table_comment_{effective_catalog or 'default'}_{db_name}_{table_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Use information_schema.tables table to get table comment
             # SQL sink audit: deprecated sync path validates table, database
             # and catalog identifiers before its legacy executor.
             query = f"""
-            SELECT 
-                TABLE_COMMENT 
-            FROM 
-                information_schema.tables 
-            WHERE 
-                TABLE_SCHEMA = '{db_name}' 
+            SELECT
+                TABLE_COMMENT
+            FROM
+                information_schema.tables
+            WHERE
+                TABLE_SCHEMA = '{db_name}'
                 AND TABLE_NAME = '{table_name}'
             """  # nosec B608
-            
+
             result = self._execute_query_with_catalog(query, db_name, effective_catalog)
-            
+
             if not result or not result[0]:
                 comment = ""
             else:
                 comment = result[0].get("TABLE_COMMENT", "")
-            
+
             # Update cache
             self.metadata_cache[cache_key] = comment
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return comment
         except Exception as e:
             logger.error(f"Error getting table comment: {str(e)}")
             return ""
-    
+
     # Deprecated: sync method (kept for compatibility, will be removed)
-    def get_column_comments(self, table_name: str, db_name: Optional[str] = None, catalog_name: str = None) -> Dict[str, str]:
+    def get_column_comments(self, table_name: str, db_name: str | None = None, catalog_name: str = None) -> dict[str, str]:
         """
         Get comments for all columns in a table
-        
+
         Args:
             table_name: Table name
             db_name: Database name, uses current database if None
             catalog_name: Catalog name for federation queries, uses instance catalog if None
-            
+
         Returns:
             Dictionary of column names and comments
         """
@@ -757,7 +756,7 @@ class MetadataExtractor:
         if not db_name:
             logger.warning("Database name not specified")
             return {}
-        
+
         # SECURITY FIX: Validate identifiers
         try:
             validate_identifier(table_name, "table name")
@@ -767,56 +766,56 @@ class MetadataExtractor:
         except SQLSecurityError as e:
             logger.warning(f"Invalid identifier rejected: {e}")
             return {}
-        
+
         cache_key = f"column_comments_{effective_catalog or 'default'}_{db_name}_{table_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Use information_schema.columns table to get column comments
             # SQL sink audit: deprecated sync path validates table, database
             # and catalog identifiers before its legacy executor.
             query = f"""
-            SELECT 
-                COLUMN_NAME, 
-                COLUMN_COMMENT 
-            FROM 
-                information_schema.columns 
-            WHERE 
-                TABLE_SCHEMA = '{db_name}' 
+            SELECT
+                COLUMN_NAME,
+                COLUMN_COMMENT
+            FROM
+                information_schema.columns
+            WHERE
+                TABLE_SCHEMA = '{db_name}'
                 AND TABLE_NAME = '{table_name}'
-            ORDER BY 
+            ORDER BY
                 ORDINAL_POSITION
             """  # nosec B608
-            
+
             result = self._execute_query_with_catalog(query, db_name, effective_catalog)
-            
+
             comments = {}
             for col in result:
                 column_name = col.get("COLUMN_NAME", "")
                 column_comment = col.get("COLUMN_COMMENT", "")
                 if column_name:
                     comments[column_name] = column_comment
-            
+
             # Update cache
             self.metadata_cache[cache_key] = comments
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return comments
         except Exception as e:
             logger.error(f"Error getting column comments: {str(e)}")
             return {}
-    
+
     # Deprecated: sync method (kept for compatibility, will be removed)
-    def get_table_indexes(self, table_name: str, db_name: Optional[str] = None, catalog_name: str = None) -> List[Dict[str, Any]]:
+    def get_table_indexes(self, table_name: str, db_name: str | None = None, catalog_name: str = None) -> list[dict[str, Any]]:
         """
         Get the index information for a table
-        
+
         Args:
             table_name: Table name
             db_name: Database name, uses the database specified during initialization if None
             catalog_name: Catalog name for federation queries, uses instance catalog if None
-            
+
         Returns:
             List[Dict[str, Any]]: List of index information
         """
@@ -825,7 +824,7 @@ class MetadataExtractor:
         if not db_name:
             logger.error("Database name not specified")
             return []
-        
+
         # SECURITY FIX: Validate identifiers
         try:
             validate_identifier(table_name, "table name")
@@ -835,22 +834,22 @@ class MetadataExtractor:
         except SQLSecurityError as e:
             logger.warning(f"Invalid identifier rejected: {e}")
             return []
-        
+
         cache_key = f"indexes_{effective_catalog or 'default'}_{db_name}_{table_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Build query with catalog prefix if specified (identifiers already validated)
             safe_table = quote_identifier(table_name, "table name")
             safe_db = quote_identifier(db_name, "database name")
             if effective_catalog:
                 safe_catalog = quote_identifier(effective_catalog, "catalog name")
-                query = f"SHOW INDEX FROM {safe_catalog}.{safe_db}.{safe_table}"
+                _query = f"SHOW INDEX FROM {safe_catalog}.{safe_db}.{safe_table}"
                 logger.info("Using three-part naming for index query")
             else:
-                query = f"SHOW INDEX FROM {safe_db}.{safe_table}"
-            
+                _query = f"SHOW INDEX FROM {safe_db}.{safe_table}"
+
             try:
                 # NOTE: Deprecated sync path retained for compatibility; use async variant instead.
                 # Deprecated sync path removed; return empty indexes on failure
@@ -882,50 +881,50 @@ class MetadataExtractor:
             except Exception as df_error:
                 logger.warning(f"Sync index query (deprecated) failed: {df_error}")
                 indexes = []
-            
+
             # Update cache
             self.metadata_cache[cache_key] = indexes
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return indexes
         except Exception as e:
             logger.error(f"Error getting index information: {str(e)}")
             return []
-    
-    async def get_table_relationships(self) -> List[Dict[str, Any]]:
+
+    async def get_table_relationships(self) -> list[dict[str, Any]]:
         """
         Infer table relationships from table comments and naming patterns
-        
+
         Returns:
             List[Dict[str, Any]]: List of table relationship information
         """
         cache_key = f"relationships_{self.db_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Get all tables
             tables = await self.get_database_tables_async(self.db_name)
             relationships = []
-            
+
             # Simple foreign key naming convention detection
             # Example: If a table has a column named xxx_id and another table named xxx exists, it might be a foreign key relationship
             for table_name in tables:
                 schema = await self.get_table_schema(table_name, self.db_name)
                 columns = schema.get("columns", [])
-                
+
                 for column in columns:
                     column_name = column["name"]
                     if column_name.endswith('_id'):
                         # Possible foreign key table name
                         ref_table_name = column_name[:-3]  # Remove _id suffix
-                        
+
                         # Check if the possible table exists
                         if ref_table_name in tables:
                             # Find possible primary key column
                             ref_schema = await self.get_table_schema(ref_table_name, self.db_name)
                             ref_columns = ref_schema.get("columns", [])
-                            
+
                             # Assume primary key column name is id
                             if any(col["name"] == "id" for col in ref_columns):
                                 relationships.append({
@@ -936,25 +935,25 @@ class MetadataExtractor:
                                     "relationship_type": "many-to-one",
                                     "confidence": "medium"  # Low confidence, based on naming convention
                                 })
-            
+
             # Update cache
             self.metadata_cache[cache_key] = relationships
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return relationships
         except Exception as e:
             logger.error(f"Error inferring table relationships: {str(e)}")
             return []
-    
+
     # Deprecated: sync method (kept for compatibility, will be removed)
     def get_recent_audit_logs(self, days: int = 7, limit: int = 100) -> pd.DataFrame:
         """
         Get recent audit logs
-        
+
         Args:
             days: Get audit logs for the last N days
             limit: Maximum number of records to return
-            
+
         Returns:
             pd.DataFrame: Audit log DataFrame
         """
@@ -965,23 +964,23 @@ class MetadataExtractor:
         except Exception as e:
             logger.error(f"Error getting audit logs: {str(e)}")
             return pd.DataFrame()
-    
-    async def get_catalog_list(self) -> List[Dict[str, Any]]:
+
+    async def get_catalog_list(self) -> list[dict[str, Any]]:
         """
         Get a list of all catalogs in Doris with detailed information
-        
+
         Returns:
             List[Dict[str, Any]]: List of catalog information including CatalogId, CatalogName, Type, IsCurrent, CreateTime, LastUpdateTime, Comment
         """
         cache_key = "catalogs"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
             return self.metadata_cache[cache_key]
-        
+
         try:
             # Use SHOW CATALOGS command to get catalog list
             query = "SHOW CATALOGS"
             result = await self._execute_query_async(query)
-            
+
             if not result:
                 catalogs = []
             else:
@@ -1000,45 +999,45 @@ class MetadataExtractor:
                             "comment": row.get("Comment", "")
                         }
                         catalogs.append(catalog_info)
-                
+
                 logger.info(f"Retrieved catalog list: {catalogs}")
-            
+
             # Update cache
             self.metadata_cache[cache_key] = catalogs
             self.metadata_cache_time[cache_key] = datetime.now()
-            
+
             return catalogs
         except Exception as e:
             logger.error(f"Error getting catalog list: {str(e)}")
             return []
-    
+
     def extract_sql_comments(self, sql: str) -> str:
         """
         Extract comments from SQL
-        
+
         Args:
             sql: SQL query
-            
+
         Returns:
             str: Extracted comments
         """
         # Extract single-line comments
         single_line_comments = re.findall(r'--\s*(.*?)(?:\n|$)', sql)
-        
+
         # Extract multi-line comments
         multi_line_comments = re.findall(r'/\*(.*?)\*/', sql, re.DOTALL)
-        
+
         # Merge all comments
         all_comments = single_line_comments + multi_line_comments
         return '\n'.join(comment.strip() for comment in all_comments if comment.strip())
-    
-    def extract_common_sql_patterns(self, limit: int = 50) -> List[Dict[str, Any]]:
+
+    def extract_common_sql_patterns(self, limit: int = 50) -> list[dict[str, Any]]:
         """
         Extract common SQL patterns
-        
+
         Args:
             limit: Maximum number of audit logs to retrieve
-            
+
         Returns:
             List[Dict[str, Any]]: List of SQL pattern information, including pattern, type, frequency, etc.
         """
@@ -1060,32 +1059,32 @@ class MetadataExtractor:
                     }
                 ]
                 return default_patterns
-            
+
             # Group and process by SQL type
             patterns_by_type = {}
             for _, row in audit_logs.iterrows():
                 sql = row['stmt']
                 if not sql:
                     continue
-                
+
                 # Determine SQL type
                 sql_type = self._get_sql_type(sql)
                 if not sql_type:
                     continue
-                
+
                 # Simplify SQL
                 simplified_sql = self._simplify_sql(sql)
-                
+
                 # Extract involved tables
                 tables = self._extract_tables_from_sql(sql)
-                
+
                 # Extract SQL comments
                 comments = self.extract_sql_comments(sql)
-                
+
                 # Initialize if it's a new pattern
                 if sql_type not in patterns_by_type:
                     patterns_by_type[sql_type] = []
-                    
+
                 # Check if a similar pattern exists
                 found_similar = False
                 for pattern in patterns_by_type[sql_type]:
@@ -1096,7 +1095,7 @@ class MetadataExtractor:
                             pattern['comments'].append(comments)
                         found_similar = True
                         break
-                        
+
                 # If no similar pattern found, add new pattern
                 if not found_similar:
                     patterns_by_type[sql_type].append({
@@ -1106,14 +1105,14 @@ class MetadataExtractor:
                         'count': 1,
                         'tables': tables
                     })
-                    
+
             # Convert grouped patterns to the required output format
             result_patterns = []
-            
+
             # Sort by frequency and convert format
             for sql_type, type_patterns in patterns_by_type.items():
                 sorted_patterns = sorted(type_patterns, key=lambda x: x['count'], reverse=True)
-                
+
                 # Extract top 3 patterns and convert to expected format
                 for pattern in sorted_patterns[:3]:
                     # Create output consistent with the format used in _update_sql_patterns_for_all_databases
@@ -1125,7 +1124,7 @@ class MetadataExtractor:
                         "comments": json.dumps(pattern['comments'][:3], ensure_ascii=False) if pattern['comments'] else "[]",
                         "tables": json.dumps(pattern['tables'], ensure_ascii=False)
                     })
-            
+
             # If no patterns found, return default values
             if not result_patterns:
                 default_patterns = [
@@ -1147,9 +1146,9 @@ class MetadataExtractor:
                     }
                 ]
                 return default_patterns
-            
+
             return result_patterns
-            
+
         except Exception as e:
             logger.error(f"Error extracting SQL patterns: {str(e)}")
             # Return some default patterns to ensure subsequent processing doesn't fail
@@ -1172,100 +1171,100 @@ class MetadataExtractor:
                 }
             ]
             return default_patterns
-    
+
     def _simplify_sql(self, sql: str) -> str:
         """
         Simplify SQL for better pattern recognition
-        
+
         Args:
             sql: SQL query
-            
+
         Returns:
             str: Simplified SQL
         """
         # Remove comments
         sql = re.sub(r'--.*?(\n|$)', ' ', sql)
         sql = re.sub(r'/\*.*?\*/', ' ', sql, flags=re.DOTALL)
-        
+
         # Replace string and numeric constants
         sql = re.sub(r"'[^']*'", "'?'", sql)
         sql = re.sub(r'\b\d+\b', '?', sql)
-        
+
         # Replace contents of IN clauses
         sql = re.sub(r'IN\s*\([^)]+\)', 'IN (?)', sql, flags=re.IGNORECASE)
-        
+
         # Remove excess whitespace
         sql = re.sub(r'\s+', ' ', sql).strip()
-        
+
         return sql
-    
-    
-    def _extract_tables_from_sql(self, sql: str) -> List[str]:
+
+
+    def _extract_tables_from_sql(self, sql: str) -> list[str]:
         """
         Extract table names from SQL
-        
+
         Args:
             sql: SQL query
-            
+
         Returns:
             List[str]: List of table names
         """
         # This is a very simplified implementation
         # Real applications require more complex SQL parsing
         tables = set()
-        
+
         # Find table names after FROM clause
         from_matches = re.finditer(r'\bFROM\s+`?(\w+)`?', sql, re.IGNORECASE)
         for match in from_matches:
             tables.add(match.group(1))
-        
+
         # Find table names after JOIN clause
         join_matches = re.finditer(r'\bJOIN\s+`?(\w+)`?', sql, re.IGNORECASE)
         for match in join_matches:
             tables.add(match.group(1))
-        
+
         # Find table names after INSERT INTO
         insert_matches = re.finditer(r'\bINSERT\s+INTO\s+`?(\w+)`?', sql, re.IGNORECASE)
         for match in insert_matches:
             tables.add(match.group(1))
-        
+
         # Find table names after UPDATE
         update_matches = re.finditer(r'\bUPDATE\s+`?(\w+)`?', sql, re.IGNORECASE)
         for match in update_matches:
             tables.add(match.group(1))
-        
+
         # Find table names after DELETE FROM
         delete_matches = re.finditer(r'\bDELETE\s+FROM\s+`?(\w+)`?', sql, re.IGNORECASE)
         for match in delete_matches:
             tables.add(match.group(1))
-        
+
         return list(tables)
-    
-    
-    
-    def get_table_partition_info(self, db_name: str, table_name: str) -> Dict[str, Any]:
+
+
+
+    def get_table_partition_info(self, db_name: str, table_name: str) -> dict[str, Any]:
         """
         Get partition information for a table
-        
+
         Args:
             db_name: Database name
             table_name: Table name
-            
+
         Returns:
             Dict: Partition information
         """
         try:
             # Deprecated sync path removed
             partitions = []
-            
+
             if not partitions:
                 return {}
-                
+
             partition_info = {
                 "has_partitions": True,
                 "partitions": []
             }
-            
+
             for part in partitions:
                 partition_info["partitions"].append({
                     "name": part.get("PARTITION_NAME", ""),
@@ -1273,7 +1272,7 @@ class MetadataExtractor:
                     "description": part.get("PARTITION_DESCRIPTION", ""),
                     "rows": part.get("TABLE_ROWS", 0)
                 })
-                
+
             return partition_info
         except Exception as e:
             logger.error(f"Error getting partition information for table {db_name}.{table_name}: {str(e)}")
@@ -1326,12 +1325,12 @@ class MetadataExtractor:
     ):
         """
         Execute database query asynchronously
-        
+
         Args:
             query: SQL query to execute
             db_name: Database name to use (optional)
             return_dataframe: Whether to return a pandas DataFrame instead of list
-            
+
         Returns:
             Query result data (list of dictionaries or pandas DataFrame)
         """
@@ -1345,13 +1344,13 @@ class MetadataExtractor:
                     params,
                     auth_context,
                 )
-                
+
                 # Extract data from QueryResult
                 if hasattr(result, 'data'):
                     data = result.data
                 else:
                     data = result
-                
+
                 # Convert to DataFrame if requested
                 if return_dataframe and data:
                     import pandas as pd
@@ -1388,13 +1387,13 @@ class MetadataExtractor:
 
     # Removed sync _execute_query; use async methods exclusively
 
-    async def get_table_schema_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> List[Dict[str, Any]]:
+    async def get_table_schema_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> list[dict[str, Any]]:
         """Asynchronously get table schema information"""
         try:
             # Use async query method
             effective_catalog = catalog_name or self.catalog_name
             effective_db = db_name or self.db_name
-            
+
             # SECURITY FIX: Validate identifiers
             try:
                 validate_identifier(table_name, "table name")
@@ -1405,24 +1404,24 @@ class MetadataExtractor:
             except SQLSecurityError as e:
                 logger.warning(f"Invalid identifier rejected: {e}")
                 return []
-            
+
             # Build query statement using safe identifiers
             safe_table = quote_identifier(table_name, "table name")
             safe_db = quote_identifier(effective_db, "database name") if effective_db else None
-            
+
             if effective_catalog and effective_catalog != "internal":
                 safe_catalog = quote_identifier(effective_catalog, "catalog name")
                 query = f"DESCRIBE {safe_catalog}.{safe_db}.{safe_table}"
             else:
                 query = f"DESCRIBE {safe_db}.{safe_table}"
-            
+
             # Execute async query
             result = await self._execute_query_async(query, db_name)
-            
+
             if not result:
                 self._raise_if_doris_oauth_table_not_visible(table_name, effective_db, effective_catalog)
                 return []
-            
+
             # Process results
             schema = []
             for row in result:
@@ -1436,19 +1435,19 @@ class MetadataExtractor:
                         'key': row.get('Key', ''),
                         'extra': row.get('Extra', '')
                     })
-            
+
             return schema
-            
+
         except Exception as e:
             logger.error(f"Failed to get table schema: {e}")
             self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
-    async def get_all_databases_async(self, catalog_name: str = None) -> List[str]:
+    async def get_all_databases_async(self, catalog_name: str = None) -> list[str]:
         """Asynchronously get all database list"""
         try:
             effective_catalog = catalog_name or self.catalog_name
-            
+
             # SECURITY FIX: Validate catalog name if provided
             if effective_catalog and effective_catalog != "internal":
                 try:
@@ -1460,12 +1459,12 @@ class MetadataExtractor:
                 query = f"SHOW DATABASES FROM {safe_catalog}"
             else:
                 query = "SHOW DATABASES"
-            
+
             result = await self._execute_query_async(query)
-            
+
             if not result:
                 return []
-            
+
             # Extract database names
             databases = []
             for row in result:
@@ -1474,20 +1473,20 @@ class MetadataExtractor:
                     db_name = list(row.values())[0] if row else None
                     if db_name:
                         databases.append(db_name)
-            
+
             return databases
-            
+
         except Exception as e:
             logger.error(f"Failed to get database list: {e}")
             self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
-    async def get_database_tables_async(self, db_name: str = None, catalog_name: str = None) -> List[str]:
+    async def get_database_tables_async(self, db_name: str = None, catalog_name: str = None) -> list[str]:
         """Asynchronously get table list in database"""
         try:
             effective_catalog = catalog_name or self.catalog_name
             effective_db = db_name or self.db_name
-            
+
             # SECURITY FIX: Validate identifiers
             try:
                 if effective_db:
@@ -1497,20 +1496,20 @@ class MetadataExtractor:
             except SQLSecurityError as e:
                 logger.warning(f"Invalid identifier rejected: {e}")
                 return []
-            
+
             safe_db = quote_identifier(effective_db, "database name") if effective_db else None
-            
+
             if effective_catalog and effective_catalog != "internal":
                 safe_catalog = quote_identifier(effective_catalog, "catalog name")
                 query = f"SHOW TABLES FROM {safe_catalog}.{safe_db}"
             else:
                 query = f"SHOW TABLES FROM {safe_db}"
-            
+
             result = await self._execute_query_async(query, effective_db)
-            
+
             if not result:
                 return []
-            
+
             # Extract table names
             tables = []
             for row in result:
@@ -1519,23 +1518,23 @@ class MetadataExtractor:
                     table_name = list(row.values())[0] if row else None
                     if table_name:
                         tables.append(table_name)
-            
+
             return tables
-            
+
         except Exception as e:
             logger.error(f"Failed to get table list: {e}")
             self._reraise_if_doris_oauth_metadata_error(e)
             return []
 
-    async def get_catalog_list_async(self) -> List[str]:
+    async def get_catalog_list_async(self) -> list[str]:
         """Asynchronously get catalog list"""
         try:
             query = "SHOW CATALOGS"
             result = await self._execute_query_async(query)
-            
+
             if not result:
                 return []
-            
+
             # Extract catalog names
             catalogs = []
             for row in result:
@@ -1548,12 +1547,12 @@ class MetadataExtractor:
                         # If no CatalogName field, try to get the second field
                         values = list(row.values())
                         catalog_name = values[1] if len(values) > 1 else values[0] if values else None
-                    
+
                     if catalog_name:
                         catalogs.append(str(catalog_name))
-            
+
             return catalogs
-            
+
         except Exception as e:
             logger.error(f"Failed to get catalog list: {e}")
             self._reraise_if_doris_oauth_metadata_error(e)
@@ -1575,11 +1574,11 @@ class MetadataExtractor:
                 return ""
 
             query = """
-            SELECT 
-                TABLE_COMMENT 
-            FROM 
-                information_schema.tables 
-            WHERE 
+            SELECT
+                TABLE_COMMENT
+            FROM
+                information_schema.tables
+            WHERE
                 TABLE_SCHEMA = %s
                 AND TABLE_NAME = %s
             """
@@ -1599,7 +1598,7 @@ class MetadataExtractor:
             self._reraise_if_doris_oauth_metadata_error(e)
             return ""
 
-    async def get_column_comments_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> Dict[str, str]:
+    async def get_column_comments_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> dict[str, str]:
         """Async version: get comments for all columns in a table."""
         try:
             effective_db = db_name or self.db_name
@@ -1615,15 +1614,15 @@ class MetadataExtractor:
                 return {}
 
             query = """
-            SELECT 
-                COLUMN_NAME, 
-                COLUMN_COMMENT 
-            FROM 
-                information_schema.columns 
-            WHERE 
+            SELECT
+                COLUMN_NAME,
+                COLUMN_COMMENT
+            FROM
+                information_schema.columns
+            WHERE
                 TABLE_SCHEMA = %s
                 AND TABLE_NAME = %s
-            ORDER BY 
+            ORDER BY
                 ORDINAL_POSITION
             """
 
@@ -1640,7 +1639,7 @@ class MetadataExtractor:
                     effective_catalog,
                 )
                 return {}
-            comments: Dict[str, str] = {}
+            comments: dict[str, str] = {}
             for col in rows:
                 name = col.get("COLUMN_NAME", "")
                 if name:
@@ -1651,7 +1650,7 @@ class MetadataExtractor:
             self._reraise_if_doris_oauth_metadata_error(e)
             return {}
 
-    async def get_table_indexes_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> List[Dict[str, Any]]:
+    async def get_table_indexes_async(self, table_name: str, db_name: str = None, catalog_name: str = None) -> list[dict[str, Any]]:
         """Async version: get index information for a table."""
         try:
             effective_db = db_name or self.db_name
@@ -1671,7 +1670,7 @@ class MetadataExtractor:
             # Build query with catalog prefix if specified (using safe identifiers)
             safe_table = quote_identifier(table_name, "table name")
             safe_db = quote_identifier(effective_db, "database name") if effective_db else None
-            
+
             if effective_catalog:
                 safe_catalog = quote_identifier(effective_catalog, "catalog name")
                 query = f"SHOW INDEX FROM {safe_catalog}.{safe_db}.{safe_table}"
@@ -1680,10 +1679,10 @@ class MetadataExtractor:
                 query = f"SHOW INDEX FROM {safe_db}.{safe_table}"
 
             rows = await self._execute_query_async(query, effective_db)
-            indexes: List[Dict[str, Any]] = []
+            indexes: list[dict[str, Any]] = []
             if rows:
                 # Group by Key_name
-                current_index: Dict[str, Any] | None = None
+                current_index: dict[str, Any] | None = None
                 for r in rows:
                     try:
                         index_name = r.get('Key_name')
@@ -1748,7 +1747,7 @@ class MetadataExtractor:
             return pd.DataFrame()
 
     # ==================== Business layer methods (original metadata_tools.py functionality) ====================
-    
+
     def _format_response(
         self,
         success: bool,
@@ -1757,7 +1756,7 @@ class MetadataExtractor:
         message: str = "",
         error_code: str | None = None,
         status_code: int | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Format response result"""
         response_data = {
             "success": success,
@@ -1773,10 +1772,10 @@ class MetadataExtractor:
                 response_data["error_code"] = error_code
             if status_code:
                 response_data["status_code"] = status_code
-        
+
         return response_data
 
-    def _format_metadata_error_response(self, exc: Exception, message: str) -> Dict[str, Any]:
+    def _format_metadata_error_response(self, exc: Exception, message: str) -> dict[str, Any]:
         return self._format_response(
             success=False,
             error=str(exc),
@@ -1792,7 +1791,7 @@ class MetadataExtractor:
         catalog_name: str = None,
         max_rows: int = 100,
         timeout: int = 30
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Execute SQL query and return results, supports catalog federation queries
         Unified interface for MCP tools
@@ -1877,91 +1876,91 @@ class MetadataExtractor:
             return self._format_response(success=False, error=str(e), message="Error occurred while executing SQL query")
 
     async def get_table_schema_for_mcp(
-        self, 
-        table_name: str, 
-        db_name: str = None, 
+        self,
+        table_name: str,
+        db_name: str = None,
         catalog_name: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get detailed schema information for specified table (columns, types, comments, etc.) - MCP interface"""
         logger.info(f"Getting table schema: Table: {table_name}, DB: {db_name}, Catalog: {catalog_name}")
-        
+
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
-        
+
         # SECURITY: Validate identifiers before processing
         try:
             validate_identifier(table_name, "table name")
-        except SQLSecurityError as e:
+        except SQLSecurityError:
             return self._format_response(
-                success=False, 
+                success=False,
                 error=f"Invalid table name: {table_name}",
                 message="Table name contains invalid characters"
             )
-        
+
         if db_name:
             try:
                 validate_identifier(db_name, "database name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid database name: {db_name}",
                     message="Database name contains invalid characters"
                 )
-        
+
         if catalog_name and catalog_name != "internal":
             try:
                 validate_identifier(catalog_name, "catalog name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid catalog name: {catalog_name}",
                     message="Catalog name contains invalid characters"
                 )
-        
+
         try:
             schema = await self.get_table_schema_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
-            
+
             if not schema:
                 return self._format_response(
-                    success=False, 
-                    error="Table does not exist or has no columns", 
+                    success=False,
+                    error="Table does not exist or has no columns",
                     message=f"Unable to get schema for table {catalog_name or 'default'}.{db_name or self.db_name}.{table_name}"
                 )
-            
+
             return self._format_response(success=True, result=schema)
         except Exception as e:
             logger.error(f"Failed to get table schema: {str(e)}", exc_info=True)
             return self._format_metadata_error_response(e, "Error occurred while getting table schema")
 
     async def get_db_table_list_for_mcp(
-        self, 
-        db_name: str = None, 
+        self,
+        db_name: str = None,
         catalog_name: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get list of all table names in specified database - MCP interface"""
         logger.info(f"Getting database table list: DB: {db_name}, Catalog: {catalog_name}")
-        
+
         # SECURITY: Validate identifiers
         if db_name:
             try:
                 validate_identifier(db_name, "database name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid database name: {db_name}",
                     message="Database name contains invalid characters"
                 )
-        
+
         if catalog_name and catalog_name != "internal":
             try:
                 validate_identifier(catalog_name, "catalog name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid catalog name: {catalog_name}",
                     message="Catalog name contains invalid characters"
                 )
-        
+
         try:
             tables = await self.get_database_tables_async(db_name=db_name, catalog_name=catalog_name)
             return self._format_response(success=True, result=tables)
@@ -1969,10 +1968,10 @@ class MetadataExtractor:
             logger.error(f"Failed to get database table list: {str(e)}", exc_info=True)
             return self._format_metadata_error_response(e, "Error occurred while getting database table list")
 
-    async def get_db_list_for_mcp(self, catalog_name: str = None) -> Dict[str, Any]:
+    async def get_db_list_for_mcp(self, catalog_name: str = None) -> dict[str, Any]:
         """Get list of all database names on server - MCP interface"""
         logger.info(f"Getting database list: Catalog: {catalog_name}")
-        
+
         try:
             databases = await self.get_all_databases_async(catalog_name=catalog_name)
             return self._format_response(success=True, result=databases)
@@ -1981,47 +1980,47 @@ class MetadataExtractor:
             return self._format_metadata_error_response(e, "Error occurred while getting database list")
 
     async def get_table_comment_for_mcp(
-        self, 
-        table_name: str, 
-        db_name: str = None, 
+        self,
+        table_name: str,
+        db_name: str = None,
         catalog_name: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get comment information for specified table - MCP interface"""
         logger.info(f"Getting table comment: Table: {table_name}, DB: {db_name}, Catalog: {catalog_name}")
-        
+
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
-        
+
         # SECURITY: Validate identifiers
         try:
             validate_identifier(table_name, "table name")
-        except SQLSecurityError as e:
+        except SQLSecurityError:
             return self._format_response(
                 success=False,
                 error=f"Invalid table name: {table_name}",
                 message="Table name contains invalid characters"
             )
-        
+
         if db_name:
             try:
                 validate_identifier(db_name, "database name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid database name: {db_name}",
                     message="Database name contains invalid characters"
                 )
-        
+
         if catalog_name and catalog_name != "internal":
             try:
                 validate_identifier(catalog_name, "catalog name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid catalog name: {catalog_name}",
                     message="Catalog name contains invalid characters"
                 )
-        
+
         try:
             comment = await self.get_table_comment_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
             return self._format_response(success=True, result=comment)
@@ -2030,47 +2029,47 @@ class MetadataExtractor:
             return self._format_metadata_error_response(e, "Error occurred while getting table comment")
 
     async def get_table_column_comments_for_mcp(
-        self, 
-        table_name: str, 
-        db_name: str = None, 
+        self,
+        table_name: str,
+        db_name: str = None,
         catalog_name: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get comment information for all columns in specified table - MCP interface"""
         logger.info(f"Getting table column comments: Table: {table_name}, DB: {db_name}, Catalog: {catalog_name}")
-        
+
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
-        
+
         # SECURITY: Validate identifiers
         try:
             validate_identifier(table_name, "table name")
-        except SQLSecurityError as e:
+        except SQLSecurityError:
             return self._format_response(
                 success=False,
                 error=f"Invalid table name: {table_name}",
                 message="Table name contains invalid characters"
             )
-        
+
         if db_name:
             try:
                 validate_identifier(db_name, "database name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid database name: {db_name}",
                     message="Database name contains invalid characters"
                 )
-        
+
         if catalog_name and catalog_name != "internal":
             try:
                 validate_identifier(catalog_name, "catalog name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid catalog name: {catalog_name}",
                     message="Catalog name contains invalid characters"
                 )
-        
+
         try:
             comments = await self.get_column_comments_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
             return self._format_response(success=True, result=comments)
@@ -2079,47 +2078,47 @@ class MetadataExtractor:
             return self._format_metadata_error_response(e, "Error occurred while getting table column comments")
 
     async def get_table_indexes_for_mcp(
-        self, 
-        table_name: str, 
-        db_name: str = None, 
+        self,
+        table_name: str,
+        db_name: str = None,
         catalog_name: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get index information for specified table - MCP interface"""
         logger.info(f"Getting table indexes: Table: {table_name}, DB: {db_name}, Catalog: {catalog_name}")
-        
+
         if not table_name:
             return self._format_response(success=False, error="Missing table_name parameter")
-        
+
         # SECURITY: Validate identifiers
         try:
             validate_identifier(table_name, "table name")
-        except SQLSecurityError as e:
+        except SQLSecurityError:
             return self._format_response(
                 success=False,
                 error=f"Invalid table name: {table_name}",
                 message="Table name contains invalid characters"
             )
-        
+
         if db_name:
             try:
                 validate_identifier(db_name, "database name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid database name: {db_name}",
                     message="Database name contains invalid characters"
                 )
-        
+
         if catalog_name and catalog_name != "internal":
             try:
                 validate_identifier(catalog_name, "catalog name")
-            except SQLSecurityError as e:
+            except SQLSecurityError:
                 return self._format_response(
                     success=False,
                     error=f"Invalid catalog name: {catalog_name}",
                     message="Catalog name contains invalid characters"
                 )
-        
+
         try:
             indexes = await self.get_table_indexes_async(table_name=table_name, db_name=db_name, catalog_name=catalog_name)
             return self._format_response(success=True, result=indexes)
@@ -2140,13 +2139,13 @@ class MetadataExtractor:
         else:
             return data
 
-    async def get_recent_audit_logs_for_mcp(self, days: int = 7, limit: int = 100) -> Dict[str, Any]:
+    async def get_recent_audit_logs_for_mcp(self, days: int = 7, limit: int = 100) -> dict[str, Any]:
         """Get recent audit log records - MCP interface"""
         logger.info(f"Getting audit logs: Days: {days}, Limit: {limit}")
-        
+
         try:
             logs_df = await self.get_recent_audit_logs_async(days=days, limit=limit)
-            
+
             # Convert DataFrame to JSON format
             if hasattr(logs_df, 'to_dict'):
                 try:
@@ -2162,16 +2161,16 @@ class MetadataExtractor:
                 logs_data = self._serialize_datetime_objects(logs_data)
             else:
                 logs_data = self._serialize_datetime_objects(logs_df)
-                
+
             return self._format_response(success=True, result=logs_data)
         except Exception as e:
             logger.error(f"Failed to get audit logs: {str(e)}", exc_info=True)
             return self._format_response(success=False, error=str(e), message="Error occurred while getting audit logs")
 
-    async def get_catalog_list_for_mcp(self) -> Dict[str, Any]:
+    async def get_catalog_list_for_mcp(self) -> dict[str, Any]:
         """Get Doris catalog list - MCP interface"""
         logger.info("Getting catalog list")
-        
+
         try:
             catalogs = await self.get_catalog_list_async()
             return self._format_response(success=True, result=catalogs, message="Successfully retrieved catalog list")
@@ -2188,42 +2187,42 @@ class MetadataManager:
     Metadata manager - backward compatibility class
     Actually a wrapper for MetadataExtractor
     """
-    
+
     def __init__(self, connection_manager=None):
         self.extractor = MetadataExtractor(connection_manager=connection_manager)
-    
-    async def exec_query(self, sql: str, db_name: str = None, catalog_name: str = None, max_rows: int = 100, timeout: int = 30) -> Dict[str, Any]:
+
+    async def exec_query(self, sql: str, db_name: str = None, catalog_name: str = None, max_rows: int = 100, timeout: int = 30) -> dict[str, Any]:
         """Execute SQL query and return results, supports catalog federation queries"""
         return await self.extractor.exec_query_for_mcp(sql, db_name, catalog_name, max_rows, timeout)
-    
-    async def get_table_schema(self, table_name: str, db_name: str = None, catalog_name: str = None) -> Dict[str, Any]:
+
+    async def get_table_schema(self, table_name: str, db_name: str = None, catalog_name: str = None) -> dict[str, Any]:
         """Get detailed schema information for specified table (columns, types, comments, etc.)"""
         return await self.extractor.get_table_schema_for_mcp(table_name, db_name, catalog_name)
-    
-    async def get_db_table_list(self, db_name: str = None, catalog_name: str = None) -> Dict[str, Any]:
+
+    async def get_db_table_list(self, db_name: str = None, catalog_name: str = None) -> dict[str, Any]:
         """Get list of all table names in specified database"""
         return await self.extractor.get_db_table_list_for_mcp(db_name, catalog_name)
-    
-    async def get_db_list(self, catalog_name: str = None) -> Dict[str, Any]:
+
+    async def get_db_list(self, catalog_name: str = None) -> dict[str, Any]:
         """Get list of all database names on server"""
         return await self.extractor.get_db_list_for_mcp(catalog_name)
-    
-    async def get_table_comment(self, table_name: str, db_name: str = None, catalog_name: str = None) -> Dict[str, Any]:
+
+    async def get_table_comment(self, table_name: str, db_name: str = None, catalog_name: str = None) -> dict[str, Any]:
         """Get comment information for specified table"""
         return await self.extractor.get_table_comment_for_mcp(table_name, db_name, catalog_name)
-    
-    async def get_table_column_comments(self, table_name: str, db_name: str = None, catalog_name: str = None) -> Dict[str, Any]:
+
+    async def get_table_column_comments(self, table_name: str, db_name: str = None, catalog_name: str = None) -> dict[str, Any]:
         """Get comment information for all columns in specified table"""
         return await self.extractor.get_table_column_comments_for_mcp(table_name, db_name, catalog_name)
-    
-    async def get_table_indexes(self, table_name: str, db_name: str = None, catalog_name: str = None) -> Dict[str, Any]:
+
+    async def get_table_indexes(self, table_name: str, db_name: str = None, catalog_name: str = None) -> dict[str, Any]:
         """Get index information for specified table"""
         return await self.extractor.get_table_indexes_for_mcp(table_name, db_name, catalog_name)
-    
-    async def get_recent_audit_logs(self, days: int = 7, limit: int = 100) -> Dict[str, Any]:
+
+    async def get_recent_audit_logs(self, days: int = 7, limit: int = 100) -> dict[str, Any]:
         """Get recent audit log records"""
         return await self.extractor.get_recent_audit_logs_for_mcp(days, limit)
-    
-    async def get_catalog_list(self) -> Dict[str, Any]:
+
+    async def get_catalog_list(self) -> dict[str, Any]:
         """Get Doris catalog list"""
         return await self.extractor.get_catalog_list_for_mcp()

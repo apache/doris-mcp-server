@@ -286,7 +286,7 @@ class DatabaseConfig:
     # backward compatibility by falling back to the SQL host.
     fe_http_host: str = ""
     fe_http_port: int = 8030
-    
+
     # BE HTTP nodes must be configured explicitly. SQL metadata is not trusted
     # as an outbound HTTP allowlist.
     be_hosts: list[str] = field(default_factory=list)
@@ -373,24 +373,24 @@ class SecurityConfig:
     doris_oauth_api_auth_refresh_rate_limit_per_client: int = 240
     doris_oauth_dcr_max_clients: int = 1000
     doris_oauth_dcr_client_ttl_seconds: int = 86400
-    
+
     # Legacy configuration (kept for backward compatibility)
     auth_type: str = "token"  # jwt, token, basic, oauth (deprecated: use individual switches)
     token_secret: str = ""  # Deprecated legacy field; no usable default secret
     token_expiry: int = 3600
-    
+
     # Enhanced Token Authentication Configuration
     token_file_path: str = "tokens.json"  # Path to token configuration file
     enable_token_expiry: bool = True  # Enable token expiration
     default_token_expiry_hours: int = 24 * 30  # Default expiry: 30 days
     token_hash_algorithm: str = "sha256"  # Token hashing algorithm: sha256, sha512
-    
+
     # Token Management Security (New in v0.6.0)
     enable_http_token_management: bool = False  # Enable HTTP token management endpoints (default: disabled for security)
     token_management_admin_token: str = ""  # Admin token for token management endpoints (required if HTTP management enabled)
     token_management_allowed_ips: list[str] = field(default_factory=lambda: ["127.0.0.1", "::1", "localhost"])  # Allowed IPs for token management
     require_admin_auth: bool = True  # Require admin authentication for token management (default: true)
-    
+
     # JWT Configuration
     jwt_algorithm: str = "RS256"  # RS256, ES256, HS256
     jwt_issuer: str = "doris-mcp-server"
@@ -403,7 +403,7 @@ class SecurityConfig:
     enable_token_refresh: bool = True
     enable_token_revocation: bool = True
     key_rotation_interval: int = 30 * 24 * 3600  # 30 days in seconds
-    
+
     # JWT Security Features
     jwt_require_iat: bool = True  # Require "issued at" claim
     jwt_require_exp: bool = True  # Require "expires at" claim
@@ -419,7 +419,7 @@ class SecurityConfig:
         default_factory=lambda: [
             # DDL Operations (Data Definition Language)
             "DROP",
-            "CREATE", 
+            "CREATE",
             "ALTER",
             "TRUNCATE",
             # DML Operations (Data Manipulation Language)
@@ -431,7 +431,7 @@ class SecurityConfig:
             "REVOKE",
             # System Operations
             "EXEC",
-            "EXECUTE", 
+            "EXECUTE",
             "SHUTDOWN",
             "KILL",
         ]
@@ -452,7 +452,7 @@ class SecurityConfig:
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
     oauth_redirect_uri: str = "http://localhost:3000/auth/callback"
-    
+
     # OIDC Discovery
     oidc_discovery_url: str = ""  # e.g., https://accounts.google.com/.well-known/openid_configuration
     oauth_authorization_endpoint: str = ""
@@ -465,21 +465,21 @@ class SecurityConfig:
     oauth_issuer: str = ""
     oauth_resource: str = ""
     oauth_audience: str = ""
-    
+
     # OAuth Scopes and Settings
     oauth_scopes: list[str] = field(default_factory=list)
     oauth_required_scopes: list[str] = field(default_factory=list)
     oauth_state_expiry: int = 600  # State parameter expiry in seconds (10 minutes)
     oauth_pkce_enabled: bool = True  # Enable PKCE for better security
     oauth_nonce_enabled: bool = True  # Enable nonce for OIDC
-    
+
     # User Mapping Configuration
     oauth_user_id_claim: str = "sub"  # JWT claim for user ID
     oauth_email_claim: str = "email"
     oauth_name_claim: str = "name"
     oauth_roles_claim: str = "roles"  # Custom claim for roles
     oauth_default_roles: list[str] = field(default_factory=lambda: ["oauth_user"])
-    
+
     def __post_init__(self):
         """Initialize default OAuth scopes based on provider"""
         if not self.oauth_scopes and self.oauth_provider:
@@ -509,7 +509,7 @@ class PerformanceConfig:
     # Connection pool optimization configuration
     connection_pool_size: int = 20
     idle_timeout: int = 1800
-    
+
     # Response content size limit (characters)
     max_response_content_size: int = 4096
 
@@ -521,20 +521,20 @@ class DataQualityConfig:
     # Column analysis configuration
     max_columns_per_batch: int = 20  # Maximum columns to analyze in a single batch
     default_sample_size: int = 100000  # Default sample size for analysis
-    
+
     # Sampling strategy configuration
     small_table_threshold: int = 100000  # Tables smaller than this use full table analysis
     medium_table_threshold: int = 1000000  # Tables smaller than this use simple LIMIT sampling
     # Tables larger than medium_table_threshold use systematic sampling
-    
+
     # Performance optimization
     enable_batch_analysis: bool = True  # Enable batch analysis for multiple columns
     batch_timeout: int = 300  # Timeout for batch analysis in seconds
-    
+
     # Accuracy vs Performance trade-off
     enable_fast_mode: bool = False  # Use approximate algorithms for faster results
     fast_mode_sample_size: int = 10000  # Sample size for fast mode
-    
+
     # Statistical analysis configuration
     enable_distribution_analysis: bool = True  # Enable distribution analysis
     histogram_bins: int = 20  # Number of bins for histogram analysis
@@ -549,10 +549,10 @@ class ADBCConfig:
     default_max_rows: int = 100000
     default_timeout: int = 60
     default_return_format: str = "arrow"  # "arrow", "pandas", "dict"
-    
+
     # Connection timeout for ADBC
     connection_timeout: int = 30
-    
+
     # Whether to enable ADBC tools
     enabled: bool = True
 
@@ -570,7 +570,7 @@ class LoggingConfig:
     # Audit log configuration
     enable_audit: bool = True
     audit_file_path: str | None = None
-    
+
     # Log cleanup configuration
     enable_cleanup: bool = True
     max_age_days: int = 30
@@ -607,7 +607,7 @@ class DorisConfig:
     mcp_allowed_hosts: list[str] = field(default_factory=list)
     mcp_allowed_origins: list[str] = field(default_factory=list)
     transport: str = "stdio"
-    
+
     # Temporary files configuration
     temp_files_dir: str = "tmp"  # Temporary files directory for Explain and Profile outputs
 
@@ -650,7 +650,7 @@ class DorisConfig:
 
         The kv pairs in the. env file will be loaded as environment variables,
         but the existing environment variables will not be overridden.
-        
+
         Args:
             env_file: .env file path, if None, search in the following order:
                      .env, .env.local, .env.production, .env.development
@@ -682,27 +682,27 @@ class DorisConfig:
         # Database configuration - handle empty strings properly
         doris_host = os.getenv("DORIS_HOST", "").strip()
         config.database.host = doris_host if doris_host else config.database.host
-        
+
         doris_port = os.getenv("DORIS_PORT", "").strip()
         if doris_port and doris_port.isdigit():
             config.database.port = int(doris_port)
-        
+
         doris_user = os.getenv("DORIS_USER", "").strip()
         config.database.user = doris_user if doris_user else config.database.user
-        
+
         doris_password = os.getenv("DORIS_PASSWORD", "")
         config.database.password = doris_password if doris_password else config.database.password
-        
+
         doris_database = os.getenv("DORIS_DATABASE", "").strip()
         config.database.database = doris_database if doris_database else config.database.database
-        
+
         doris_fe_http_host = os.getenv("DORIS_FE_HTTP_HOST", "").strip()
         config.database.fe_http_host = doris_fe_http_host
 
         doris_fe_http_port = os.getenv("DORIS_FE_HTTP_PORT", "").strip()
         if doris_fe_http_port and doris_fe_http_port.isdigit():
             config.database.fe_http_port = int(doris_fe_http_port)
-        
+
         # BE nodes configuration
         be_hosts_env = os.getenv("DORIS_BE_HOSTS", "")
         if be_hosts_env:
@@ -735,12 +735,12 @@ class DorisConfig:
                 str(config.database.http_max_response_bytes),
             )
         )
-        
+
         # Arrow Flight SQL Configuration
         fe_arrow_port_env = os.getenv("FE_ARROW_FLIGHT_SQL_PORT")
         if fe_arrow_port_env:
             config.database.fe_arrow_flight_sql_port = int(fe_arrow_port_env)
-        
+
         be_arrow_port_env = os.getenv("BE_ARROW_FLIGHT_SQL_PORT")
         if be_arrow_port_env:
             config.database.be_arrow_flight_sql_port = int(be_arrow_port_env)
@@ -969,23 +969,23 @@ class DorisConfig:
         config.security.enable_security_check = (
             os.getenv("ENABLE_SECURITY_CHECK", str(config.security.enable_security_check).lower()).lower() == "true"
         )
-        
+
         # Handle blocked keywords environment variable configuration
         # Format: BLOCKED_KEYWORDS="DROP,DELETE,TRUNCATE,ALTER,CREATE,INSERT,UPDATE,GRANT,REVOKE"
         blocked_keywords_env = os.getenv("BLOCKED_KEYWORDS", "")
         if blocked_keywords_env:
             # If environment variable is provided, use keywords list from environment variable
             config.security.blocked_keywords = [
-                keyword.strip().upper() 
-                for keyword in blocked_keywords_env.split(",") 
+                keyword.strip().upper()
+                for keyword in blocked_keywords_env.split(",")
                 if keyword.strip()
             ]
         # If environment variable is empty, keep default configuration unchanged
-        
+
         config.security.enable_masking = (
             os.getenv("ENABLE_MASKING", str(config.security.enable_masking).lower()).lower() == "true"
         )
-        
+
         # Enhanced Token Authentication configuration
         config.security.token_file_path = os.getenv("TOKEN_FILE_PATH", config.security.token_file_path)
         config.security.enable_token_expiry = (
@@ -995,18 +995,18 @@ class DorisConfig:
             os.getenv("DEFAULT_TOKEN_EXPIRY_HOURS", str(config.security.default_token_expiry_hours))
         )
         config.security.token_hash_algorithm = os.getenv("TOKEN_HASH_ALGORITHM", config.security.token_hash_algorithm)
-        
+
         # Token Management Security Configuration (New in v0.6.0)
         config.security.enable_http_token_management = (
             os.getenv("ENABLE_HTTP_TOKEN_MANAGEMENT", str(config.security.enable_http_token_management).lower()).lower() == "true"
         )
         config.security.token_management_admin_token = os.getenv("TOKEN_MANAGEMENT_ADMIN_TOKEN", config.security.token_management_admin_token)
-        
+
         # Parse allowed IPs from comma-separated string
         allowed_ips_str = os.getenv("TOKEN_MANAGEMENT_ALLOWED_IPS", "")
         if allowed_ips_str:
             config.security.token_management_allowed_ips = [ip.strip() for ip in allowed_ips_str.split(",") if ip.strip()]
-        
+
         config.security.require_admin_auth = (
             os.getenv("REQUIRE_ADMIN_AUTH", str(config.security.require_admin_auth).lower()).lower() == "true"
         )
@@ -1478,10 +1478,10 @@ class DorisConfig:
 
         if self.logging.backup_count < 0:
             errors.append("Log backup count cannot be negative")
-        
+
         if self.logging.max_age_days <= 0:
             errors.append("Log max age days must be greater than 0")
-        
+
         if self.logging.cleanup_interval_hours <= 0:
             errors.append("Log cleanup interval hours must be greater than 0")
 
@@ -2016,22 +2016,22 @@ class ConfigManager:
         import sys
 
         from .logger import setup_logging
-        
+
         # Determine log directory
         log_dir = "logs"
         if self.config.logging.file_path:
             # Extract directory from file path if provided
             from pathlib import Path
             log_dir = str(Path(self.config.logging.file_path).parent)
-        
+
         # Detect if we're in stdio mode by checking if this is likely MCP stdio communication
         # In stdio mode, we shouldn't output to console as it interferes with JSON protocol
         is_stdio_mode = (
-            self.config.transport == "stdio" or 
+            self.config.transport == "stdio" or
             "--transport" in sys.argv and "stdio" in sys.argv or
             not sys.stdout.isatty()  # Not a terminal (likely piped/redirected)
         )
-        
+
         # Setup enhanced logging with cleanup functionality
         setup_logging(
             level=self.config.logging.level,
@@ -2046,10 +2046,10 @@ class ConfigManager:
             max_age_days=self.config.logging.max_age_days,
             cleanup_interval_hours=self.config.logging.cleanup_interval_hours
         )
-        
+
         # Update logger to use new system
         self.logger = get_logger(__name__)
-        
+
         self.logger.info("Enhanced logging system with cleanup initialized successfully")
         self.logger.info(f"Log directory: {log_dir}")
         self.logger.info(f"Log level: {self.config.logging.level}")

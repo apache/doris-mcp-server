@@ -22,10 +22,10 @@ SQL security validation tests
 import pytest
 
 from doris_mcp_server.utils.security import (
-    SQLSecurityValidator,
     AuthContext,
     SecurityLevel,
-    ValidationResult
+    SQLSecurityValidator,
+    ValidationResult,
 )
 
 
@@ -52,9 +52,9 @@ class TestSQLSecurityValidator:
     async def test_safe_select_query(self, sql_validator, analyst_context, test_sql_queries):
         """Test safe SELECT query validation"""
         sql = test_sql_queries["safe_select"]
-        
+
         result = await sql_validator.validate(sql, analyst_context)
-        
+
         assert result.is_valid is True
         assert result.error_message is None
 
@@ -62,9 +62,9 @@ class TestSQLSecurityValidator:
     async def test_blocked_drop_operation(self, sql_validator, analyst_context, test_sql_queries):
         """Test blocked DROP operation"""
         sql = test_sql_queries["dangerous_drop"]
-        
+
         result = await sql_validator.validate(sql, analyst_context)
-        
+
         assert result.is_valid is False
         assert "blocked operations" in result.error_message.lower()
         assert "DROP" in result.blocked_operations
@@ -73,9 +73,9 @@ class TestSQLSecurityValidator:
     async def test_sql_injection_detection(self, sql_validator, analyst_context, test_sql_queries):
         """Test SQL injection detection"""
         sql = test_sql_queries["sql_injection"]
-        
+
         result = await sql_validator.validate(sql, analyst_context)
-        
+
         assert result.is_valid is False
         assert "injection" in result.error_message.lower()
         assert result.risk_level == "high"
@@ -84,9 +84,9 @@ class TestSQLSecurityValidator:
     async def test_union_injection_detection(self, sql_validator, analyst_context, test_sql_queries):
         """Test UNION injection detection"""
         sql = test_sql_queries["union_injection"]
-        
+
         result = await sql_validator.validate(sql, analyst_context)
-        
+
         assert result.is_valid is False
         assert "injection" in result.error_message.lower()
 
@@ -94,9 +94,9 @@ class TestSQLSecurityValidator:
     async def test_comment_injection_detection(self, sql_validator, analyst_context, test_sql_queries):
         """Test comment injection detection"""
         sql = test_sql_queries["comment_injection"]
-        
+
         result = await sql_validator.validate(sql, analyst_context)
-        
+
         assert result.is_valid is False
         assert "comment" in result.error_message.lower()
 
@@ -132,9 +132,9 @@ class TestSQLSecurityValidator:
     async def test_complex_query_validation(self, sql_validator, analyst_context, test_sql_queries):
         """Test complex query validation"""
         sql = test_sql_queries["complex_query"]
-        
+
         result = await sql_validator.validate(sql, analyst_context)
-        
+
         # Complex query should pass if within limits
         assert result.is_valid is True
 
@@ -149,7 +149,7 @@ class TestSQLSecurityValidator:
             "INSERT INTO users VALUES (1, 'test')",
             "UPDATE users SET name = 'test' WHERE id = 1"
         ]
-        
+
         for sql in blocked_sqls:
             result = await sql_validator.validate(sql, analyst_context)
             assert result.is_valid is False
@@ -161,9 +161,9 @@ class TestSQLSecurityValidator:
         """Test table access validation"""
         # Test access to sensitive table
         sql = "SELECT * FROM sensitive_data"
-        
+
         result = await sql_validator.validate(sql, analyst_context)
-        
+
         # Should fail for non-admin users
         assert result.is_valid is False
         assert "access" in result.error_message.lower()
@@ -171,10 +171,10 @@ class TestSQLSecurityValidator:
     def test_extract_table_names(self, sql_validator):
         """Test table name extraction"""
         sql = "SELECT u.name FROM users u JOIN departments d ON u.dept_id = d.id"
-        
+
         parsed = __import__('sqlparse').parse(sql)[0]
         tables = sql_validator._extract_table_names(parsed)
-        
+
         # Should extract at least one table name
         assert len(tables) > 0
 
@@ -182,8 +182,8 @@ class TestSQLSecurityValidator:
     async def test_malformed_sql_handling(self, sql_validator, analyst_context):
         """Test malformed SQL handling"""
         malformed_sql = "SELECT * FROM users WHERE"
-        
+
         result = await sql_validator.validate(malformed_sql, analyst_context)
-        
+
         # Should handle gracefully
         assert isinstance(result, ValidationResult)

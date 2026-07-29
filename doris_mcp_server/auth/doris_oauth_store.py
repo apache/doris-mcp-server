@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """In-memory HMAC-backed store for Doris-backed OAuth."""
 
-import hmac
 import hashlib
+import hmac
 import secrets
 import time
 from dataclasses import replace
 
+from ..utils.security import RESERVED_DORIS_OAUTH_TOKEN_PREFIX
 from .doris_oauth_types import (
     AccessTokenRecord,
-    AuthTransactionRecord,
     AuthorizationCodeRecord,
+    AuthTransactionRecord,
     IssuedTokenPair,
     RefreshTokenRecord,
     RegisteredClientRecord,
 )
-from ..utils.security import RESERVED_DORIS_OAUTH_TOKEN_PREFIX
 
 
 class DorisOAuthStore:
@@ -35,7 +35,7 @@ class DorisOAuthStore:
         self.user_token_ids: dict[str, set[str]] = {}
 
     def hmac_lookup(self, value: str, purpose: str) -> str:
-        payload = f"{purpose}:{value}".encode("utf-8")
+        payload = f"{purpose}:{value}".encode()
         return hmac.new(self._hash_key, payload, hashlib.sha256).hexdigest()
 
     def hash_client_secret(self, client_secret: str) -> str:

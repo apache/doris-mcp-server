@@ -39,10 +39,13 @@ logging.basicConfig(
 @pytest.fixture
 def test_config():
     """Test configuration fixture"""
-    from doris_mcp_server.utils.config import DorisConfig, normalize_effective_auth_config
-    
+    from doris_mcp_server.utils.config import (
+        DorisConfig,
+        normalize_effective_auth_config,
+    )
+
     config = DorisConfig()
-    
+
     # Database configuration
     config.database.host = "localhost"
     config.database.port = 9030
@@ -53,14 +56,14 @@ def test_config():
     config.database.max_connections = 20
     config.database.connection_timeout = 30
     config.database.max_connection_age = 3600
-    
+
     # Security configuration
     config.security.enable_masking = True
     config.security.auth_type = "token"
     config.security.token_secret = "test_secret"
     config.security.token_expiry = 3600
     normalize_effective_auth_config(config)
-    
+
     return config
 
 
