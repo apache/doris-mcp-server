@@ -586,7 +586,8 @@ class SQLAnalyzer:
             
             logger.info(f"Generated trace ID for SQL profiling: {trace_id}")
             logger.info(f"Profile will be saved to: {profile_file}")
-            
+
+            auth_context = get_auth_context()
             connection = await self.connection_manager.get_connection("query")
             
             try:
@@ -598,7 +599,6 @@ class SQLAnalyzer:
                     except SQLSecurityError as e:
                         return {"success": False, "error": f"Invalid catalog name: {e}"}
                     safe_catalog = quote_identifier(catalog_name, "catalog name")
-                    auth_context = get_auth_context()
                     await connection.execute(f"SWITCH {safe_catalog}", auth_context=auth_context)
                 if db_name:
                     try:

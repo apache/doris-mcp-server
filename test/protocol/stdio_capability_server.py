@@ -19,6 +19,8 @@
 import asyncio
 import json
 import logging
+import tempfile
+from types import SimpleNamespace
 
 from mcp.server.stdio import stdio_server
 from mcp.types import (
@@ -32,6 +34,8 @@ from mcp.types import (
 )
 
 from doris_mcp_server.protocol import create_doris_mcp_server
+from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
+from doris_mcp_server.utils.db import QueryResult
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
 
@@ -52,17 +56,71 @@ class EmptyResourcesManager:
         )
 
 
+class ProfileConnection:
+    async def execute(self, sql: str, params=None, auth_context=None) -> QueryResult:
+        return QueryResult(
+            data=[{"one": 1}],
+            metadata={"columns": ["one"]},
+            execution_time=0.01,
+            row_count=1,
+            sql=sql,
+        )
+
+
+class ProfileConnectionManager:
+    def __init__(self) -> None:
+        self._temp_dir = tempfile.TemporaryDirectory(prefix="doris-mcp-profile-")
+        self.config = SimpleNamespace(
+            temp_files_dir=self._temp_dir.name,
+            performance=SimpleNamespace(max_response_content_size=20_000),
+        )
+        self.connection = ProfileConnection()
+
+    async def get_connection(self, session_id: str) -> ProfileConnection:
+        return self.connection
+
+
+class ProfileAnalyzer(SQLAnalyzer):
+    async def _get_query_id_by_trace_id(self, trace_id: str) -> str:
+        return "query-1"
+
+    async def _get_profile_by_query_id(self, query_id: str) -> dict:
+        return {"profile": "ok", "query_id": query_id}
+
+
 class OneToolManager:
+    def __init__(self) -> None:
+        self.profile_analyzer = ProfileAnalyzer(ProfileConnectionManager())
+
     async def list_tools(self) -> list[Tool]:
         return [
             Tool(
                 name="echo",
                 description="Echo structured input.",
                 input_schema={"type": "object", "properties": {}},
-            )
+            ),
+            Tool(
+                name="get_sql_profile",
+                description="Exercise the production SQL profile path.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "sql": {"type": "string"},
+                        "db_name": {"type": "string"},
+                    },
+                    "required": ["sql"],
+                },
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> str:
+        if name == "get_sql_profile":
+            return json.dumps(
+                await self.profile_analyzer.get_sql_profile(
+                    arguments["sql"],
+                    db_name=arguments.get("db_name"),
+                )
+            )
         return "{}"
 
 

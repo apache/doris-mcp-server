@@ -138,7 +138,7 @@
 | `CORE-007` | P1 | 显式跨调用 handle | PROTO-003, SEC-015 | 状态不依赖协议 session；handle 绑定 principal/expiry | `BACKLOG` |
 | `CORE-008` | P2 | 大结果边界 | 无 | 行数、字节数、超时和取消可配置且有硬上限 | `BACKLOG` |
 | `CORE-009` | P2 | manager 模块职责拆分 | CORE-005 | 不改变行为前提下缩小超大文件，模块边界有测试 | `BACKLOG` |
-| `CORE-010` | P1 | 修复 SQL profile 分析未绑定 `auth_context` | 无 | 真实 Doris 调用不再触发局部变量未赋值；鉴权上下文覆盖测试通过 | `READY` |
+| `CORE-010` | P1 | 修复 SQL profile 分析未绑定 `auth_context` | 无 | 真实 Doris 调用不再触发局部变量未赋值；鉴权上下文覆盖测试通过 | `DONE` |
 | `CORE-011` | P1 | 修复数据新鲜度空阈值比较 | 无 | 阈值缺失或为 `None` 时返回类型化错误/默认值，不抛 `TypeError` | `READY` |
 | `COMPAT-001` | P1 | Doris 4.0 元数据字段兼容 | 无 | Doris 4.0.5 的角色/权限查询不再依赖不存在的 `Default_role` 字段 | `READY` |
 | `COMPAT-002` | P2 | FE/BE HTTP 端点独立配置 | SEC-018 | SQL、FE HTTP、BE HTTP 可分别配置主机/端口并通过代理/隧道环境测试 | `BACKLOG` |
@@ -446,13 +446,44 @@ Prompt 的三类失败现在拥有独立、稳定的协议语义：
 
 完全不可达 Doris 的真实 STDIO 进程会在协议协商前退出，无法进入 Prompt handler；这是启动/就绪与故障恢复边界，继续由 `CORE-006` / `TEST-005` 跟踪，未计作本项通过证据。
 
+提交与评审回执：
+
+- commit：`fc49a31 fix: type prompt retrieval failures`
+- Draft PR：[apache/doris-mcp-server#96](https://github.com/apache/doris-mcp-server/pull/96)
+
+### CORE-010
+
+SQL Profile 分析现在会在所有分支进入数据库操作前统一绑定当前 `auth_context`。不再依赖 `catalog_name` 分支的局部赋值，因此“未指定 catalog”和“仅指定数据库”两条常见路径均不会触发 `UnboundLocalError`，同一个鉴权上下文会传递到上下文切换、session trace、profile 开关和真实 SQL。
+
+自动化验证：
+
+- 单元路径：未指定数据库、仅指定数据库两种场景均成功，并逐条断言执行调用收到同一个 Doris 鉴权上下文；
+- Streamable HTTP：经生产 `SQLAnalyzer` 路径执行 Profile SQL，随后同一实例继续响应工具调用；
+- 真实子进程 STDIO：modern/legacy 均经生产 `SQLAnalyzer` 路径执行 Profile SQL并保持进程可用；
+- 完整 pytest：`347 passed / 57 skipped / 0 failed / 249 warnings`；
+- `uv lock --check`、新增测试完整 Ruff、实现文件 `F821/F823` Ruff、`compileall`、`uv build` 全部通过。
+
+真实 Doris 验证：
+
+```text
+environment: 192.168.31.63 / hhm_dt_sim
+profile SQL: SELECT COUNT(*) AS row_count FROM org_tenant
+recovery result: org_tenant=47040
+```
+
+- HTTP modern/legacy：Profile SQL 实际执行且包含 `execution_time`，无 `auth_context` 局部变量错误，随后真实查询成功；
+- STDIO modern/legacy：Profile SQL 实际执行且包含 `execution_time`，无 `auth_context` 局部变量错误，随后真实查询成功；
+- 当前隧道环境下 FE HTTP Profile 数据未取回，返回既有的“query ID unavailable”业务结果；SQL 执行与进程恢复均成功。FE HTTP 与 SQL 端点独立映射继续由 `COMPAT-002` 跟踪，不计作本项回归。
+
+连接通过既有 SSH key 与临时 SQL/FE HTTP 隧道完成；凭据未写入仓库、测试或台账，探针结束后 MCP 服务与隧道均已关闭。
+
 ## 11. 下一开发批次
 
 批次：`BATCH-02-CONFORMANCE-AND-ERROR-SEMANTICS`
 
 按以下顺序推进：
 
-1. `CORE-010` / `CORE-011` / `COMPAT-001`：修复真实 Doris 已复现缺陷；
+1. `CORE-011` / `COMPAT-001`：继续修复真实 Doris 已复现缺陷；
 2. `TEST-003`：运行官方 `server-stateless` Conformance；
 3. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
 4. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；
