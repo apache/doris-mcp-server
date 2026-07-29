@@ -130,6 +130,8 @@ async def test_authorization_server_metadata_advertises_response_issuer():
     metadata = response.json()
     assert metadata["issuer"] == provider.issuer
     assert metadata["authorization_response_iss_parameter_supported"] is True
+    assert metadata["client_id_metadata_document_supported"] is True
+    assert "registration_endpoint" in metadata
 
 
 @pytest.mark.parametrize(

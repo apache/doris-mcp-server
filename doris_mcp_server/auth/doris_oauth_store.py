@@ -56,6 +56,7 @@ class DorisOAuthStore:
         source: str,
         expires_at: float | None,
         registration_ip: str | None = None,
+        client_name: str | None = None,
     ) -> RegisteredClientRecord:
         record = RegisteredClientRecord(
             client_id=client_id,
@@ -68,6 +69,7 @@ class DorisOAuthStore:
             created_at=time.time(),
             expires_at=expires_at,
             registration_ip_hash=self.hash_public_value(registration_ip) if registration_ip else None,
+            client_name=client_name,
         )
         self.clients_by_id[client_id] = record
         return record

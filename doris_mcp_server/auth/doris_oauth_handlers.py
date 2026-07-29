@@ -4,13 +4,14 @@
 import html
 import ipaddress
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from .doris_oauth_rate_limit import rate_limited_response
+from .doris_oauth_redirects import is_loopback_host
 from .doris_oauth_types import (
     AuthorizeError,
     DorisOAuthError,
@@ -241,6 +242,7 @@ class DorisOAuthHandlers:
         error_message: str = "",
     ) -> str:
         title = "doris"
+        client_context_html = self._client_context_html(txn_id)
         error_html = ""
         if error_message:
             error_html = (
@@ -303,6 +305,28 @@ class DorisOAuthHandlers:
     color: var(--muted);
     font-size: 14px;
   }}
+  .client-context {{
+    margin: 0 0 20px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: #fafafa;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }}
+  .client-context strong,
+  .client-context span {{
+    display: block;
+  }}
+  .client-context span {{
+    color: var(--muted);
+  }}
+  .warning {{
+    margin-top: 8px;
+    color: #8a5a00;
+    font-weight: 600;
+  }}
   label {{
     display: block;
     margin-bottom: 6px;
@@ -350,6 +374,7 @@ class DorisOAuthHandlers:
 <div class="card">
   <h2>{title}</h2>
   <p class="subtitle">Doris account login</p>
+  {client_context_html}
   {error_html}
   <form method="POST" action="/doris-login">
     <input type="hidden" name="txn_id" value="{html.escape(txn_id)}">
@@ -363,6 +388,40 @@ class DorisOAuthHandlers:
 </div>
 </body>
 </html>"""
+
+    def _client_context_html(self, txn_id: str) -> str:
+        transaction = self.provider.get_login_transaction(txn_id)
+        if not transaction:
+            return ""
+        client = self.provider.store.get_client(transaction.client_id)
+        if not client:
+            return ""
+
+        client_url = urlparse(client.client_id)
+        client_host = client_url.hostname or client.client_id
+        redirect_url = urlparse(transaction.redirect_uri)
+        redirect_host = (
+            redirect_url.hostname
+            or redirect_url.netloc
+            or redirect_url.scheme
+            or transaction.redirect_uri
+        )
+        client_name = client.client_name or client.client_id
+        warning = ""
+        if is_loopback_host(redirect_url.hostname):
+            warning = (
+                '<span class="warning" role="note">'
+                "Local redirect: verify that you started this application."
+                "</span>"
+            )
+        return (
+            '<div class="client-context" aria-label="OAuth client details">'
+            f"<strong>{html.escape(client_name)}</strong>"
+            f"<span>Client host: {html.escape(client_host)}</span>"
+            f"<span>Redirect host: {html.escape(redirect_host)}</span>"
+            f"{warning}"
+            "</div>"
+        )
 
     async def token(self, request: Request) -> JSONResponse:
         ip = self._client_ip(request)

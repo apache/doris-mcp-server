@@ -102,6 +102,7 @@ class RegisteredClientRecord:
     expires_at: float | None
     last_used_at: float | None = None
     registration_ip_hash: str | None = None
+    client_name: str | None = None
 
 
 @dataclass

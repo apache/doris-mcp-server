@@ -30,6 +30,9 @@ under **Unreleased** until a new version is selected and published.
 - MCP `2026-07-28` stateless protocol support on Streamable HTTP and stdio,
   with a `2025-11-25` migration path.
 - Doris-backed OAuth with per-user Doris connection pools and operation gates.
+- Client ID Metadata Document discovery for Doris-backed OAuth, including
+  bounded retrieval, DNS pinning, cache-control handling, and consent-screen
+  client/redirect host context.
 - Per-request client capability enforcement, cache hints, typed protocol
   errors, and deterministic product identity.
 - Real Doris process tests covering Streamable HTTP and stdio.
@@ -42,6 +45,8 @@ under **Unreleased** until a new version is selected and published.
   `serverInfo`, and health endpoints on one product version source.
 - Documented the modern request headers, migration steps, and deployment
   constraints.
+- Positioned Dynamic Client Registration as a compatibility fallback behind
+  preconfigured clients and Client ID Metadata Documents.
 
 ### Fixed
 
