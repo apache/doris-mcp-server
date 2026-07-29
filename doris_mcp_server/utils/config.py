@@ -145,6 +145,18 @@ def _coerce_csv_config(value: Any) -> list[str]:
     return [str(part).strip() for part in value if str(part).strip()]
 
 
+def _coerce_scope_config(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [
+            part
+            for part in value.replace(",", " ").split()
+            if part
+        ]
+    return [str(part).strip() for part in value if str(part).strip()]
+
+
 def _validate_doris_oauth_metadata_tool_allowlist(tools: Any) -> list[str]:
     """Validate the Phase 4 metadata-only Doris OAuth tool allowlist."""
     normalized = []
@@ -173,6 +185,28 @@ def _validate_doris_oauth_metadata_tool_allowlist(tools: Any) -> list[str]:
 def _is_loopback_url(url: str) -> bool:
     parsed = urlparse(url)
     return (parsed.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
+
+
+def _validate_external_oauth_url(
+    value: str,
+    *,
+    setting: str,
+    allow_query: bool = False,
+) -> str:
+    normalized = str(value or "").strip()
+    parsed = urlparse(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        raise AuthConfigError(f"{setting} must be an absolute URL")
+    if parsed.fragment:
+        raise AuthConfigError(f"{setting} must not contain a fragment")
+    if parsed.query and not allow_query:
+        raise AuthConfigError(f"{setting} must not contain a query")
+    if parsed.scheme == "http":
+        if not _is_loopback_url(normalized):
+            raise AuthConfigError(f"{setting} must use HTTPS outside loopback")
+    elif parsed.scheme != "https":
+        raise AuthConfigError(f"{setting} must use HTTP or HTTPS")
+    return normalized
 
 
 def _is_loopback_bind_host(host: str) -> bool:
@@ -403,11 +437,18 @@ class SecurityConfig:
     oidc_discovery_url: str = ""  # e.g., https://accounts.google.com/.well-known/openid_configuration
     oauth_authorization_endpoint: str = ""
     oauth_token_endpoint: str = ""
+    oauth_introspection_endpoint: str = ""
+    oauth_introspection_client_id: str = ""
+    oauth_introspection_client_secret: str = ""
     oauth_userinfo_endpoint: str = ""
     oauth_jwks_uri: str = ""
+    oauth_issuer: str = ""
+    oauth_resource: str = ""
+    oauth_audience: str = ""
     
     # OAuth Scopes and Settings
     oauth_scopes: list[str] = field(default_factory=list)
+    oauth_required_scopes: list[str] = field(default_factory=list)
     oauth_state_expiry: int = 600  # State parameter expiry in seconds (10 minutes)
     oauth_pkce_enabled: bool = True  # Enable PKCE for better security
     oauth_nonce_enabled: bool = True  # Enable nonce for OIDC
@@ -682,6 +723,44 @@ class DorisConfig:
         if "OAUTH_ENABLED" in os.environ:
             config.security.oauth_enabled = _str_to_bool(os.getenv("OAUTH_ENABLED"))
             _mark_source(config, "oauth_enabled", "env")
+        external_oauth_env = {
+            "OAUTH_PROVIDER_TYPE": "oauth_provider",
+            "OAUTH_CLIENT_ID": "oauth_client_id",
+            "OAUTH_CLIENT_SECRET": "oauth_client_secret",
+            "OAUTH_REDIRECT_URI": "oauth_redirect_uri",
+            "OAUTH_DISCOVERY_URL": "oidc_discovery_url",
+            "OAUTH_AUTHORIZATION_URL": "oauth_authorization_endpoint",
+            "OAUTH_TOKEN_URL": "oauth_token_endpoint",
+            "OAUTH_INTROSPECTION_URL": "oauth_introspection_endpoint",
+            "OAUTH_INTROSPECTION_CLIENT_ID": "oauth_introspection_client_id",
+            "OAUTH_INTROSPECTION_CLIENT_SECRET": "oauth_introspection_client_secret",
+            "OAUTH_USERINFO_URL": "oauth_userinfo_endpoint",
+            "OAUTH_JWKS_URL": "oauth_jwks_uri",
+            "OAUTH_ISSUER": "oauth_issuer",
+            "OAUTH_RESOURCE": "oauth_resource",
+            "OAUTH_AUDIENCE": "oauth_audience",
+            "OAUTH_USER_ID_CLAIM": "oauth_user_id_claim",
+            "OAUTH_EMAIL_CLAIM": "oauth_email_claim",
+            "OAUTH_ROLES_CLAIM": "oauth_roles_claim",
+        }
+        for env_name, field_name in external_oauth_env.items():
+            if env_name in os.environ:
+                setattr(
+                    config.security,
+                    field_name,
+                    os.getenv(env_name, "").strip(),
+                )
+                _mark_source(config, field_name, "env")
+        if "OAUTH_SCOPE" in os.environ:
+            config.security.oauth_scopes = _coerce_scope_config(
+                os.getenv("OAUTH_SCOPE")
+            )
+            _mark_source(config, "oauth_scopes", "env")
+        if "OAUTH_REQUIRED_SCOPE" in os.environ:
+            config.security.oauth_required_scopes = _coerce_scope_config(
+                os.getenv("OAUTH_REQUIRED_SCOPE")
+            )
+            _mark_source(config, "oauth_required_scopes", "env")
         if "ENABLE_DORIS_OAUTH_AUTH" in os.environ:
             config.security.enable_doris_oauth_auth = _str_to_bool(os.getenv("ENABLE_DORIS_OAUTH_AUTH"))
             _mark_source(config, "enable_doris_oauth_auth", "env")
@@ -1093,6 +1172,13 @@ class DorisConfig:
                 "enable_jwt_auth": self.security.enable_jwt_auth,
                 "enable_oauth_auth": self.security.enable_oauth_auth,
                 "oauth_enabled": self.security.oauth_enabled,
+                "oauth_provider": self.security.oauth_provider,
+                "oauth_issuer": self.security.oauth_issuer,
+                "oauth_resource": self.security.oauth_resource,
+                "oauth_audience": self.security.oauth_audience,
+                "oauth_scopes": self.security.oauth_scopes,
+                "oauth_required_scopes": self.security.oauth_required_scopes,
+                "oauth_introspection_endpoint": self.security.oauth_introspection_endpoint,
                 "enable_doris_oauth_auth": self.security.enable_doris_oauth_auth,
                 "allow_unauthenticated_non_loopback": self.security.allow_unauthenticated_non_loopback,
                 "doris_oauth_base_url": self.security.doris_oauth_base_url,
@@ -1508,6 +1594,95 @@ def normalize_effective_auth_config(
             )
         except ValueError as exc:
             raise AuthConfigError(str(exc)) from exc
+
+    if enable_external_oauth_auth:
+        config.security.oauth_issuer = _validate_external_oauth_url(
+            config.security.oauth_issuer,
+            setting="OAUTH_ISSUER",
+        )
+        config.security.oauth_resource = _validate_external_oauth_url(
+            config.security.oauth_resource,
+            setting="OAUTH_RESOURCE",
+            allow_query=True,
+        )
+        config.security.oauth_audience = str(
+            config.security.oauth_audience
+            or config.security.oauth_resource
+        ).strip()
+        if not config.security.oauth_audience:
+            raise AuthConfigError("OAUTH_AUDIENCE is required")
+
+        config.security.oauth_scopes = list(
+            dict.fromkeys(
+                _coerce_scope_config(config.security.oauth_scopes)
+            )
+        )
+        if not config.security.oauth_scopes:
+            raise AuthConfigError(
+                "OAUTH_SCOPE must contain at least one allowed scope"
+            )
+        required_scopes = _coerce_scope_config(
+            config.security.oauth_required_scopes
+        )
+        if not required_scopes:
+            required_scopes = list(config.security.oauth_scopes)
+        if not set(required_scopes) <= set(config.security.oauth_scopes):
+            raise AuthConfigError(
+                "OAUTH_REQUIRED_SCOPE must be a subset of OAUTH_SCOPE"
+            )
+        config.security.oauth_required_scopes = list(
+            dict.fromkeys(required_scopes)
+        )
+
+        discovery_url = str(config.security.oidc_discovery_url or "").strip()
+        introspection_url = str(
+            config.security.oauth_introspection_endpoint or ""
+        ).strip()
+        if not discovery_url and not introspection_url:
+            raise AuthConfigError(
+                "OAUTH_INTROSPECTION_URL or OAUTH_DISCOVERY_URL is required"
+            )
+        if discovery_url:
+            config.security.oidc_discovery_url = (
+                _validate_external_oauth_url(
+                    discovery_url,
+                    setting="OAUTH_DISCOVERY_URL",
+                )
+            )
+        if introspection_url:
+            config.security.oauth_introspection_endpoint = (
+                _validate_external_oauth_url(
+                    introspection_url,
+                    setting="OAUTH_INTROSPECTION_URL",
+                )
+            )
+        if config.security.oauth_userinfo_endpoint:
+            config.security.oauth_userinfo_endpoint = (
+                _validate_external_oauth_url(
+                    config.security.oauth_userinfo_endpoint,
+                    setting="OAUTH_USERINFO_URL",
+                )
+            )
+        elif not discovery_url:
+            raise AuthConfigError(
+                "OAUTH_USERINFO_URL or OAUTH_DISCOVERY_URL is required"
+            )
+
+        config.security.oauth_introspection_client_id = str(
+            config.security.oauth_introspection_client_id
+            or config.security.oauth_client_id
+        ).strip()
+        config.security.oauth_introspection_client_secret = str(
+            config.security.oauth_introspection_client_secret
+            or config.security.oauth_client_secret
+        )
+        if (
+            not config.security.oauth_introspection_client_id
+            or not config.security.oauth_introspection_client_secret
+        ):
+            raise AuthConfigError(
+                "OAuth introspection client credentials are required"
+            )
 
     transport = str(inputs.transport.value or "stdio")
     requested = int(inputs.workers.value if inputs.workers.value is not None else 1)

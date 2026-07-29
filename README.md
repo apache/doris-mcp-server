@@ -269,6 +269,11 @@ cp .env.example .env
     *   `ENABLE_TOKEN_AUTH`: Enable token-based authentication (default: false)
     *   `ENABLE_JWT_AUTH`: Enable JWT authentication (default: false)
     *   `ENABLE_OAUTH_AUTH`: Enable OAuth authentication (default: false)
+    *   `OAUTH_ISSUER`: Exact external authorization-server issuer
+    *   `OAUTH_RESOURCE`: Canonical MCP protected-resource URI
+    *   `OAUTH_AUDIENCE`: Expected access-token audience (defaults to `OAUTH_RESOURCE`)
+    *   `OAUTH_INTROSPECTION_URL`: Trusted RFC 7662 token-introspection endpoint
+    *   `OAUTH_SCOPE` / `OAUTH_REQUIRED_SCOPE`: Allowed and mandatory external OAuth scopes
     *   `ENABLE_DORIS_OAUTH_AUTH`: Enable Doris-backed OAuth authentication (default: false)
     *   `DORIS_OAUTH_BASE_URL`: Public base URL used by Doris-backed OAuth discovery and token endpoints
     *   `TOKEN_FILE_PATH`: Path to tokens.json file for token management (default: tokens.json)
@@ -620,6 +625,43 @@ TOKEN_HOT_RELOAD=true          # Enable hot reloading
 The repository ships no usable static token or legacy secret. Startup fails
 when static token authentication is enabled without at least one active,
 high-entropy `TOKEN_<ID>` value or an equivalent entry in `TOKEN_FILE_PATH`.
+
+### External OAuth/OIDC Access Token Validation
+
+External OAuth is fail-closed. Before the server requests user information, it
+uses a trusted RFC 7662 introspection endpoint and requires an active,
+unexpired token with the exact configured issuer, expected audience, MCP
+resource binding, required scopes, and a subject. A successful userinfo request
+is not accepted as proof that a token was issued for this MCP server. The
+userinfo subject must also match the introspected token subject.
+
+`OAUTH_RESOURCE` is sent on authorization-code and refresh-token requests.
+`OAUTH_AUDIENCE` defaults to that resource URI. `OAUTH_REQUIRED_SCOPE` defaults
+to all scopes in `OAUTH_SCOPE`; scopes returned by the authorization server but
+not present in `OAUTH_SCOPE` are excluded from the authentication context.
+
+```bash
+ENABLE_OAUTH_AUTH=true
+OAUTH_CLIENT_ID=your_oauth_client_id
+OAUTH_CLIENT_SECRET=your_oauth_client_secret
+OAUTH_REDIRECT_URI=https://mcp.example.com/auth/callback
+
+OAUTH_ISSUER=https://issuer.example.com
+OAUTH_RESOURCE=https://mcp.example.com/mcp
+OAUTH_AUDIENCE=https://mcp.example.com/mcp
+OAUTH_INTROSPECTION_URL=https://issuer.example.com/introspect
+OAUTH_USERINFO_URL=https://issuer.example.com/userinfo
+
+OAUTH_SCOPE="tool:list resource:list resource:read"
+OAUTH_REQUIRED_SCOPE="tool:list resource:read"
+```
+
+An authorization-server discovery document may provide the introspection and
+userinfo endpoints, but its `issuer` must exactly match `OAUTH_ISSUER`.
+Dedicated `OAUTH_INTROSPECTION_CLIENT_ID` and
+`OAUTH_INTROSPECTION_CLIENT_SECRET` values may be configured; otherwise the
+regular OAuth client credentials are used. Remote issuer, discovery,
+introspection, and userinfo URLs must use HTTPS.
 
 ### Doris-Backed OAuth Authentication
 

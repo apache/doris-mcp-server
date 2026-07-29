@@ -57,6 +57,9 @@ under **Unreleased** until a new version is selected and published.
 - Normalized bearer credentials once at the MCP authentication boundary and
   passed the same redacted DTO to static token, JWT, external OAuth, and Doris
   OAuth providers.
+- Required external OAuth access tokens to pass trusted RFC 7662
+  issuer/resource/audience, lifetime, and scope validation before userinfo is
+  used.
 - Released Doris connections on SQL profile, data freshness, and access
   analysis paths.
 - Improved Doris 4 role metadata compatibility and query recovery behavior.

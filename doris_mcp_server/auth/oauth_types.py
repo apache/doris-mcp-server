@@ -99,6 +99,7 @@ class OIDCDiscovery:
     issuer: str
     authorization_endpoint: str
     token_endpoint: str
+    introspection_endpoint: str | None = None
     userinfo_endpoint: Optional[str] = None
     jwks_uri: Optional[str] = None
     scopes_supported: List[str] = None
@@ -134,10 +135,17 @@ class OAuthProviderConfig:
     client_secret: str
     redirect_uri: str
     scopes: List[str]
+    required_scopes: list[str]
+    issuer: str
+    resource: str
+    audience: str
     
     # Endpoints
     authorization_endpoint: str
     token_endpoint: str
+    introspection_endpoint: str | None = None
+    introspection_client_id: str = ""
+    introspection_client_secret: str = ""
     userinfo_endpoint: Optional[str] = None
     jwks_uri: Optional[str] = None
     

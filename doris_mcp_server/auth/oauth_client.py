@@ -39,6 +39,11 @@ from .oauth_types import (
     OAuthProvider, OAuthState, OAuthTokens, OAuthUserInfo, 
     OIDCDiscovery, OAuthError, OAuthProviderConfig, OAUTH_PROVIDERS
 )
+from .oauth_token_validation import (
+    OAuthAccessTokenValidationError,
+    ExternalOAuthTokenValidator,
+    OAuthAccessTokenContext,
+)
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -194,6 +199,13 @@ class OAuthClient:
             
         # Build provider configuration
         self.provider_config = self._build_provider_config(security_config)
+        self.token_validator = ExternalOAuthTokenValidator(
+            issuer=self.provider_config.issuer,
+            resource=self.provider_config.resource,
+            audience=self.provider_config.audience,
+            allowed_scopes=self.provider_config.scopes,
+            required_scopes=self.provider_config.required_scopes,
+        )
         self.state_manager = OAuthStateManager(security_config.oauth_state_expiry)
         
         # HTTP client session
@@ -221,17 +233,29 @@ class OAuthClient:
         
         # Get default configuration for known providers
         defaults = OAUTH_PROVIDERS.get(provider, {})
+        scopes = security_config.oauth_scopes or defaults.get(
+            "scopes",
+            ["openid", "email", "profile"],
+        )
+        required_scopes = security_config.oauth_required_scopes or scopes
         
         return OAuthProviderConfig(
             provider=provider,
             client_id=security_config.oauth_client_id,
             client_secret=security_config.oauth_client_secret,
             redirect_uri=security_config.oauth_redirect_uri,
-            scopes=security_config.oauth_scopes or defaults.get("scopes", ["openid", "email", "profile"]),
+            scopes=scopes,
+            required_scopes=required_scopes,
+            issuer=security_config.oauth_issuer,
+            resource=security_config.oauth_resource,
+            audience=security_config.oauth_audience,
             
             # Endpoints (use configured or defaults)
             authorization_endpoint=security_config.oauth_authorization_endpoint or defaults.get("authorization_endpoint", ""),
             token_endpoint=security_config.oauth_token_endpoint or defaults.get("token_endpoint", ""),
+            introspection_endpoint=security_config.oauth_introspection_endpoint,
+            introspection_client_id=security_config.oauth_introspection_client_id,
+            introspection_client_secret=security_config.oauth_introspection_client_secret,
             userinfo_endpoint=security_config.oauth_userinfo_endpoint or defaults.get("userinfo_endpoint"),
             jwks_uri=security_config.oauth_jwks_uri or defaults.get("jwks_uri"),
             
@@ -269,12 +293,20 @@ class OAuthClient:
             # Perform OIDC discovery if configured
             if self.provider_config.discovery_url:
                 await self._discover_oidc_endpoints()
+
+            if not self.provider_config.introspection_endpoint:
+                raise ValueError(
+                    "OAuth introspection endpoint is not configured"
+                )
+            if not self.provider_config.userinfo_endpoint:
+                raise ValueError("OAuth userinfo endpoint is not configured")
             
             logger.info("OAuth client initialization completed")
             return True
             
         except Exception as e:
             logger.error(f"Failed to initialize OAuth client: {e}")
+            await self.shutdown()
             return False
     
     async def shutdown(self):
@@ -308,11 +340,18 @@ class OAuthClient:
             async with self._session.get(self.provider_config.discovery_url) as response:
                 response.raise_for_status()
                 data = await response.json()
+
+            discovered_issuer = str(data.get("issuer") or "")
+            if discovered_issuer != self.provider_config.issuer:
+                raise ValueError(
+                    "OIDC discovery issuer does not match OAUTH_ISSUER"
+                )
             
             discovery = OIDCDiscovery(
-                issuer=data["issuer"],
+                issuer=discovered_issuer,
                 authorization_endpoint=data["authorization_endpoint"],
                 token_endpoint=data["token_endpoint"],
+                introspection_endpoint=data.get("introspection_endpoint"),
                 userinfo_endpoint=data.get("userinfo_endpoint"),
                 jwks_uri=data.get("jwks_uri"),
                 scopes_supported=data.get("scopes_supported"),
@@ -326,6 +365,10 @@ class OAuthClient:
                 self.provider_config.authorization_endpoint = discovery.authorization_endpoint
             if not self.provider_config.token_endpoint:
                 self.provider_config.token_endpoint = discovery.token_endpoint
+            if not self.provider_config.introspection_endpoint:
+                self.provider_config.introspection_endpoint = (
+                    discovery.introspection_endpoint
+                )
             if not self.provider_config.userinfo_endpoint:
                 self.provider_config.userinfo_endpoint = discovery.userinfo_endpoint
             if not self.provider_config.jwks_uri:
@@ -364,7 +407,8 @@ class OAuthClient:
             'client_id': self.provider_config.client_id,
             'redirect_uri': self.provider_config.redirect_uri,
             'scope': ' '.join(self.provider_config.scopes),
-            'state': oauth_state.state
+            'state': oauth_state.state,
+            'resource': self.provider_config.resource,
         }
         
         # Add PKCE challenge
@@ -410,7 +454,8 @@ class OAuthClient:
                 'client_id': self.provider_config.client_id,
                 'client_secret': self.provider_config.client_secret,
                 'code': code,
-                'redirect_uri': oauth_state.redirect_uri
+                'redirect_uri': oauth_state.redirect_uri,
+                'resource': self.provider_config.resource,
             }
             
             # Add PKCE verifier
@@ -444,6 +489,50 @@ class OAuthClient:
         except Exception as e:
             logger.error(f"Token exchange failed: {e}")
             raise ValueError(f"Token exchange failed: {str(e)}")
+
+    async def introspect_access_token(
+        self,
+        access_token: str,
+    ) -> OAuthAccessTokenContext:
+        """Validate an access token with the trusted authorization server."""
+        if not self.enabled:
+            raise ValueError("OAuth client is not enabled")
+        if not self._session:
+            raise ValueError("OAuth client is not initialized")
+        endpoint = self.provider_config.introspection_endpoint
+        if not endpoint:
+            raise ValueError("OAuth introspection endpoint is not configured")
+
+        auth = aiohttp.BasicAuth(
+            self.provider_config.introspection_client_id,
+            self.provider_config.introspection_client_secret,
+        )
+        try:
+            async with self._session.post(
+                endpoint,
+                data={
+                    "token": access_token,
+                    "token_type_hint": "access_token",
+                },
+                auth=auth,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            ) as response:
+                if response.status != 200:
+                    raise ValueError(
+                        "OAuth token introspection request failed"
+                    )
+                claims = await response.json()
+            return self.token_validator.validate(claims)
+        except OAuthAccessTokenValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"OAuth token introspection failed: {e}")
+            raise ValueError(
+                f"OAuth token introspection failed: {str(e)}"
+            ) from e
     
     async def get_user_info(self, tokens: OAuthTokens) -> OAuthUserInfo:
         """Get user information from OAuth provider
@@ -509,7 +598,8 @@ class OAuthClient:
                 'grant_type': 'refresh_token',
                 'client_id': self.provider_config.client_id,
                 'client_secret': self.provider_config.client_secret,
-                'refresh_token': refresh_token
+                'refresh_token': refresh_token,
+                'resource': self.provider_config.resource,
             }
             
             async with self._session.post(

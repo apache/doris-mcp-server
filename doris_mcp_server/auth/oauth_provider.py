@@ -24,6 +24,7 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from .oauth_client import OAuthClient
+from .oauth_token_validation import OAuthAccessTokenContext
 from .oauth_types import OAuthTokens, OAuthUserInfo, OAuthState
 from ..utils.security import AuthContext, SecurityLevel
 from ..utils.logger import get_logger
@@ -99,12 +100,21 @@ class OAuthAuthenticationProvider:
         try:
             # Exchange code for tokens
             tokens, oauth_state = await self.oauth_client.exchange_code_for_tokens(code, state)
+
+            # Validate the access token for this issuer and MCP resource
+            token_context = await self.oauth_client.introspect_access_token(
+                tokens.access_token
+            )
             
             # Get user information
             user_info = await self.oauth_client.get_user_info(tokens)
             
             # Create authentication context
-            auth_context = await self._create_auth_context(user_info, tokens)
+            auth_context = await self._create_auth_context(
+                user_info,
+                tokens,
+                token_context,
+            )
             
             logger.info(f"OAuth authentication successful for user: {auth_context.user_id}")
             return auth_context
@@ -128,12 +138,21 @@ class OAuthAuthenticationProvider:
         try:
             # Create token object
             tokens = OAuthTokens(access_token=access_token)
+
+            # Validate the access token before using identity information
+            token_context = await self.oauth_client.introspect_access_token(
+                access_token
+            )
             
             # Get user information
             user_info = await self.oauth_client.get_user_info(tokens)
             
             # Create authentication context
-            auth_context = await self._create_auth_context(user_info, tokens)
+            auth_context = await self._create_auth_context(
+                user_info,
+                tokens,
+                token_context,
+            )
             
             logger.info(f"OAuth token authentication successful for user: {auth_context.user_id}")
             return auth_context
@@ -157,12 +176,21 @@ class OAuthAuthenticationProvider:
         try:
             # Refresh tokens
             tokens = await self.oauth_client.refresh_tokens(refresh_token)
+
+            # Validate the replacement token before using it
+            token_context = await self.oauth_client.introspect_access_token(
+                tokens.access_token
+            )
             
             # Get updated user information
             user_info = await self.oauth_client.get_user_info(tokens)
             
             # Create authentication context
-            auth_context = await self._create_auth_context(user_info, tokens)
+            auth_context = await self._create_auth_context(
+                user_info,
+                tokens,
+                token_context,
+            )
             
             logger.info(f"OAuth refresh successful for user: {auth_context.user_id}")
             return auth_context, tokens.access_token
@@ -171,16 +199,27 @@ class OAuthAuthenticationProvider:
             logger.error(f"OAuth refresh failed: {e}")
             raise ValueError(f"OAuth refresh failed: {str(e)}")
     
-    async def _create_auth_context(self, user_info: OAuthUserInfo, tokens: OAuthTokens) -> AuthContext:
+    async def _create_auth_context(
+        self,
+        user_info: OAuthUserInfo,
+        tokens: OAuthTokens,
+        token_context: OAuthAccessTokenContext,
+    ) -> AuthContext:
         """Create authentication context from OAuth user info
         
         Args:
             user_info: OAuth user information
             tokens: OAuth tokens
+            token_context: Validated access-token claims
             
         Returns:
             AuthContext for the user
         """
+        if user_info.sub != token_context.subject:
+            raise ValueError(
+                "OAuth userinfo subject does not match the access token"
+            )
+
         # Determine security level based on roles or email domain
         security_level = await self._determine_security_level(user_info)
         
@@ -191,7 +230,7 @@ class OAuthAuthenticationProvider:
         session_id = f"oauth_{user_info.sub}_{datetime.utcnow().timestamp()}"
         
         return AuthContext(
-            token_id=f"oauth_{user_info.sub}",
+            token_id=token_context.token_id or f"oauth_{user_info.sub}",
             user_id=user_info.sub,
             roles=user_info.roles,
             permissions=permissions,
@@ -199,7 +238,15 @@ class OAuthAuthenticationProvider:
             session_id=session_id,
             login_time=datetime.utcnow(),
             last_activity=datetime.utcnow(),
-            token=""  # OAuth doesn't have raw token, use empty string
+            token="",  # OAuth doesn't have raw token, use empty string
+            auth_method="external_oauth",
+            oauth_client_id=token_context.client_id,
+            oauth_scopes=list(token_context.scopes),
+            oauth_token_id=token_context.token_id,
+            oauth_issuer=token_context.issuer,
+            oauth_resource=token_context.resource,
+            oauth_audiences=list(token_context.audiences),
+            pool_key="global",
         )
     
     async def _determine_security_level(self, user_info: OAuthUserInfo) -> SecurityLevel:
