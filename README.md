@@ -21,19 +21,35 @@ under the License.
 
 Doris MCP (Model Context Protocol) Server is a backend service built with Python and FastAPI. It implements the MCP, allowing clients to interact with it through defined "Tools". It's primarily designed to connect to Apache Doris databases, potentially leveraging Large Language Models (LLMs) for tasks like converting natural language queries to SQL (NL2SQL), executing queries, and performing metadata management and analysis.
 
-## 🚀 What's New in v0.6.0
+## Release Status
+
+The current package metadata and latest Git tag are `0.6.1`. The `master`
+branch also contains changes made after that tag; those changes are recorded
+under [Unreleased](CHANGELOG.md#unreleased) until the next version is selected
+and published.
+
+The project is currently classified as **Beta**. Review the
+[changelog](CHANGELOG.md), the
+[protocol support matrix](#protocol-and-transport-matrix), and the
+[deployment constraints](#deployment-constraints) before deploying it outside
+a controlled environment.
+
+## Highlights from v0.6.0
 
 - **🔐 Enterprise Authentication System**: **Revolutionary token-bound database configuration** with comprehensive Token, JWT, and OAuth authentication support, enabling secure multi-tenant access with granular control switches and enterprise-grade security defaults
-- **⚡ Immediate Database Validation**: **Real-time database configuration validation at connection time**, eliminating query-time blocking and providing instant feedback for invalid configurations - achieving 100% elimination of late-stage connection failures
-- **🔄 Hot Reload Configuration Management**: **Zero-downtime configuration updates** with intelligent hot reloading of tokens.json, automatic token revalidation, and comprehensive error handling with rollback mechanisms
-- **🏗️ Advanced Connection Architecture**: **Session caching and connection pool optimization** with 60% reduction in connection overhead, intelligent pool recreation, and automatic resource management
-- **🌐 Multi-Worker Scalability**: **True horizontal scaling** with stateless multi-worker architecture, efficient load distribution, and enterprise-grade concurrent processing capabilities
+- **⚡ Immediate Database Validation**: **Real-time database configuration validation at connection time**, reducing query-time blocking and providing earlier feedback for invalid configurations
+- **🔄 Hot Reload Configuration Management**: **Runtime configuration updates** with intelligent hot reloading of tokens.json, automatic token revalidation, and comprehensive error handling with rollback mechanisms
+- **🏗️ Advanced Connection Architecture**: **Session caching and connection pool optimization** with intelligent pool recreation and automatic resource management
+- **🌐 Multi-Worker Scalability**: Stateless HTTP request handling with multi-worker support; authentication-specific worker limits still apply
 - **🔒 Enhanced Security Framework**: **Comprehensive access control and SQL security validation** with immediate validation, role-based permissions, and enhanced injection detection patterns
 - **🛠️ Unified Configuration System**: **Streamlined configuration management** with proper command-line precedence, Docker compatibility improvements, and cross-platform deployment support
 - **📊 Token Management Dashboard**: **Complete token lifecycle management** with creation, revocation, statistics, and comprehensive audit trails for enterprise token governance
 - **🌐 Web-Based Management Interface**: **Secure localhost-only token administration** with intuitive dashboard, database binding configuration, real-time operations, and enterprise-grade access controls
 
-> **🚀 Major Milestone**: v0.6.0 establishes the platform as a **production-ready enterprise authentication and database management system** with **zero-downtime operations** (hot reload + immediate validation + multi-worker scaling), advanced security controls, and comprehensive token-bound database configuration - representing a fundamental advancement in enterprise data platform capabilities.
+> **Release note**: v0.6.0 introduced the authentication, token management,
+> connection, and multi-worker features summarized above. These features do not
+> remove the Beta status or the deployment limits documented for the current
+> codebase.
 
 ### What's Also Included from v0.5.1
 
@@ -78,10 +94,12 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 pip install doris-mcp-server
 
 # Install specific version
-pip install doris-mcp-server==0.6.0
+pip install doris-mcp-server==0.6.1
 ```
 
-> **💡 Command Compatibility**: After installation, both `doris-mcp-server` commands are available for backward compatibility. You can use either command interchangeably.
+> **💡 Packaged Commands**: `doris-mcp-server` starts the MCP server.
+> `doris-mcp-client` is a separate client for connecting to a server over
+> Streamable HTTP or stdio; the two commands are not interchangeable.
 
 ### Start Streamable HTTP Mode (Web Service)
 
@@ -152,7 +170,10 @@ http://localhost:3000/token/management?admin_token=your_secure_admin_token
 
 ```bash
 # Check installation
+doris-mcp-server --version
+doris-mcp-client --version
 doris-mcp-server --help
+doris-mcp-client --help
 
 # Test HTTP mode (in another terminal)
 curl http://localhost:3000/health
@@ -1105,7 +1126,7 @@ doris-mcp-server/
 ├── logs/                       # Log files directory
 ├── tokens.json                 # Token configuration file (New in v0.6.0)
 ├── README.md                   # This documentation
-├── RELEASE_NOTES_v0.6.0.md     # Release notes for v0.6.0
+├── CHANGELOG.md                 # Tagged release history and unreleased changes
 ├── .env.example                # Environment variables template
 ├── requirements.txt            # Python dependencies
 ├── pyproject.toml              # Project configuration and entry points
@@ -1457,7 +1478,9 @@ QUERY_TIMEOUT=60                  # Query execution timeout
 HEALTH_CHECK_INTERVAL=60          # Pool health check frequency
 ```
 
-**Result**: 99.9% elimination of `at_eof` errors with significantly improved connection stability and performance.
+**Result**: The redesigned lifecycle reduces stale-connection failures and
+improves recovery behavior. Validate the configured pool under the target
+workload before production use.
 
 ### Q: Which MCP protocol revisions are supported?
 

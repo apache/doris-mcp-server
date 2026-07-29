@@ -148,7 +148,7 @@ Homepage = "https://github.com/apache/doris-mcp-server"
 Documentation = "https://doris.apache.org/docs/"
 Repository = "https://github.com/apache/doris-mcp-server.git"
 Issues = "https://github.com/apache/doris-mcp-server/issues"
-Changelog = "https://github.com/apache/doris-mcp-server/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/apache/doris-mcp-server/blob/master/CHANGELOG.md"
 
 [project.scripts]
 doris-mcp-server = "doris_mcp_server.main:main_sync"
@@ -164,8 +164,9 @@ packages = ["doris_mcp_server", "doris_mcp_client"]
 include = [
     "/doris_mcp_client",
     "/doris_mcp_server",
+    "/CHANGELOG.md",
     "/README.md",
-    "/LICENSE",
+    "/LICENSE.txt",
 ]
 
 # Black configuration

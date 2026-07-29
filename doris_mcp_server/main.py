@@ -440,7 +440,7 @@ Transport Modes:
 
 Examples:
   python -m doris_mcp_server --transport stdio
-  python -m doris_mcp_server --transport http --host 0.0.0.0 --port 3000
+  python -m doris_mcp_server --transport http --host 127.0.0.1 --port 3000
   python -m doris_mcp_server --transport stdio --doris-host localhost --doris-port 9030
   python -m doris_mcp_server --transport http --doris-user admin --doris-database test_db
   

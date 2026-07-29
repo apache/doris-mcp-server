@@ -17,7 +17,7 @@
 # Doris MCP Server Makefile
 # Provides convenient commands using UV
 
-.PHONY: help install sync dev test lint format build clean check start-stdio start-sse
+.PHONY: help install sync dev test lint format build clean check start-stdio start-http
 
 # Default target
 help:
@@ -32,7 +32,7 @@ help:
 	@echo "  clean       - Clean build artifacts"
 	@echo "  check       - Run all checks (format, lint, test)"
 	@echo "  start-stdio - Start server in stdio mode"
-	@echo "  start-sse   - Start server in SSE mode"
+	@echo "  start-http  - Start server in Streamable HTTP mode"
 
 # Install dependencies
 install:
@@ -80,9 +80,9 @@ check: format lint test
 start-stdio:
 	uv run python -m doris_mcp_server.main --transport stdio
 
-# Start server in SSE mode
-start-sse:
-	uv run python -m doris_mcp_server.main --transport sse --host 0.0.0.0 --port 8080
+# Start server in Streamable HTTP mode
+start-http:
+	uv run python -m doris_mcp_server.main --transport http --host 127.0.0.1 --port 3000
 
 # Start server with custom database settings
 start-dev:
@@ -132,4 +132,4 @@ export-requirements:
 # Show UV version and info
 info:
 	uv --version
-	uv python list 
+	uv python list
