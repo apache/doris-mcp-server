@@ -154,6 +154,11 @@ def _doris_oauth_smoke_env_values():
         "DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED": "true",
         "ENABLE_SECURITY_CHECK": "false",
         "DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE": "auto",
+        "DORIS_OAUTH_CIMD_FETCH_TIMEOUT_SECONDS": "7",
+        "DORIS_OAUTH_CIMD_MAX_DOCUMENT_BYTES": "6144",
+        "DORIS_OAUTH_CIMD_DEFAULT_CACHE_SECONDS": "120",
+        "DORIS_OAUTH_CIMD_MAX_CACHE_SECONDS": "900",
+        "DORIS_OAUTH_CIMD_MAX_CLIENTS": "42",
     }
 
 
@@ -181,6 +186,11 @@ def test_runtime_doris_oauth_smoke_env_matches_rbac_default_scope_model(monkeypa
         "DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED",
         "ENABLE_SECURITY_CHECK",
         "DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE",
+        "DORIS_OAUTH_CIMD_FETCH_TIMEOUT_SECONDS",
+        "DORIS_OAUTH_CIMD_MAX_DOCUMENT_BYTES",
+        "DORIS_OAUTH_CIMD_DEFAULT_CACHE_SECONDS",
+        "DORIS_OAUTH_CIMD_MAX_CACHE_SECONDS",
+        "DORIS_OAUTH_CIMD_MAX_CLIENTS",
     ):
         monkeypatch.setenv(key, env_values.get(key, ""))
     monkeypatch.delenv("AUTH_TYPE", raising=False)
@@ -198,6 +208,11 @@ def test_runtime_doris_oauth_smoke_env_matches_rbac_default_scope_model(monkeypa
     assert config.security.enable_jwt_auth is False
     assert config.security.enable_oauth_auth is False
     assert config.security.oauth_enabled is False
+    assert config.security.doris_oauth_cimd_fetch_timeout_seconds == 7
+    assert config.security.doris_oauth_cimd_max_document_bytes == 6144
+    assert config.security.doris_oauth_cimd_default_cache_seconds == 120
+    assert config.security.doris_oauth_cimd_max_cache_seconds == 900
+    assert config.security.doris_oauth_cimd_max_clients == 42
 
     assert {
         "tool:list",
@@ -236,6 +251,63 @@ def test_doris_oauth_rejects_invalid_ttl():
     config.security.doris_oauth_access_token_expire_seconds = 86401
 
     with pytest.raises(AuthConfigError, match="doris_oauth_access_token_expire_seconds"):
+        normalize_effective_auth_config(config)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        (
+            "doris_oauth_cimd_fetch_timeout_seconds",
+            0,
+            "doris_oauth_cimd_fetch_timeout_seconds",
+        ),
+        (
+            "doris_oauth_cimd_max_document_bytes",
+            1023,
+            "doris_oauth_cimd_max_document_bytes",
+        ),
+        (
+            "doris_oauth_cimd_default_cache_seconds",
+            -1,
+            "doris_oauth_cimd_default_cache_seconds",
+        ),
+        (
+            "doris_oauth_cimd_max_clients",
+            0,
+            "doris_oauth_cimd_max_clients",
+        ),
+    ],
+)
+def test_doris_oauth_rejects_invalid_cimd_limits(field_name, value, message):
+    config = _doris_oauth_http_config()
+    setattr(config.security, field_name, value)
+
+    with pytest.raises(AuthConfigError, match=message):
+        normalize_effective_auth_config(config)
+
+
+def test_doris_oauth_rejects_cimd_default_cache_above_maximum():
+    config = _doris_oauth_http_config()
+    config.security.doris_oauth_cimd_default_cache_seconds = 61
+    config.security.doris_oauth_cimd_max_cache_seconds = 60
+
+    with pytest.raises(
+        AuthConfigError,
+        match="doris_oauth_cimd_default_cache_seconds",
+    ):
+        normalize_effective_auth_config(config)
+
+
+def test_doris_oauth_rejects_invalid_cimd_maximum_cache():
+    config = _doris_oauth_http_config()
+    config.security.doris_oauth_cimd_default_cache_seconds = 0
+    config.security.doris_oauth_cimd_max_cache_seconds = 0
+
+    with pytest.raises(
+        AuthConfigError,
+        match="doris_oauth_cimd_max_cache_seconds",
+    ):
         normalize_effective_auth_config(config)
 
 

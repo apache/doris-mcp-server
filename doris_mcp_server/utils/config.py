@@ -334,6 +334,11 @@ class SecurityConfig:
     doris_oauth_login_page_title: str = "Doris MCP Login"
     doris_oauth_allowed_redirect_uris: list[str] = field(default_factory=list)
     doris_oauth_clients_file: str = ""
+    doris_oauth_cimd_fetch_timeout_seconds: int = 5
+    doris_oauth_cimd_max_document_bytes: int = 5120
+    doris_oauth_cimd_default_cache_seconds: int = 300
+    doris_oauth_cimd_max_cache_seconds: int = 3600
+    doris_oauth_cimd_max_clients: int = 1000
     doris_oauth_dynamic_client_registration_mode: str = "auto"
     enable_doris_oauth_production_dcr: bool = False
     enable_doris_oauth_production_wildcard_redirects: bool = False
@@ -839,6 +844,18 @@ class DorisConfig:
             "DORIS_OAUTH_CLIENTS_FILE",
             config.security.doris_oauth_clients_file,
         )
+        for env_name, field_name in {
+            "DORIS_OAUTH_CIMD_FETCH_TIMEOUT_SECONDS": "doris_oauth_cimd_fetch_timeout_seconds",
+            "DORIS_OAUTH_CIMD_MAX_DOCUMENT_BYTES": "doris_oauth_cimd_max_document_bytes",
+            "DORIS_OAUTH_CIMD_DEFAULT_CACHE_SECONDS": "doris_oauth_cimd_default_cache_seconds",
+            "DORIS_OAUTH_CIMD_MAX_CACHE_SECONDS": "doris_oauth_cimd_max_cache_seconds",
+            "DORIS_OAUTH_CIMD_MAX_CLIENTS": "doris_oauth_cimd_max_clients",
+        }.items():
+            setattr(
+                config.security,
+                field_name,
+                _env_int(env_name, getattr(config.security, field_name)),
+            )
         config.security.doris_oauth_dynamic_client_registration_mode = os.getenv(
             "DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE",
             config.security.doris_oauth_dynamic_client_registration_mode,
@@ -1200,6 +1217,11 @@ class DorisConfig:
                 "doris_oauth_login_page_title": self.security.doris_oauth_login_page_title,
                 "doris_oauth_allowed_redirect_uris": self.security.doris_oauth_allowed_redirect_uris,
                 "doris_oauth_clients_file": self.security.doris_oauth_clients_file,
+                "doris_oauth_cimd_fetch_timeout_seconds": self.security.doris_oauth_cimd_fetch_timeout_seconds,
+                "doris_oauth_cimd_max_document_bytes": self.security.doris_oauth_cimd_max_document_bytes,
+                "doris_oauth_cimd_default_cache_seconds": self.security.doris_oauth_cimd_default_cache_seconds,
+                "doris_oauth_cimd_max_cache_seconds": self.security.doris_oauth_cimd_max_cache_seconds,
+                "doris_oauth_cimd_max_clients": self.security.doris_oauth_cimd_max_clients,
                 "doris_oauth_dynamic_client_registration_mode": self.security.doris_oauth_dynamic_client_registration_mode,
                 "enable_doris_oauth_production_dcr": self.security.enable_doris_oauth_production_dcr,
                 "enable_doris_oauth_production_wildcard_redirects": self.security.enable_doris_oauth_production_wildcard_redirects,
@@ -1719,6 +1741,29 @@ def normalize_effective_auth_config(
         if mode == "enabled" and not _is_loopback_url(base_url):
             if not config.security.enable_doris_oauth_production_dcr:
                 raise AuthConfigError("Production Doris OAuth DCR requires ENABLE_DORIS_OAUTH_PRODUCTION_DCR=true")
+        if not 1 <= int(config.security.doris_oauth_cimd_fetch_timeout_seconds) <= 30:
+            raise AuthConfigError(
+                "doris_oauth_cimd_fetch_timeout_seconds must be between 1 and 30"
+            )
+        if not 1024 <= int(config.security.doris_oauth_cimd_max_document_bytes) <= 65536:
+            raise AuthConfigError(
+                "doris_oauth_cimd_max_document_bytes must be between 1024 and 65536"
+            )
+        default_cache = int(config.security.doris_oauth_cimd_default_cache_seconds)
+        max_cache = int(config.security.doris_oauth_cimd_max_cache_seconds)
+        if not 0 <= default_cache <= max_cache:
+            raise AuthConfigError(
+                "doris_oauth_cimd_default_cache_seconds must be between 0 and "
+                "doris_oauth_cimd_max_cache_seconds"
+            )
+        if not 1 <= max_cache <= 86400:
+            raise AuthConfigError(
+                "doris_oauth_cimd_max_cache_seconds must be between 1 and 86400"
+            )
+        if int(config.security.doris_oauth_cimd_max_clients) <= 0:
+            raise AuthConfigError(
+                "doris_oauth_cimd_max_clients must be greater than zero"
+            )
         if config.security.doris_oauth_trust_proxy_headers and not config.security.doris_oauth_trusted_proxy_cidrs:
             raise AuthConfigError("Trusted proxy CIDRs are required when Doris OAuth proxy headers are trusted")
 

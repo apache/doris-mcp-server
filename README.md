@@ -276,6 +276,11 @@ cp .env.example .env
     *   `OAUTH_SCOPE` / `OAUTH_REQUIRED_SCOPE`: Allowed and mandatory external OAuth scopes
     *   `ENABLE_DORIS_OAUTH_AUTH`: Enable Doris-backed OAuth authentication (default: false)
     *   `DORIS_OAUTH_BASE_URL`: Public base URL used by Doris-backed OAuth discovery and token endpoints
+    *   `DORIS_OAUTH_CIMD_FETCH_TIMEOUT_SECONDS`: Client ID Metadata Document fetch timeout (default: 5)
+    *   `DORIS_OAUTH_CIMD_MAX_DOCUMENT_BYTES`: Maximum Client ID Metadata Document size (default: 5120)
+    *   `DORIS_OAUTH_CIMD_DEFAULT_CACHE_SECONDS`: Cache lifetime when the document does not provide one (default: 300)
+    *   `DORIS_OAUTH_CIMD_MAX_CACHE_SECONDS`: Maximum accepted document cache lifetime (default: 3600)
+    *   `DORIS_OAUTH_CIMD_MAX_CLIENTS`: Maximum discovered Client ID Metadata clients held in memory (default: 1000)
     *   `TOKEN_FILE_PATH`: Path to tokens.json file for token management (default: tokens.json)
     *   `TOKEN_HOT_RELOAD`: Enable hot reloading of token configuration (default: true)
     *   `TOKEN_<ID>`: Explicit static bearer token; each active token must be a
@@ -735,11 +740,46 @@ For normal MCP OAuth flows, clients do not need to pass a long `--scopes` list. 
 
 Doris-backed OAuth still does not open prompts, ADBC, FE HTTP profile/monitoring, audit/governance, or performance analytics in this phase unless those paths are separately routed through per-user credentials or given an explicit service-account/admin design.
 
-Dynamic Client Registration requests must include `application_type` as either
-`native` or `web`. Native clients may register a reverse-domain custom-scheme
-redirect URI or loopback HTTP URI; web clients must register a non-loopback
-HTTPS URI. The server persists the application type with the client and uses
-exact redirect URI matching during authorization.
+#### OAuth Client Registration
+
+The preferred client-registration order is:
+
+1. Use a client configured by the operator when one is available.
+2. Use a Client ID Metadata Document (CIMD) by sending its HTTPS URL as
+   `client_id`.
+3. Use Dynamic Client Registration (DCR) only as a compatibility fallback.
+
+Authorization-server metadata advertises
+`client_id_metadata_document_supported=true`. A CIMD must be a JSON object whose
+`client_id` exactly equals the requested URL and whose `client_name` and
+`redirect_uris` are valid. This server currently accepts public CIMD clients
+with `token_endpoint_auth_method=none`, authorization-code plus optional
+refresh-token grants, the `code` response type, and exact redirect URI
+matching. Native clients may use a reverse-domain custom scheme or loopback
+HTTP URI; web clients must use non-loopback HTTPS.
+
+CIMD retrieval is fail-closed. The URL must use HTTPS, contain a path, and have
+no userinfo, fragment, backslash, or dot path segment. The resolver rejects
+special-use destination addresses, pins validated DNS results for the request,
+does not follow redirects, requires JSON, limits the response to 5 KiB by
+default, rejects embedded shared secrets or private key material, and caches
+only valid documents according to HTTP cache controls. Loopback metadata hosts
+are accepted only when the Doris OAuth issuer is itself a loopback development
+issuer. The login page displays the client and redirect hostnames and warns
+before a localhost redirect.
+
+The CIMD controls can be adjusted with
+`DORIS_OAUTH_CIMD_FETCH_TIMEOUT_SECONDS`,
+`DORIS_OAUTH_CIMD_MAX_DOCUMENT_BYTES`,
+`DORIS_OAUTH_CIMD_DEFAULT_CACHE_SECONDS`,
+`DORIS_OAUTH_CIMD_MAX_CACHE_SECONDS`, and
+`DORIS_OAUTH_CIMD_MAX_CLIENTS`.
+
+DCR remains available for older clients when
+`DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE` permits it. DCR requests must
+include `application_type` as either `native` or `web`; the same type-specific
+and exact redirect URI rules apply. Production DCR still requires
+`ENABLE_DORIS_OAUTH_PRODUCTION_DCR=true`.
 
 Authorization success and redirectable error responses include the exact
 authorization-server issuer in the RFC 9207 `iss` parameter. Discovery
@@ -771,7 +811,7 @@ For production deployments:
 *   Use Doris RBAC as the final data authorization boundary and grant Doris users only the data they should inspect.
 *   Do not log Doris passwords, authorization headers, access tokens, refresh tokens, authorization codes, PKCE verifiers, or client secrets.
 *   Treat the `doa_` prefix as reserved for Doris-backed OAuth access tokens; static tokens and JWT bearer values must not use it.
-*   Keep Dynamic Client Registration in `auto` for loopback development or explicitly configure production DCR with `ENABLE_DORIS_OAUTH_PRODUCTION_DCR=true`.
+*   Prefer preconfigured clients or Client ID Metadata Documents. Keep DCR as a compatibility fallback; production DCR requires `ENABLE_DORIS_OAUTH_PRODUCTION_DCR=true`.
 
 ### Token-Bound Database Configuration (New in v0.6.0)
 

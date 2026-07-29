@@ -16,6 +16,10 @@ from ..utils.security import (
     AuthContext,
     SecurityLevel,
 )
+from .doris_oauth_client_metadata import (
+    ClientMetadataError,
+    DorisOAuthClientMetadataResolver,
+)
 from .doris_oauth_rate_limit import DorisOAuthRateLimiter
 from .doris_oauth_redirects import DorisOAuthRedirectPolicy, is_loopback_url
 from .doris_oauth_scope_policy import DorisOAuthScopePolicy
@@ -49,6 +53,36 @@ class DorisOAuthProvider:
         )
         self.rate_limiter = DorisOAuthRateLimiter(
             getattr(self.security_config, "doris_oauth_rate_limit_window_seconds", 300)
+        )
+        self.client_metadata_resolver = DorisOAuthClientMetadataResolver(
+            issuer=self.issuer,
+            redirect_policy=self.redirect_policy,
+            scope_policy=self.scope_policy,
+            timeout_seconds=getattr(
+                self.security_config,
+                "doris_oauth_cimd_fetch_timeout_seconds",
+                5,
+            ),
+            max_document_bytes=getattr(
+                self.security_config,
+                "doris_oauth_cimd_max_document_bytes",
+                5120,
+            ),
+            default_cache_seconds=getattr(
+                self.security_config,
+                "doris_oauth_cimd_default_cache_seconds",
+                300,
+            ),
+            max_cache_seconds=getattr(
+                self.security_config,
+                "doris_oauth_cimd_max_cache_seconds",
+                3600,
+            ),
+            max_cache_entries=getattr(
+                self.security_config,
+                "doris_oauth_cimd_max_clients",
+                1000,
+            ),
         )
         self.connection_manager = None
         self._lock = asyncio.Lock()
@@ -95,6 +129,7 @@ class DorisOAuthProvider:
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
             "authorization_response_iss_parameter_supported": True,
+            "client_id_metadata_document_supported": True,
         }
         if self.dcr_enabled():
             metadata["registration_endpoint"] = f"{self.issuer}/oauth/register"
@@ -187,11 +222,70 @@ class DorisOAuthProvider:
             response["client_secret"] = client_secret
         return response
 
+    async def _authorization_client(
+        self,
+        client_id: str,
+        *,
+        client_ip: str,
+    ):
+        client = self.store.get_client(client_id)
+        if client and client.source != "client_id_metadata":
+            return client
+        if not client_id.lower().startswith("https://"):
+            return None
+        try:
+            metadata = await self.client_metadata_resolver.resolve(client_id)
+        except ClientMetadataError:
+            return None
+
+        async with self._lock:
+            self.store.cleanup_expired()
+            existing = self.store.get_client(client_id)
+            discovered_clients = [
+                record
+                for record in self.store.clients_by_id.values()
+                if record.source == "client_id_metadata"
+            ]
+            maximum = getattr(
+                self.security_config,
+                "doris_oauth_cimd_max_clients",
+                1000,
+            )
+            if existing is None and len(discovered_clients) >= maximum:
+                return None
+            lifetime = max(
+                getattr(
+                    self.security_config,
+                    "doris_oauth_refresh_token_expire_seconds",
+                    86400,
+                ),
+                getattr(
+                    self.security_config,
+                    "doris_oauth_auth_code_expire_seconds",
+                    300,
+                ),
+            )
+            return self.store.add_client(
+                client_id=metadata.client_id,
+                client_secret=None,
+                token_endpoint_auth_method=metadata.token_endpoint_auth_method,
+                application_type=metadata.application_type,
+                redirect_uris=metadata.redirect_uris,
+                client_allowed_scopes=metadata.client_allowed_scopes,
+                source="client_id_metadata",
+                expires_at=time.time() + lifetime,
+                registration_ip=client_ip,
+                client_name=metadata.client_name,
+            )
+
     async def create_authorization_transaction(self, params: dict, *, client_ip: str) -> str:
         state = str(params.get("state") or "")
         client_id = str(params.get("client_id") or "")
         redirect_uri = params.get("redirect_uri")
-        client = self.store.get_client(client_id)
+        client = await self._authorization_client(
+            client_id,
+            client_ip=client_ip,
+        )
         if not client:
             raise AuthorizeError("invalid_request", "Invalid client", redirect_allowed=False)
 
