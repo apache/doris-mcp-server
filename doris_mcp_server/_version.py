@@ -14,17 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""
-Doris MCP Server - A Model Context Protocol server for Apache Doris database integration.
+"""Build-time product version source."""
 
-This package provides:
-- MCP protocol implementation for Apache Doris
-- Multi-transport support (stdio, SSE, streamable HTTP)
-- Comprehensive database tools and resources
-- Enterprise-grade security and monitoring
-"""
-
-from ._version import __version__
-
-__author__ = "Doris MCP Team"
-__description__ = "Apache Doris MCP Server Implementation"
+__version__ = "0.6.1"

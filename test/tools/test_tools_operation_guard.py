@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import mcp.types as mcp_types
 import pytest
 
+from doris_mcp_server import __version__
 from doris_mcp_server.auth.operation_policy import (
     HIGH_RISK_TOOLS,
     OperationAuthorizationError,
@@ -730,7 +731,7 @@ def _server_with_mock_managers():
         tools_manager=server.tools_manager,
         prompts_manager=server.prompts_manager,
         name="test-doris-mcp-server",
-        version="0.6.1",
+        version=__version__,
         logger=server.logger,
     )
     return server

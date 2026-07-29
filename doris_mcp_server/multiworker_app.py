@@ -25,12 +25,12 @@ robust architecture as the single-worker mode.
 
 import os
 from contextlib import asynccontextmanager
-from importlib.metadata import version as distribution_version
 
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ._version import __version__
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
@@ -44,8 +44,6 @@ from .utils.config import (
 )
 from .utils.db import DorisConnectionManager
 from .utils.security import DorisSecurityManager
-
-MCP_VERSION = distribution_version("mcp")
 
 # Global variables for worker-specific instances
 _worker_server = None
@@ -158,7 +156,7 @@ async def health_check(request):
         "worker_pid": os.getpid(),
         "worker_mode": "multi-process-full-mcp",
         "mcp_initialized": _worker_initialized,
-        "mcp_version": MCP_VERSION
+        "version": __version__,
     })
 
 # OAuth and Token handlers (initialize after worker setup)
@@ -293,7 +291,7 @@ async def root_info(request):
         "mode": "multi-worker-full-mcp",
         "worker_pid": os.getpid(),
         "mcp_initialized": _worker_initialized,
-        "mcp_version": MCP_VERSION,
+        "version": __version__,
         "endpoints": {
             "health": "/health",
             "mcp": "/mcp"

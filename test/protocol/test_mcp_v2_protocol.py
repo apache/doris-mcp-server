@@ -36,6 +36,7 @@ from mcp.types import (
     Tool,
 )
 
+from doris_mcp_server import __version__
 from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
@@ -155,7 +156,7 @@ def create_test_server(
         tools_manager=tools_manager or StubToolsManager(),
         prompts_manager=StubPromptsManager(),
         name="doris-mcp-server",
-        version="0.6.1",
+        version=__version__,
         logger=logging.getLogger(__name__),
         required_client_capabilities=required_client_capabilities,
         required_tool_capabilities=required_tool_capabilities,
@@ -170,7 +171,7 @@ async def test_modern_and_legacy_clients_share_the_v2_protocol_core():
         assert modern.protocol_version == "2026-07-28"
         assert modern.server_info is not None
         assert modern.server_info.name == "doris-mcp-server"
-        assert modern.server_info.version == "0.6.1"
+        assert modern.server_info.version == __version__
         assert modern.session.discover_result is not None
         assert modern.session.discover_result.result_type == "complete"
 
@@ -218,6 +219,9 @@ async def test_modern_and_legacy_clients_share_the_v2_protocol_core():
 
     async with Client(server, mode="legacy") as legacy:
         assert legacy.protocol_version == "2025-11-25"
+        assert legacy.server_info is not None
+        assert legacy.server_info.name == "doris-mcp-server"
+        assert legacy.server_info.version == __version__
         assert [tool.name for tool in (await legacy.list_tools()).tools] == [
             "echo",
             "fail",
@@ -333,6 +337,11 @@ async def test_http_discover_is_stateless_and_unknown_method_does_not_kill_serve
         assert first.status_code == 200
         assert "mcp-session-id" not in first.headers
         assert first.json()["result"]["supportedVersions"] == ["2026-07-28"]
+        discover_server_info = first.json()["result"]["_meta"][
+            "io.modelcontextprotocol/serverInfo"
+        ]
+        assert discover_server_info["name"] == "doris-mcp-server"
+        assert discover_server_info["version"] == __version__
 
         unknown = await client.post(
             "/mcp",
@@ -440,6 +449,9 @@ async def test_http_rejects_untrusted_origin_and_legacy_is_stateless():
         assert initialized.status_code == 200
         assert "mcp-session-id" not in initialized.headers
         assert initialized.json()["result"]["protocolVersion"] == "2025-11-25"
+        legacy_server_info = initialized.json()["result"]["serverInfo"]
+        assert legacy_server_info["name"] == "doris-mcp-server"
+        assert legacy_server_info["version"] == __version__
 
 
 @pytest.mark.asyncio
