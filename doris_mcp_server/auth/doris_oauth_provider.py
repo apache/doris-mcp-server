@@ -110,7 +110,28 @@ class DorisOAuthProvider:
         if response_types != ["code"]:
             raise TokenEndpointError("invalid_client_metadata", "Unsupported response type", status_code=400)
 
-        redirect_uris = self.redirect_policy.validate_redirect_uris(payload.get("redirect_uris") or [], source="dcr")
+        if "application_type" not in payload:
+            raise TokenEndpointError(
+                "invalid_client_metadata",
+                "application_type is required",
+                status_code=400,
+            )
+        application_type = payload.get("application_type")
+        if not isinstance(application_type, str) or application_type not in {
+            "native",
+            "web",
+        }:
+            raise TokenEndpointError(
+                "invalid_client_metadata",
+                "application_type must be native or web",
+                status_code=400,
+            )
+
+        redirect_uris = self.redirect_policy.validate_redirect_uris(
+            payload.get("redirect_uris") or [],
+            application_type=application_type,
+            source="dcr",
+        )
         requested_scope = payload.get("scope")
         requested_scopes = self.scope_policy.parse_scope(requested_scope)
         if requested_scopes:
@@ -141,6 +162,7 @@ class DorisOAuthProvider:
                 client_id=client_id,
                 client_secret=client_secret,
                 token_endpoint_auth_method=token_auth_method,
+                application_type=application_type,
                 redirect_uris=redirect_uris,
                 client_allowed_scopes=scopes,
                 source="dcr",
@@ -150,6 +172,7 @@ class DorisOAuthProvider:
 
         response = {
             "client_id": record.client_id,
+            "application_type": record.application_type,
             "redirect_uris": list(record.redirect_uris),
             "scope": " ".join(record.client_allowed_scopes),
             "grant_types": ["authorization_code", "refresh_token"],
@@ -456,6 +479,7 @@ class DorisOAuthProvider:
             client_id=client_id,
             client_secret=None,
             token_endpoint_auth_method="none",
+            application_type="native",
             redirect_uris=("urn:doris-mcp-cli",),
             client_allowed_scopes=tuple(sorted(self.scope_policy.server_allowed_scopes)),
             source="preconfigured",

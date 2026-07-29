@@ -94,6 +94,7 @@ class RegisteredClientRecord:
     client_id: str
     client_secret_hash: str | None
     token_endpoint_auth_method: str
+    application_type: str
     redirect_uris: tuple[str, ...]
     client_allowed_scopes: tuple[str, ...]
     source: str
