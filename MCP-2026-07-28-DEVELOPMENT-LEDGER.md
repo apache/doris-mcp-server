@@ -90,7 +90,7 @@
 | `PROTO-005` | P0 | 单/多 worker 复用协议工厂 | PROTO-002 | 两种模式不再复制 MCP handlers；现代请求行为一致 | `DONE` |
 | `PROTO-006` | P0 | 未知/畸形请求异常隔离 | PROTO-003 | 未知方法、错 Header、错版本、畸形 body 后服务仍可处理下一请求 | `DONE` |
 | `PROTO-007` | P1 | 标准请求 Header 验证 | PROTO-003 | `Mcp-Method`、条件式 `Mcp-Name` 和 body 不一致返回 `-32020`/400 | `DONE` |
-| `PROTO-008` | P1 | 逐请求 `_meta` 与版本错误 | PROTO-003 | 缺能力、版本不支持分别返回 `-32021/-32022` | `READY` |
+| `PROTO-008` | P1 | 逐请求 `_meta` 与版本错误 | PROTO-003 | 缺能力、版本不支持分别返回 `-32021/-32022` | `DONE` |
 | `PROTO-009` | P1 | 所有 Result 的 `resultType` | PROTO-002 | 现代 wire 所有成功结果包含 `complete`；MRTR 为 `input_required` | `DONE` |
 | `PROTO-010` | P1 | 缓存提示策略 | PROTO-002 | cacheable 结果都有 `ttlMs/cacheScope`；身份相关结果一律 private | `DONE` |
 | `PROTO-011` | P1 | 删除核心 GET/SSE 兼容改写 | PROTO-003 | 现代核心只走规范 POST；legacy adapter 独立且默认关闭 | `BACKLOG` |
@@ -171,7 +171,7 @@
 
 | ID | 优先级 | 发布门 | 完成定义 | 状态 |
 |---|---|---|---|---|
-| `REL-001` | P0 | Alpha：协议骨架 | PROTO-001～010、SEC-001、TEST-001/002 全部完成 | `BACKLOG` |
+| `REL-001` | P0 | Alpha：协议骨架 | PROTO-001～010、SEC-001、TEST-001/002 全部完成 | `DONE` |
 | `REL-002` | P0 | Beta：安全与真实 Doris | P0/P1 安全项、真实 Doris、Conformance、wheel、Compose 全绿 | `BACKLOG` |
 | `REL-003` | P0 | GA：宣称支持 2026-07-28 | 完整测试绿；无未接受 P0/P1；文档和回执齐全 | `BACKLOG` |
 
@@ -229,6 +229,13 @@ coverage: 36%
 ```
 
 ### BATCH-01
+
+提交与 PR：
+
+```text
+commit: 5829ea3 feat: add MCP 2026-07-28 protocol core
+PR: https://github.com/apache/doris-mcp-server/pull/93
+```
 
 #### 实现回执
 
@@ -338,18 +345,42 @@ doris-mcp-client --help: passed
 3. `COMPAT-001`：部分权限分析 SQL 与 Doris 4.0.5 元数据字段不兼容；
 4. `COMPAT-002`：FE/BE HTTP 与 SQL 连接端点需要独立配置，代理/隧道场景不能假设同一 host。
 
+### PROTO-008
+
+新增按 method 配置的客户端能力门禁。默认 Doris MCP handlers 不声明额外客户端能力；一旦某个 method 显式声明要求，现代协议请求缺少对应 capability 时返回：
+
+```text
+HTTP status: 400
+JSON-RPC code: -32021
+data.requiredCapabilities: 完整 ClientCapabilities
+```
+
+验证覆盖：
+
+- HTTP 缺少 `clientCapabilities` 元数据返回 `-32602`；
+- HTTP 缺少 method 所需 extension 返回 `-32021`；
+- HTTP 携带所需 extension 后同一调用成功；
+- STDIO 子进程缺少所需 extension 返回 `-32021`；
+- STDIO 子进程使用不支持版本返回 `-32022` 及 `supported/requested`；
+- HTTP 与 STDIO 都在错误后继续成功处理后续请求；
+- legacy 协议不受现代能力门禁影响。
+
+```text
+test/protocol/test_mcp_v2_protocol.py
+5 passed
+```
+
 ## 11. 下一开发批次
 
 批次：`BATCH-02-CONFORMANCE-AND-ERROR-SEMANTICS`
 
 按以下顺序推进：
 
-1. `PROTO-008`：补齐缺 capability `-32021` 和逐请求 `_meta` 边界；
-2. `CORE-003` / `CORE-004`：Resource 与 Prompt 错误类型化；
-3. `CORE-010` / `CORE-011` / `COMPAT-001`：修复真实 Doris 已复现缺陷；
-4. `TEST-003`：运行官方 `server-stateless` Conformance；
-5. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
-6. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；
-7. `SEC-003`～`SEC-005`：进入下一安全批，完成非 loopback fail-closed。
+1. `CORE-003` / `CORE-004`：Resource 与 Prompt 错误类型化；
+2. `CORE-010` / `CORE-011` / `COMPAT-001`：修复真实 Doris 已复现缺陷；
+3. `TEST-003`：运行官方 `server-stateless` Conformance；
+4. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
+5. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；
+6. `SEC-003`～`SEC-005`：进入下一安全批，完成非 loopback fail-closed。
 
-`REL-001` 尚未开启：BATCH-01 已完成协议骨架，但 `PROTO-008` 与官方 Conformance 仍是 Alpha 发布门的硬缺口。
+`REL-001` 已达成。`REL-002` 仍由官方 Conformance、完整真实 Doris 矩阵、P0/P1 安全项、Compose 和发布门阻塞。

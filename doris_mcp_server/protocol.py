@@ -20,19 +20,26 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 from mcp.server import Server, ServerRequestContext
 from mcp.server.caching import CacheHint
+from mcp.server.context import CallNext
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.exceptions import MCPError
 from mcp.types import (
+    LATEST_PROTOCOL_VERSION,
+    MISSING_REQUIRED_CLIENT_CAPABILITY,
     CallToolRequestParams,
     CallToolResult,
+    ClientCapabilities,
     GetPromptRequestParams,
     GetPromptResult,
     ListPromptsResult,
     ListResourcesResult,
     ListToolsResult,
+    MissingRequiredClientCapabilityErrorData,
     PaginatedRequestParams,
     Prompt,
     ReadResourceRequestParams,
@@ -108,6 +115,7 @@ def create_doris_mcp_server(
     name: str,
     version: str,
     logger: logging.Logger,
+    required_client_capabilities: Mapping[str, ClientCapabilities] | None = None,
 ) -> Server:
     """Create the one low-level SDK v2 server used by every transport."""
 
@@ -184,7 +192,7 @@ def create_doris_mcp_server(
         )
 
     private_no_cache = CacheHint(ttl_ms=0, scope="private")
-    return Server(
+    server = Server(
         name,
         version=version,
         description="Model Context Protocol server for Apache Doris",
@@ -202,3 +210,30 @@ def create_doris_mcp_server(
         on_list_prompts=list_prompts,
         on_get_prompt=get_prompt,
     )
+
+    if required_client_capabilities:
+        requirements = dict(required_client_capabilities)
+
+        async def enforce_required_client_capabilities(
+            ctx: ServerRequestContext,
+            call_next: CallNext,
+        ):
+            required = requirements.get(ctx.method)
+            if (
+                required is not None
+                and ctx.protocol_version == LATEST_PROTOCOL_VERSION
+                and not ctx.session.check_client_capability(required)
+            ):
+                data = MissingRequiredClientCapabilityErrorData(
+                    required_capabilities=required,
+                ).model_dump(by_alias=True, mode="json", exclude_none=True)
+                raise MCPError(
+                    code=MISSING_REQUIRED_CLIENT_CAPABILITY,
+                    message="Missing required client capability",
+                    data=data,
+                )
+            return await call_next(ctx)
+
+        server.middleware.append(enforce_required_client_capabilities)
+
+    return server
