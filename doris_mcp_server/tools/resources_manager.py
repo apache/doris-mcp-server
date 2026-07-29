@@ -20,14 +20,15 @@ Provides standardized abstraction and access interface for database metadata
 """
 
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, unquote
 
 from mcp.types import Resource
 
-from ..utils.db import DorisConnectionManager
+from ..utils.db import DorisConnection, DorisConnectionManager
 from ..utils.logger import get_logger
 from ..utils.redaction import redact_uri
 from ..utils.sql_security_utils import get_auth_context, quote_identifier
@@ -41,12 +42,12 @@ class TableMetadata:
     def __init__(
         self,
         name: str,
-        comment: str = None,
+        comment: str | None = None,
         row_count: int = 0,
-        columns: list[dict] = None,
-        create_time: datetime = None,
+        columns: list[dict[str, Any]] | None = None,
+        create_time: datetime | None = None,
         database: str | None = None,
-    ):
+    ) -> None:
         self.name = name
         self.comment = comment
         self.row_count = row_count
@@ -61,10 +62,10 @@ class ViewMetadata:
     def __init__(
         self,
         name: str,
-        comment: str = None,
-        definition: str = None,
+        comment: str | None = None,
+        definition: str | None = None,
         database: str | None = None,
-    ):
+    ) -> None:
         self.name = name
         self.comment = comment
         self.definition = definition
@@ -75,7 +76,7 @@ class MetadataCache:
     """Metadata cache manager"""
 
     def __init__(self, ttl_seconds: int = 300, enabled: bool = False):
-        self.cache = {}
+        self.cache: dict[str, tuple[Any, float]] = {}
         self.ttl = ttl_seconds
         self.enabled = enabled
 
@@ -90,7 +91,7 @@ class MetadataCache:
                 del self.cache[key]
         return None
 
-    async def set(self, key: str, value: Any):
+    async def set(self, key: str, value: Any) -> None:
         if not self.enabled:
             return
         self.cache[key] = (value, datetime.now().timestamp())
@@ -139,7 +140,11 @@ class DorisResourcesManager:
     def _is_doris_oauth_context(self) -> bool:
         return getattr(get_auth_context(), "auth_method", "") == "doris_oauth"
 
-    def _schema_filter(self, column_name: str, db_name: str | None) -> tuple[str, tuple]:
+    def _schema_filter(
+        self,
+        column_name: str,
+        db_name: str | None,
+    ) -> tuple[str, tuple[str, ...]]:
         safe_column = quote_identifier(column_name, "information schema column")
         if db_name:
             return f"{safe_column} = %s", (db_name,)
@@ -214,7 +219,10 @@ class DorisResourcesManager:
             raise self._resource_error_from_exception(exc) from exc
 
     @asynccontextmanager
-    async def _connection_context(self, session_id: str = "system"):
+    async def _connection_context(
+        self,
+        session_id: str = "system",
+    ) -> AsyncIterator[DorisConnection]:
         manager_context = getattr(self.connection_manager, "get_connection_context", None)
         if manager_context:
             async with manager_context(session_id) as connection:
@@ -231,7 +239,7 @@ class DorisResourcesManager:
 
     async def list_resources(self) -> list[Resource]:
         """List all available database resources"""
-        resources = []
+        resources: list[Resource] = []
 
         try:
             if self._is_doris_oauth_context():
@@ -245,7 +253,7 @@ class DorisResourcesManager:
                         uri=f"doris://table/{self._resource_uri_segment(table.name)}",
                         name=f"Data Table: {table.name}",
                         description=f"{table.comment or 'Data table'} (rows: {table.row_count:,})",
-                        mimeType="application/json",
+                        mime_type="application/json",
                     )
                 )
 
@@ -257,7 +265,7 @@ class DorisResourcesManager:
                         uri=f"doris://view/{self._resource_uri_segment(view.name)}",
                         name=f"Data View: {view.name}",
                         description=f"{view.comment or 'Data view'}",
-                        mimeType="application/json",
+                        mime_type="application/json",
                     )
                 )
 
@@ -267,7 +275,7 @@ class DorisResourcesManager:
                     uri="doris://stats/database",
                     name="Database Statistics",
                     description="Overall database statistics and performance metrics",
-                    mimeType="application/json",
+                    mime_type="application/json",
                 )
             )
 
@@ -293,7 +301,7 @@ class DorisResourcesManager:
                             ),
                             name=f"Data Table: {db_name}.{table.name}",
                             description=f"{table.comment or 'Data table'} (rows: {table.row_count:,})",
-                            mimeType="application/json",
+                            mime_type="application/json",
                         )
                     )
 
@@ -307,7 +315,7 @@ class DorisResourcesManager:
                             ),
                             name=f"Data View: {db_name}.{view.name}",
                             description=f"{view.comment or 'Data view'}",
-                            mimeType="application/json",
+                            mime_type="application/json",
                         )
                     )
 
@@ -316,7 +324,7 @@ class DorisResourcesManager:
                         uri=self._stats_resource_uri(db_name),
                         name=f"Database Statistics: {db_name}",
                         description=f"Overall database statistics for {db_name}",
-                        mimeType="application/json",
+                        mime_type="application/json",
                     )
                 )
         return resources
@@ -359,7 +367,7 @@ class DorisResourcesManager:
         cache_key = "table_metadata"
         cached = await self.metadata_cache.get(cache_key)
         if cached:
-            return cached
+            return cast(list[TableMetadata], cached)
 
         async with self._connection_context("system") as connection:
             tables = await self._get_table_metadata_for_database(connection)
@@ -367,7 +375,10 @@ class DorisResourcesManager:
         await self.metadata_cache.set(cache_key, tables)
         return tables
 
-    async def _get_visible_databases(self, connection) -> list[str]:
+    async def _get_visible_databases(
+        self,
+        connection: DorisConnection,
+    ) -> list[str]:
         """Get databases visible to the current routed Doris user."""
         auth_context = get_auth_context()
         result = await connection.execute("SHOW DATABASES", auth_context=auth_context)
@@ -379,7 +390,9 @@ class DorisResourcesManager:
         return databases
 
     async def _get_table_metadata_for_database(
-        self, connection, db_name: str | None = None
+        self,
+        connection: DorisConnection,
+        db_name: str | None = None,
     ) -> list[TableMetadata]:
         """Get table metadata for a specific database or the current database."""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
@@ -403,7 +416,7 @@ class DorisResourcesManager:
             params=schema_params or None,
             auth_context=auth_context,
         )
-        tables = []
+        tables: list[TableMetadata] = []
 
         for row in result.data:
             columns = await self._get_table_columns(connection, row["table_name"], db_name)
@@ -421,8 +434,11 @@ class DorisResourcesManager:
         return tables
 
     async def _get_table_columns(
-        self, connection, table_name: str, db_name: str | None = None
-    ) -> list[dict]:
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        db_name: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Get column information for table"""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # SQL sink audit: schema column -> quote_identifier; database/table
@@ -454,7 +470,7 @@ class DorisResourcesManager:
         cache_key = "view_metadata"
         cached = await self.metadata_cache.get(cache_key)
         if cached:
-            return cached
+            return cast(list[ViewMetadata], cached)
 
         async with self._connection_context("system") as connection:
             views = await self._get_view_metadata_for_database(connection)
@@ -463,7 +479,9 @@ class DorisResourcesManager:
         return views
 
     async def _get_view_metadata_for_database(
-        self, connection, db_name: str | None = None
+        self,
+        connection: DorisConnection,
+        db_name: str | None = None,
     ) -> list[ViewMetadata]:
         """Get view metadata for a specific database or the current database."""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
@@ -485,7 +503,7 @@ class DorisResourcesManager:
             params=schema_params or None,
             auth_context=auth_context,
         )
-        views = []
+        views: list[ViewMetadata] = []
 
         for row in result.data:
             view = ViewMetadata(
@@ -549,8 +567,11 @@ class DorisResourcesManager:
         return json.dumps(schema_info, ensure_ascii=False, indent=2)
 
     async def _get_table_indexes(
-        self, connection, table_name: str, db_name: str | None = None
-    ) -> list[dict]:
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        db_name: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Get index information for table"""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # SQL sink audit: schema column -> quote_identifier; database/table
@@ -637,7 +658,8 @@ class DorisResourcesManager:
             table_stats = table_result.data[0] if table_result.data else {}
 
             # Get view statistics
-            # SQL sink audit: same quoted schema column and bound database value.
+            # SQL sink audit: same quote_identifier result and bound database
+            # value flow into DorisConnection.execute.
             view_stats_query = f"""
             SELECT COUNT(*) as view_count
             FROM information_schema.views

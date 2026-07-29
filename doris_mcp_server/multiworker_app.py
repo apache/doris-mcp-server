@@ -23,14 +23,25 @@ Each worker process creates its own MCP server and session manager using the sam
 robust architecture as the single-worker mode.
 """
 
-import os
-from contextlib import asynccontextmanager
+from __future__ import annotations
 
+import os
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import TYPE_CHECKING
+
+from mcp.server import Server
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
+from starlette.types import Receive, Scope, Send
 
 from ._version import __version__
+from .auth.doris_oauth_handlers import DorisOAuthHandlers
+from .auth.oauth_handlers import OAuthHandlers
+from .auth.token_handlers import TokenHandlers
 from .health import liveness_payload, readiness_payload
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
@@ -40,26 +51,44 @@ from .tools.resources_manager import DorisResourcesManager
 from .tools.tools_manager import DorisToolsManager
 from .utils.config import (
     DorisConfig,
+    EffectiveAuthConfig,
     get_effective_auth_config,
     normalize_effective_auth_config,
 )
 from .utils.db import DorisConnectionManager
 from .utils.security import DorisSecurityManager
 
-# Global variables for worker-specific instances
-_worker_server = None
-_worker_session_manager = None
-_worker_connection_manager = None
-_worker_security_manager = None
-_worker_tools_manager = None
-_worker_session_manager_context = None
-_worker_initialized = False
-_worker_effective_auth = None
-_doris_oauth_handlers = None
+if TYPE_CHECKING:
+    pass
 
-async def initialize_worker():
+# Global variables for worker-specific instances
+_worker_server: Server | None = None
+_worker_session_manager: StreamableHTTPSessionManager | None = None
+_worker_connection_manager: DorisConnectionManager | None = None
+_worker_security_manager: DorisSecurityManager | None = None
+_worker_tools_manager: DorisToolsManager | None = None
+_worker_session_manager_context: AbstractAsyncContextManager[None] | None = None
+_worker_initialized = False
+_worker_effective_auth: EffectiveAuthConfig | None = None
+_doris_oauth_handlers: DorisOAuthHandlers | None = None
+_oauth_handlers: OAuthHandlers | None = None
+_token_handlers: TokenHandlers | None = None
+
+
+async def initialize_worker() -> None:
     """Initialize MCP server and managers for this worker process"""
-    global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_security_manager, _worker_tools_manager, _worker_session_manager_context, _worker_initialized, _oauth_handlers, _token_handlers, _worker_effective_auth, _doris_oauth_handlers
+    global \
+        _worker_server, \
+        _worker_session_manager, \
+        _worker_connection_manager, \
+        _worker_security_manager, \
+        _worker_tools_manager, \
+        _worker_session_manager_context, \
+        _worker_initialized, \
+        _oauth_handlers, \
+        _token_handlers, \
+        _worker_effective_auth, \
+        _doris_oauth_handlers
 
     if _worker_initialized:
         return
@@ -67,6 +96,7 @@ async def initialize_worker():
     try:
         # Import logger properly
         from .utils.logger import get_logger
+
         logger = get_logger(__name__)
 
         logger.info(f"Initializing MCP worker process {os.getpid()}")
@@ -79,6 +109,7 @@ async def initialize_worker():
 
         # Initialize enhanced logging system
         from .utils.config import ConfigManager
+
         config_manager = ConfigManager(config)
         config_manager.setup_logging()
 
@@ -90,20 +121,26 @@ async def initialize_worker():
         logger.info(f"Worker {os.getpid()} security manager initialization completed")
 
         # Create connection manager with token manager for token-bound DB config
-        token_manager = _worker_security_manager.auth_provider.token_manager if hasattr(_worker_security_manager, 'auth_provider') and hasattr(_worker_security_manager.auth_provider, 'token_manager') else None
-        _worker_connection_manager = DorisConnectionManager(config, _worker_security_manager, token_manager)
+        token_manager = (
+            _worker_security_manager.auth_provider.token_manager
+            if hasattr(_worker_security_manager, "auth_provider")
+            and hasattr(_worker_security_manager.auth_provider, "token_manager")
+            else None
+        )
+        _worker_connection_manager = DorisConnectionManager(
+            config, _worker_security_manager, token_manager
+        )
 
         # Set connection manager reference in security manager for database validation
         _worker_security_manager.connection_manager = _worker_connection_manager
-        _worker_security_manager.auth_provider.configure_doris_oauth(_worker_connection_manager)
+        _worker_security_manager.auth_provider.configure_doris_oauth(
+            _worker_connection_manager
+        )
 
         global_pool_created = (
             await _worker_connection_manager.initialize_for_http_mode()
         )
-        if (
-            not global_pool_created
-            and _worker_effective_auth.enable_doris_oauth_auth
-        ):
+        if not global_pool_created and _worker_effective_auth.enable_doris_oauth_auth:
             raise RuntimeError(
                 "Doris OAuth requires the configured service/global Doris account "
                 "to initialize successfully"
@@ -125,8 +162,6 @@ async def initialize_worker():
         )
 
         # Create session manager for this worker
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-
         _worker_session_manager = StreamableHTTPSessionManager(
             app=_worker_server,
             json_response=True,
@@ -143,29 +178,34 @@ async def initialize_worker():
         await _worker_session_manager_context.__aenter__()
 
         # Initialize OAuth and Token handlers
-        from .auth.oauth_handlers import OAuthHandlers
-        from .auth.token_handlers import TokenHandlers
         _oauth_handlers = OAuthHandlers(_worker_security_manager)
         _token_handlers = TokenHandlers(_worker_security_manager, config)
         if _worker_effective_auth.enable_doris_oauth_auth:
-            from .auth.doris_oauth_handlers import DorisOAuthHandlers
-            _doris_oauth_handlers = DorisOAuthHandlers(
+            doris_oauth_provider = (
                 _worker_security_manager.auth_provider.doris_oauth_provider
             )
+            if doris_oauth_provider is None:
+                raise RuntimeError(
+                    "Doris OAuth is enabled but its provider was not initialized"
+                )
+            _doris_oauth_handlers = DorisOAuthHandlers(doris_oauth_provider)
 
         _worker_initialized = True
         logger.info(f"Worker {os.getpid()} MCP initialization completed successfully")
 
     except Exception as e:
         from .utils.logger import get_logger
+
         logger = get_logger(__name__)
         logger.error(f"Failed to initialize worker {os.getpid()}: {e}")
         import traceback
+
         logger.error("Complete error stack:")
         logger.error(traceback.format_exc())
         raise
 
-async def health_check(request):
+
+async def health_check(request: Request) -> JSONResponse:
     """Backward-compatible liveness endpoint."""
     return JSONResponse(
         liveness_payload(
@@ -181,7 +221,7 @@ async def health_check(request):
     )
 
 
-async def live_check(request):
+async def live_check(request: Request) -> JSONResponse:
     """Database-independent liveness endpoint."""
     return JSONResponse(
         liveness_payload(
@@ -196,7 +236,7 @@ async def live_check(request):
     )
 
 
-async def readiness_check(request):
+async def readiness_check(request: Request) -> JSONResponse:
     """Bounded readiness endpoint for this worker."""
     payload, status_code = await readiness_payload(
         _worker_connection_manager,
@@ -211,79 +251,97 @@ async def readiness_check(request):
     )
     return JSONResponse(payload, status_code=status_code)
 
-# OAuth and Token handlers (initialize after worker setup)
-_oauth_handlers = None
-_token_handlers = None
 
-async def oauth_login(request):
+async def oauth_login(request: Request) -> Response:
     """OAuth login endpoint"""
     if not _oauth_handlers:
         return JSONResponse({"error": "OAuth not initialized"}, status_code=503)
     return await _oauth_handlers.handle_login(request)
 
-async def oauth_callback(request):
+
+async def oauth_callback(request: Request) -> Response:
     """OAuth callback endpoint"""
     if not _oauth_handlers:
         return JSONResponse({"error": "OAuth not initialized"}, status_code=503)
     return await _oauth_handlers.handle_callback(request)
 
-async def oauth_provider_info(request):
+
+async def oauth_provider_info(request: Request) -> Response:
     """OAuth provider info endpoint"""
     if not _oauth_handlers:
         return JSONResponse({"error": "OAuth not initialized"}, status_code=503)
     return await _oauth_handlers.handle_provider_info(request)
 
-async def oauth_demo(request):
+
+async def oauth_demo(request: Request) -> Response:
     """OAuth demo page endpoint"""
     if not _oauth_handlers:
         from starlette.responses import HTMLResponse
+
         return HTMLResponse("<h1>OAuth not initialized</h1>")
     return await _oauth_handlers.handle_demo_page(request)
 
+
 # Token management endpoints
-async def token_create(request):
+async def token_create(request: Request) -> Response:
     """Token creation endpoint"""
     if not _token_handlers:
-        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+        return JSONResponse(
+            {"error": "Token handlers not initialized"}, status_code=503
+        )
     return await _token_handlers.handle_create_token(request)
 
-async def token_revoke(request):
+
+async def token_revoke(request: Request) -> Response:
     """Token revocation endpoint"""
     if not _token_handlers:
-        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+        return JSONResponse(
+            {"error": "Token handlers not initialized"}, status_code=503
+        )
     return await _token_handlers.handle_revoke_token(request)
 
-async def token_list(request):
+
+async def token_list(request: Request) -> Response:
     """Token listing endpoint"""
     if not _token_handlers:
-        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+        return JSONResponse(
+            {"error": "Token handlers not initialized"}, status_code=503
+        )
     return await _token_handlers.handle_list_tokens(request)
 
-async def token_stats(request):
+
+async def token_stats(request: Request) -> Response:
     """Token statistics endpoint"""
     if not _token_handlers:
-        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+        return JSONResponse(
+            {"error": "Token handlers not initialized"}, status_code=503
+        )
     return await _token_handlers.handle_token_stats(request)
 
-async def token_cleanup(request):
+
+async def token_cleanup(request: Request) -> Response:
     """Token cleanup endpoint"""
     if not _token_handlers:
-        return JSONResponse({"error": "Token handlers not initialized"}, status_code=503)
+        return JSONResponse(
+            {"error": "Token handlers not initialized"}, status_code=503
+        )
     return await _token_handlers.handle_cleanup_tokens(request)
 
-async def token_management(request):
+
+async def token_management(request: Request) -> Response:
     """Token management page endpoint"""
     if not _token_handlers:
         from starlette.responses import HTMLResponse
+
         return HTMLResponse("<h1>Token handlers not initialized</h1>")
     return await _token_handlers.handle_management_page(request)
 
 
-async def doris_oauth_unavailable(request):
+async def doris_oauth_unavailable(request: Request) -> JSONResponse:
     return JSONResponse({"error": "doris_oauth_not_initialized"}, status_code=503)
 
 
-async def oauth_protected_resource_metadata(request):
+async def oauth_protected_resource_metadata(request: Request) -> Response:
     if _worker_effective_auth is None:
         return await doris_oauth_unavailable(request)
     if _worker_effective_auth and _worker_effective_auth.enable_doris_oauth_auth:
@@ -299,77 +357,84 @@ async def oauth_protected_resource_metadata(request):
     return JSONResponse({"error": "oauth_disabled"}, status_code=404)
 
 
-async def doris_oauth_authorization_server_metadata(request):
+async def doris_oauth_authorization_server_metadata(
+    request: Request,
+) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.authorization_server_metadata(request)
 
 
-async def doris_oauth_register(request):
+async def doris_oauth_register(request: Request) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.register(request)
 
 
-async def doris_oauth_authorize(request):
+async def doris_oauth_authorize(request: Request) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.authorize(request)
 
 
-async def doris_oauth_token(request):
+async def doris_oauth_token(request: Request) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.token(request)
 
 
-async def doris_oauth_revoke(request):
+async def doris_oauth_revoke(request: Request) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.revoke(request)
 
 
-async def doris_oauth_login(request):
+async def doris_oauth_login(request: Request) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.login(request)
 
 
-async def doris_oauth_api_token(request):
+async def doris_oauth_api_token(request: Request) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.api_token(request)
 
 
-async def doris_oauth_api_refresh(request):
+async def doris_oauth_api_refresh(request: Request) -> Response:
     if not _doris_oauth_handlers:
         return await doris_oauth_unavailable(request)
     return await _doris_oauth_handlers.api_refresh(request)
 
-async def root_info(request):
+
+async def root_info(request: Request) -> JSONResponse:
     """Root endpoint"""
-    return JSONResponse({
-        "service": "doris-mcp-server",
-        "mode": "multi-worker-full-mcp",
-        "worker_pid": os.getpid(),
-        "mcp_initialized": _worker_initialized,
-        "version": __version__,
-        "endpoints": {
-            "health": "/health",
-            "live": "/live",
-            "ready": "/ready",
-            "mcp": "/mcp"
+    return JSONResponse(
+        {
+            "service": "doris-mcp-server",
+            "mode": "multi-worker-full-mcp",
+            "worker_pid": os.getpid(),
+            "mcp_initialized": _worker_initialized,
+            "version": __version__,
+            "endpoints": {
+                "health": "/health",
+                "live": "/live",
+                "ready": "/ready",
+                "mcp": "/mcp",
+            },
         }
-    })
+    )
+
 
 @asynccontextmanager
-async def lifespan(app):
+async def lifespan(app: Starlette) -> AsyncIterator[None]:
     """Application lifespan manager"""
     # Startup
     try:
         await initialize_worker()
         # Import logger properly
         from .utils.logger import get_logger
+
         logger = get_logger(__name__)
         logger.info(f"Worker {os.getpid()} startup completed")
 
@@ -378,6 +443,7 @@ async def lifespan(app):
     finally:
         # Shutdown
         from .utils.logger import get_logger
+
         logger = get_logger(__name__)
 
         # Close session manager context
@@ -412,47 +478,92 @@ async def lifespan(app):
         # Shutdown logging system
         try:
             from .utils.logger import shutdown_logging
+
             shutdown_logging()
         except Exception as e:
             logger.error(f"Error shutting down logging system: {e}")
 
-async def mcp_asgi_app(scope, receive, send):
+
+async def mcp_asgi_app(scope: Scope, receive: Receive, send: Send) -> None:
     """ASGI app that handles MCP requests"""
     if not _worker_initialized:
         # Send error response if worker not initialized
-        await send({
-            'type': 'http.response.start',
-            'status': 503,
-            'headers': [(b'content-type', b'application/json')]
-        })
-        await send({
-            'type': 'http.response.body',
-            'body': b'{"error": "Worker not initialized"}'
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b'{"error": "Worker not initialized"}',
+            }
+        )
         return
 
     # Import logger properly
     from .utils.logger import get_logger
+
     logger = get_logger(__name__)
 
     # Get request path for logging
-    path = scope.get('path', '')
-    method = scope.get('method', 'UNKNOWN')
+    path = scope.get("path", "")
+    method = scope.get("method", "UNKNOWN")
     logger.debug(f"Worker {os.getpid()} handling MCP request: {method} {path}")
 
     from .auth.mcp_auth_middleware import MCPAuthASGIMiddleware
 
-    async def downstream(authenticated_scope, authenticated_receive, authenticated_send):
-        await _worker_session_manager.handle_request(
+    security_manager = _worker_security_manager
+    if security_manager is None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b'{"error": "Worker managers not initialized"}',
+            }
+        )
+        return
+
+    async def downstream(
+        authenticated_scope: Scope,
+        authenticated_receive: Receive,
+        authenticated_send: Send,
+    ) -> None:
+        session_manager = _worker_session_manager
+        if session_manager is None:
+            await authenticated_send(
+                {
+                    "type": "http.response.start",
+                    "status": 503,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
+            await authenticated_send(
+                {
+                    "type": "http.response.body",
+                    "body": b'{"error": "Worker session manager not initialized"}',
+                }
+            )
+            return
+        await session_manager.handle_request(
             authenticated_scope, authenticated_receive, authenticated_send
         )
 
     middleware = MCPAuthASGIMiddleware(
-        _worker_security_manager,
+        security_manager,
         downstream,
-        _worker_effective_auth or get_effective_auth_config(_worker_security_manager.config),
+        _worker_effective_auth or get_effective_auth_config(security_manager.config),
     )
     await middleware(scope, receive, send)
+
 
 # Create Starlette app with basic routes
 basic_app = Starlette(
@@ -473,7 +584,11 @@ basic_app = Starlette(
             oauth_protected_resource_metadata,
             methods=["GET"],
         ),
-        Route("/.well-known/oauth-authorization-server", doris_oauth_authorization_server_metadata, methods=["GET"]),
+        Route(
+            "/.well-known/oauth-authorization-server",
+            doris_oauth_authorization_server_metadata,
+            methods=["GET"],
+        ),
         Route("/oauth/register", doris_oauth_register, methods=["POST"]),
         Route("/oauth/authorize", doris_oauth_authorize, methods=["GET"]),
         Route("/oauth/token", doris_oauth_token, methods=["POST"]),
@@ -489,17 +604,22 @@ basic_app = Starlette(
         Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
         Route("/token/management", token_management, methods=["GET"]),
     ],
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
+
 # Create main ASGI app that routes between basic app and MCP
-async def app(scope, receive, send):
+async def app(scope: Scope, receive: Receive, send: Send) -> None:
     """Main ASGI app that routes requests"""
-    path = scope.get('path', '/')
+    path = scope.get("path", "/")
 
     if path == "/mcp":
         await mcp_asgi_app(scope, receive, send)
-    elif path.startswith("/auth/") and _worker_effective_auth and not _worker_effective_auth.enable_external_oauth_auth:
+    elif (
+        path.startswith("/auth/")
+        and _worker_effective_auth
+        and not _worker_effective_auth.enable_external_oauth_auth
+    ):
         response = JSONResponse({"error": "external_oauth_disabled"}, status_code=404)
         await response(scope, receive, send)
     elif (

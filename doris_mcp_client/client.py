@@ -67,8 +67,8 @@ class DorisClientConfig:
     def stdio(cls, command: str, args: list[str] = None) -> "DorisClientConfig":
         """Create stdio connection configuration"""
         return cls(
-            transport="stdio", 
-            server_command=command, 
+            transport="stdio",
+            server_command=command,
             server_args=args or []
         )
 
@@ -76,8 +76,8 @@ class DorisClientConfig:
     def http(cls, url: str, timeout: int = 60) -> "DorisClientConfig":
         """Create HTTP connection configuration"""
         return cls(
-            transport="http", 
-            server_url=url, 
+            transport="http",
+            server_url=url,
             timeout=timeout
         )
 
@@ -139,7 +139,7 @@ class DorisResourceClient:
             return [r for r in self._resources_cache if "view" in r.uri]
         elif resource_type == "database":
             return [
-                r for r in self._resources_cache 
+                r for r in self._resources_cache
                 if "database" in r.uri and "table" not in r.uri
             ]
         else:
@@ -216,7 +216,7 @@ class DorisToolsClient:
         category_lower = category.lower()
         return [
             tool for tool in self._tools_cache
-            if category_lower in tool.description.lower() 
+            if category_lower in tool.description.lower()
             or category_lower in tool.name.lower()
         ]
 
@@ -427,7 +427,7 @@ class DorisUnifiedClient:
         tool_name = await self._find_tool_by_pattern(["memory", "realtime_memory"])
         if not tool_name:
             return {"success": False, "error": "Memory stats tool not found"}
-        
+
         arguments = {"tracker_type": tracker_type, "include_details": include_details}
         arguments.update(kwargs)
         return await self.call_tool(tool_name, arguments)
@@ -440,7 +440,7 @@ class DorisUnifiedClient:
 
         if not tool_name:
             return {
-                "success": False, 
+                "success": False,
                 "error": f"No tool found for function: {function_description}"
             }
 

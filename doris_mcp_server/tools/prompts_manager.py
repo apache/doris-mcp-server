@@ -20,6 +20,7 @@ Provides standardized management of query templates and intelligent prompts
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -44,7 +45,7 @@ class PromptTemplate:
         name: str,
         description: str,
         template: str,
-        arguments: list[PromptArgument] = None,
+        arguments: list[PromptArgument] | None = None,
         category: str = "general",
     ):
         self.name = name
@@ -98,7 +99,10 @@ class DorisPromptsManager:
         self.templates = self._init_prompt_templates()
 
     @asynccontextmanager
-    async def _connection_context(self, session_id: str = "system"):
+    async def _connection_context(
+        self,
+        session_id: str = "system",
+    ) -> AsyncIterator[Any]:
         manager_context = getattr(
             self.connection_manager,
             "get_connection_context",
@@ -273,7 +277,9 @@ Check items:
 Please provide detailed problem reports and fix recommendations.""",
             arguments=[
                 PromptArgument(
-                    name="target_table", description="Target table name to check", required=True
+                    name="target_table",
+                    description="Target table name to check",
+                    required=True,
                 ),
                 PromptArgument(
                     name="quality_dimensions",
@@ -465,9 +471,7 @@ Please generate accurate and efficient SQL queries based on the above requiremen
                 timeout=self.database_context_timeout_seconds,
             )
         except Exception as e:
-            raise PromptDatabaseContextError(
-                "Database context unavailable"
-            ) from e
+            raise PromptDatabaseContextError("Database context unavailable") from e
 
     async def _query_database_context(self) -> str:
         """Query the prompt context within the caller's bounded deadline."""

@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
+from .doris_oauth_provider import DorisOAuthProvider
 from .doris_oauth_rate_limit import rate_limited_response
 from .doris_oauth_redirects import is_loopback_host
 from .doris_oauth_types import (
@@ -121,7 +122,7 @@ def revoke_error_response(error: RevocationEndpointError) -> JSONResponse:
 
 
 class DorisOAuthHandlers:
-    def __init__(self, provider):
+    def __init__(self, provider: DorisOAuthProvider) -> None:
         self.provider = provider
         self.security_config = provider.security_config
 
@@ -426,7 +427,10 @@ class DorisOAuthHandlers:
         ip = self._client_ip(request)
         form = await request.form()
         payload = dict(form)
-        client_key = payload.get("client_id") or "unknown"
+        client_id_value = payload.get("client_id")
+        client_key = (
+            client_id_value if isinstance(client_id_value, str) else "unknown"
+        )
         if not self._limit("oauth_token_ip", ip, self.security_config.doris_oauth_token_rate_limit_per_ip):
             return rate_limited_response()
         if not self._limit("oauth_token_client", client_key, self.security_config.doris_oauth_token_rate_limit_per_client):
@@ -436,7 +440,11 @@ class DorisOAuthHandlers:
             if grant_type == "authorization_code":
                 return JSONResponse(await self.provider.exchange_code(payload))
             if grant_type == "refresh_token":
-                refresh_key = self.provider.store.hmac_lookup(payload.get("refresh_token", ""), "refresh")
+                refresh_value = payload.get("refresh_token")
+                refresh_key = self.provider.store.hmac_lookup(
+                    refresh_value if isinstance(refresh_value, str) else "",
+                    "refresh",
+                )
                 if not self._limit("oauth_token_refresh", refresh_key, self.security_config.doris_oauth_token_rate_limit_per_client):
                     return rate_limited_response()
                 return JSONResponse(await self.provider.refresh_token(payload))
@@ -452,7 +460,11 @@ class DorisOAuthHandlers:
         payload = dict(form)
         revoke_client_key = payload.get("client_id")
         if not revoke_client_key:
-            revoke_client_key = self.provider.store.hmac_lookup(payload.get("token", ""), "revoke_token")
+            token_value = payload.get("token")
+            revoke_client_key = self.provider.store.hmac_lookup(
+                token_value if isinstance(token_value, str) else "",
+                "revoke_token",
+            )
         if not self._limit(
             "oauth_revoke_client",
             str(revoke_client_key or "unknown"),
@@ -577,5 +589,5 @@ class DorisOAuthHandlers:
         return self.provider.rate_limiter.check(bucket, key, limit).allowed
 
 
-def build_doris_oauth_routes(provider) -> list[Route]:
+def build_doris_oauth_routes(provider: DorisOAuthProvider) -> list[Route]:
     return DorisOAuthHandlers(provider).routes()

@@ -29,10 +29,14 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
+from ..utils.config import DorisConfig, SecurityConfig
 from ..utils.datetime_utils import utc_now
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+JWTPrivateKey = rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey
+JWTPublicKey = rsa.RSAPublicKey | ec.EllipticCurvePublicKey
 
 
 class KeyManager:
@@ -42,7 +46,7 @@ class KeyManager:
     Supports RSA and EC algorithms, provides automatic key rotation functionality
     """
 
-    def __init__(self, config):
+    def __init__(self, config: DorisConfig | SecurityConfig) -> None:
         """Initialize key manager
 
         Args:
@@ -50,7 +54,7 @@ class KeyManager:
         """
         self.config = config
         # Access JWT settings through the security configuration
-        if hasattr(config, 'security'):
+        if hasattr(config, "security"):
             security_config = config.security
         else:
             # Fallback if config is passed directly as SecurityConfig
@@ -63,10 +67,10 @@ class KeyManager:
         self.secret_key = security_config.jwt_secret_key
 
         # Key storage
-        self._private_key = None
-        self._public_key = None
-        self._secret_key = None
-        self._key_generated_at = None
+        self._private_key: JWTPrivateKey | None = None
+        self._public_key: JWTPublicKey | None = None
+        self._secret_key: bytes | None = None
+        self._key_generated_at: datetime | None = None
 
         logger.info(f"KeyManager initialized with algorithm: {self.algorithm}")
 
@@ -85,7 +89,7 @@ class KeyManager:
             logger.error(f"Failed to initialize KeyManager: {e}")
             return False
 
-    async def _initialize_symmetric_key(self):
+    async def _initialize_symmetric_key(self) -> None:
         """Initialize symmetric key (HS256)"""
         if self.secret_key:
             # Use configured key
@@ -98,7 +102,7 @@ class KeyManager:
 
         self._key_generated_at = utc_now()
 
-    async def _initialize_asymmetric_keys(self):
+    async def _initialize_asymmetric_keys(self) -> None:
         """Initialize asymmetric key pair (RS256/ES256)"""
         # Try to load keys from files
         if await self._load_keys_from_files():
@@ -129,16 +133,28 @@ class KeyManager:
             # Read private key
             with open(private_path, 'rb') as f:
                 private_key_data = f.read()
-            self._private_key = serialization.load_pem_private_key(
+            private_key = serialization.load_pem_private_key(
                 private_key_data, password=None, backend=default_backend()
             )
+            if not isinstance(
+                private_key,
+                rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey,
+            ):
+                raise ValueError("JWT private key must be RSA or EC")
+            self._private_key = private_key
 
             # Read public key
             with open(public_path, 'rb') as f:
                 public_key_data = f.read()
-            self._public_key = serialization.load_pem_public_key(
+            public_key = serialization.load_pem_public_key(
                 public_key_data, backend=default_backend()
             )
+            if not isinstance(
+                public_key,
+                rsa.RSAPublicKey | ec.EllipticCurvePublicKey,
+            ):
+                raise ValueError("JWT public key must be RSA or EC")
+            self._public_key = public_key
 
             # Get key generation time (using file modification time)
             self._key_generated_at = datetime.fromtimestamp(
@@ -162,14 +178,26 @@ class KeyManager:
                 return False
 
             # Parse private key
-            self._private_key = serialization.load_pem_private_key(
+            private_key = serialization.load_pem_private_key(
                 private_key_env.encode(), password=None, backend=default_backend()
             )
+            if not isinstance(
+                private_key,
+                rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey,
+            ):
+                raise ValueError("JWT private key must be RSA or EC")
+            self._private_key = private_key
 
             # Parse public key
-            self._public_key = serialization.load_pem_public_key(
+            public_key = serialization.load_pem_public_key(
                 public_key_env.encode(), backend=default_backend()
             )
+            if not isinstance(
+                public_key,
+                rsa.RSAPublicKey | ec.EllipticCurvePublicKey,
+            ):
+                raise ValueError("JWT public key must be RSA or EC")
+            self._public_key = public_key
 
             self._key_generated_at = utc_now()
             return True
@@ -197,10 +225,12 @@ class KeyManager:
         """
         try:
             if self.algorithm == "RS256":
-                private_key = rsa.generate_private_key(
+                private_key: rsa.RSAPrivateKey | ec.EllipticCurvePrivateKey = (
+                    rsa.generate_private_key(
                     public_exponent=65537,
                     key_size=2048,
                     backend=default_backend()
+                )
                 )
             elif self.algorithm == "ES256":
                 private_key = ec.generate_private_key(
@@ -241,7 +271,9 @@ class KeyManager:
             logger.error(f"Failed to generate key pair: {e}")
             raise
 
-    async def _save_keys_to_files(self, private_pem: bytes, public_pem: bytes):
+    async def _save_keys_to_files(
+        self, private_pem: bytes, public_pem: bytes
+    ) -> None:
         """Save keys to files"""
         try:
             # Ensure directories exist
@@ -267,14 +299,14 @@ class KeyManager:
             logger.error(f"Failed to save keys to files: {e}")
             raise
 
-    def get_private_key(self):
+    def get_private_key(self) -> JWTPrivateKey | bytes | None:
         """Get private key for signing"""
         if self.algorithm == "HS256":
             return self._secret_key
         else:
             return self._private_key
 
-    def get_public_key(self):
+    def get_public_key(self) -> JWTPublicKey | bytes | None:
         """Get public key for verification"""
         if self.algorithm == "HS256":
             return self._secret_key
@@ -313,7 +345,7 @@ class KeyManager:
             logger.error(f"Key rotation failed: {e}")
             return False
 
-    async def get_key_info(self) -> dict:
+    async def get_key_info(self) -> dict[str, object]:
         """Get key information"""
         return {
             "algorithm": self.algorithm,

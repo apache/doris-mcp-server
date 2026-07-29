@@ -31,6 +31,7 @@ import sys
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, Literal
 
 from .redaction import SensitiveDataFilter
 
@@ -40,14 +41,19 @@ _sensitive_data_filter = SensitiveDataFilter()
 class TimestampedFormatter(logging.Formatter):
     """Custom formatter with enhanced timestamp and structured format"""
 
-    def __init__(self, fmt=None, datefmt=None, style='%'):
+    def __init__(
+        self,
+        fmt: str | None = None,
+        datefmt: str | None = None,
+        style: Literal["%", "{", "$"] = "%",
+    ) -> None:
         if fmt is None:
             fmt = "%(asctime)s.%(msecs)03d %(level_aligned)s %(name)s:%(lineno)d - %(message)s"
         if datefmt is None:
             datefmt = "%Y-%m-%d %H:%M:%S"
         super().__init__(fmt, datefmt, style)
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord) -> str:
         """Format log record with enhanced information and proper alignment"""
         # Add process info if available
         if hasattr(record, 'process') and record.process:
@@ -86,10 +92,10 @@ class LevelBasedFileHandler(logging.Handler):
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         # Create handlers for different log levels
-        self.handlers = {}
+        self.handlers: dict[str, logging.Handler] = {}
         self._setup_level_handlers()
 
-    def _setup_level_handlers(self):
+    def _setup_level_handlers(self) -> None:
         """Setup rotating file handlers for different log levels"""
         level_files = {
             'DEBUG': 'debug.log',
@@ -113,7 +119,7 @@ class LevelBasedFileHandler(logging.Handler):
             handler.setLevel(getattr(logging, level))
             self.handlers[level] = handler
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         """Emit log record to appropriate level-based file"""
         level_name = record.levelname
         if level_name in self.handlers:
@@ -122,7 +128,7 @@ class LevelBasedFileHandler(logging.Handler):
             except Exception:
                 self.handleError(record)
 
-    def close(self):
+    def close(self) -> None:
         """Close all handlers"""
         for handler in self.handlers.values():
             handler.close()
@@ -144,11 +150,11 @@ class LogCleanupManager:
         self.log_dir = Path(log_dir)
         self.max_age_days = max_age_days
         self.cleanup_interval_hours = cleanup_interval_hours
-        self.cleanup_thread = None
+        self.cleanup_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
-        self.logger = None
+        self.logger: logging.Logger | None = None
 
-    def start_cleanup_scheduler(self):
+    def start_cleanup_scheduler(self) -> None:
         """Start the cleanup scheduler in a background thread"""
         if self.cleanup_thread and self.cleanup_thread.is_alive():
             return
@@ -163,7 +169,7 @@ class LogCleanupManager:
 
         self.logger.info(f"Log cleanup scheduler started - cleanup every {self.cleanup_interval_hours}h, max age {self.max_age_days} days")
 
-    def stop_cleanup_scheduler(self):
+    def stop_cleanup_scheduler(self) -> None:
         """Stop the cleanup scheduler"""
         if self.cleanup_thread and self.cleanup_thread.is_alive():
             self.stop_event.set()
@@ -171,7 +177,7 @@ class LogCleanupManager:
             if self.logger:
                 self.logger.info("Log cleanup scheduler stopped")
 
-    def _cleanup_loop(self):
+    def _cleanup_loop(self) -> None:
         """Background loop for periodic cleanup"""
         while not self.stop_event.is_set():
             try:
@@ -186,7 +192,7 @@ class LogCleanupManager:
                 # Sleep for 5 minutes before retrying
                 self.stop_event.wait(300)
 
-    def cleanup_old_logs(self):
+    def cleanup_old_logs(self) -> None:
         """Clean up old log files based on age"""
         if not self.log_dir.exists():
             return
@@ -194,7 +200,7 @@ class LogCleanupManager:
         current_time = datetime.now()
         cutoff_time = current_time - timedelta(days=self.max_age_days)
 
-        cleaned_files = []
+        cleaned_files: list[str] = []
         cleaned_size = 0
 
         # Pattern for log files (including backup files)
@@ -224,12 +230,12 @@ class LogCleanupManager:
             self.logger.info(f"Cleaned up {len(cleaned_files)} old log files, freed {size_mb:.2f} MB")
             self.logger.debug(f"Cleaned files: {', '.join(cleaned_files)}")
 
-    def get_cleanup_stats(self) -> dict:
+    def get_cleanup_stats(self) -> dict[str, Any]:
         """Get statistics about log files and cleanup status"""
         if not self.log_dir.exists():
             return {"error": "Log directory does not exist"}
 
-        stats = {
+        stats: dict[str, Any] = {
             "log_directory": str(self.log_dir.absolute()),
             "max_age_days": self.max_age_days,
             "cleanup_interval_hours": self.cleanup_interval_hours,
@@ -243,8 +249,8 @@ class LogCleanupManager:
 
         current_time = datetime.now()
         cutoff_time = current_time - timedelta(days=self.max_age_days)
-        oldest_time = None
-        newest_time = None
+        oldest_time: datetime | None = None
+        newest_time: datetime | None = None
 
         log_patterns = ["doris_mcp_server_*.log", "doris_mcp_server_*.log.*"]
 
@@ -281,12 +287,11 @@ class LogCleanupManager:
 class DorisLoggerManager:
     """Centralized logger manager for Doris MCP Server"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.is_initialized = False
-        self.log_dir = None
-        self.config = None
-        self.loggers = {}
-        self.cleanup_manager = None
+        self.log_dir: Path | None = None
+        self.loggers: dict[str, logging.Logger] = {}
+        self.cleanup_manager: LogCleanupManager | None = None
 
     def setup_logging(self,
                      level: str = "INFO",
@@ -343,7 +348,7 @@ class DorisLoggerManager:
         # Set root logger level
         root_logger.setLevel(logging.DEBUG)  # Allow all levels, handlers will filter
 
-        handlers = []
+        handlers: list[logging.Handler] = []
 
         # Console handler
         if enable_console:
@@ -448,7 +453,7 @@ class DorisLoggerManager:
             logger.warning(f"Could not create log directory '{log_dir}' - stdio mode fallback enabled")
         logger.info("=" * 80)
 
-    def _setup_package_loggers(self, level: str):
+    def _setup_package_loggers(self, level: str) -> None:
         """Setup specific loggers for different modules"""
         package_loggers = [
             "doris_mcp_server",
@@ -487,7 +492,7 @@ class DorisLoggerManager:
         """Get the audit logger"""
         return logging.getLogger("audit")
 
-    def log_system_info(self):
+    def log_system_info(self) -> None:
         """Log system information for debugging"""
         logger = self.get_logger("doris_mcp_server.system")
         logger.info("System Information:")
@@ -502,14 +507,14 @@ class DorisLoggerManager:
             value = os.getenv(var, "Not Set")
             logger.info(f"Environment {var}: {value}")
 
-    def get_cleanup_stats(self) -> dict:
+    def get_cleanup_stats(self) -> dict[str, Any]:
         """Get log cleanup statistics"""
         if self.cleanup_manager:
             return self.cleanup_manager.get_cleanup_stats()
         else:
             return {"error": "Log cleanup is not enabled"}
 
-    def manual_cleanup(self) -> dict:
+    def manual_cleanup(self) -> dict[str, Any]:
         """Manually trigger log cleanup and return statistics"""
         if self.cleanup_manager:
             self.cleanup_manager.cleanup_old_logs()
@@ -517,7 +522,7 @@ class DorisLoggerManager:
         else:
             return {"error": "Log cleanup is not enabled"}
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Shutdown logging system"""
         if not self.is_initialized:
             return
@@ -612,22 +617,22 @@ def get_audit_logger() -> logging.Logger:
     return _logger_manager.get_audit_logger()
 
 
-def log_system_info():
+def log_system_info() -> None:
     """Log system information for debugging"""
     _logger_manager.log_system_info()
 
 
-def get_cleanup_stats() -> dict:
+def get_cleanup_stats() -> dict[str, Any]:
     """Get log cleanup statistics"""
     return _logger_manager.get_cleanup_stats()
 
 
-def manual_cleanup() -> dict:
+def manual_cleanup() -> dict[str, Any]:
     """Manually trigger log cleanup and return statistics"""
     return _logger_manager.manual_cleanup()
 
 
-def shutdown_logging():
+def shutdown_logging() -> None:
     """Shutdown logging system"""
     _logger_manager.shutdown()
 

@@ -97,8 +97,8 @@ class TokenSecurityMiddleware:
         if forwarded_for:
             # Take the first IP (original client)
             client_ip = forwarded_for.split(',')[0].strip()
-        elif request.headers.get('X-Real-IP'):
-            client_ip = request.headers.get('X-Real-IP')
+        elif real_ip := request.headers.get("X-Real-IP"):
+            client_ip = real_ip
         else:
             # Direct connection
             client_ip = request.client.host if request.client else "unknown"

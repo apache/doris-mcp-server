@@ -30,13 +30,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
 from .._version import __version__
-
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    load_dotenv = None
-
 from .logger import get_logger
 from .secret_policy import (
     is_static_token_environment_variable,
@@ -480,7 +476,7 @@ class SecurityConfig:
     oauth_roles_claim: str = "roles"  # Custom claim for roles
     oauth_default_roles: list[str] = field(default_factory=lambda: ["oauth_user"])
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize default OAuth scopes based on provider"""
         if not self.oauth_scopes and self.oauth_provider:
             if self.oauth_provider == "google":
@@ -607,6 +603,7 @@ class DorisConfig:
     mcp_allowed_hosts: list[str] = field(default_factory=list)
     mcp_allowed_origins: list[str] = field(default_factory=list)
     transport: str = "stdio"
+    workers: int = 1
 
     # Temporary files configuration
     temp_files_dir: str = "tmp"  # Temporary files directory for Explain and Profile outputs
@@ -622,6 +619,16 @@ class DorisConfig:
 
     # Custom configuration
     custom_config: dict[str, Any] = field(default_factory=dict)
+    effective_auth: EffectiveAuthConfig | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
+    _auth_inputs: AuthConfigInputs | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     @classmethod
     def from_file(cls, config_path: str) -> "DorisConfig":
@@ -656,26 +663,23 @@ class DorisConfig:
                      .env, .env.local, .env.production, .env.development
         """
         # Load .env file
-        if load_dotenv is not None:
-            if env_file:
-                # Load specified .env file
-                if Path(env_file).exists():
-                    load_dotenv(env_file)
-                    logging.getLogger(__name__).info(f"Loaded environment configuration file: {env_file}")
-                else:
-                    logging.getLogger(__name__).warning(f"Environment configuration file does not exist: {env_file}")
+        if env_file:
+            # Load specified .env file
+            if Path(env_file).exists():
+                load_dotenv(env_file)
+                logging.getLogger(__name__).info(f"Loaded environment configuration file: {env_file}")
             else:
-                # Load .env files in priority order
-                env_files = [".env", ".env.local", ".env.production", ".env.development"]
-                for env_path in env_files:
-                    if Path(env_path).exists():
-                        load_dotenv(env_path, override=False)
-                        logging.getLogger(__name__).info(f"Loaded environment configuration file: {env_path}")
-                        break
-                else:
-                    logging.getLogger(__name__).info("No .env configuration file found, using system environment variables")
+                logging.getLogger(__name__).warning(f"Environment configuration file does not exist: {env_file}")
         else:
-            logging.getLogger(__name__).warning("python-dotenv not installed, cannot load .env files")
+            # Load .env files in priority order
+            env_files = [".env", ".env.local", ".env.production", ".env.development"]
+            for env_path in env_files:
+                if Path(env_path).exists():
+                    load_dotenv(env_path, override=False)
+                    logging.getLogger(__name__).info(f"Loaded environment configuration file: {env_path}")
+                    break
+            else:
+                logging.getLogger(__name__).info("No .env configuration file found, using system environment variables")
 
         config = cls()
 
@@ -1358,7 +1362,7 @@ class DorisConfig:
             "custom": self.custom_config,
         }
 
-    def save_to_file(self, config_path: str):
+    def save_to_file(self, config_path: str) -> None:
         """Save configuration to file"""
         config_file = Path(config_path)
         config_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1998,7 +2002,7 @@ def normalize_effective_auth_config(
 
 def get_effective_auth_config(config: DorisConfig) -> EffectiveAuthConfig:
     """Return previously normalized auth config."""
-    effective = getattr(config, "effective_auth", None)
+    effective = config.effective_auth
     if effective is None:
         raise AuthConfigError("Effective auth config has not been normalized")
     return effective
@@ -2011,7 +2015,7 @@ class ConfigManager:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-    def setup_logging(self):
+    def setup_logging(self) -> None:
         """Setup logging configuration using enhanced logger"""
         import sys
 
@@ -2070,7 +2074,7 @@ class ConfigManager:
         self.logger.info("Configuration validation passed")
         return True
 
-    def log_config_summary(self):
+    def log_config_summary(self) -> None:
         """Log configuration summary"""
         summary = self.config.get_config_summary()
         self.logger.info("Configuration Summary:")
@@ -2082,7 +2086,7 @@ class ConfigManager:
         self.logger.info(f"  Monitoring: {summary['monitoring']}")
 
 
-def create_default_config_file(config_path: str):
+def create_default_config_file(config_path: str) -> None:
     """Create default configuration file"""
     config = DorisConfig()
     config.save_to_file(config_path)

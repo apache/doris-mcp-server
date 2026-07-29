@@ -23,10 +23,10 @@ import re
 import statistics
 import time
 from datetime import datetime
-from typing import Any, cast
+from typing import Any
 
 from .config import DorisConfig
-from .db import DorisConnectionManager
+from .db import DorisConnection, DorisConnectionManager
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -43,7 +43,11 @@ logger = get_logger(__name__)
 class DataQualityTools:
     """Atomic data quality analysis tools"""
 
-    def __init__(self, connection_manager: DorisConnectionManager, config: DorisConfig = None):
+    def __init__(
+        self,
+        connection_manager: DorisConnectionManager,
+        config: DorisConfig | None = None,
+    ):
         self.connection_manager = connection_manager
         self.config = config or DorisConfig.from_env()
         logger.info("DataQualityTools initialized with atomic tools")
@@ -96,7 +100,7 @@ class DataQualityTools:
 
                 execution_time = time.time() - start_time
 
-                result = {
+                result: dict[str, Any] = {
                     "table_name": full_table_name,
                     "analysis_timestamp": datetime.now().isoformat(),
                     "row_count": table_info["row_count"],
@@ -274,7 +278,7 @@ class DataQualityTools:
                 if not table_info:
                     return {"error": f"Table {full_table_name} not found"}
 
-                result = {
+                result: dict[str, Any] = {
                     "table_name": full_table_name,
                     "analysis_timestamp": datetime.now().isoformat()
                 }
@@ -316,7 +320,11 @@ class DataQualityTools:
         # SECURITY FIX: Use build_table_reference for safe identifier handling
         return build_table_reference(table_name, db_name, catalog_name)
 
-    async def _get_table_basic_info(self, connection, table_name: str) -> dict | None:
+    async def _get_table_basic_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> dict[str, Any] | None:
         """Get basic table information"""
         try:
             # SECURITY FIX: table_name should already be validated by _build_full_table_name
@@ -338,7 +346,13 @@ class DataQualityTools:
             logger.warning(f"Failed to get table basic info: {str(e)}")
             return None
 
-    async def _get_table_columns_info(self, connection, table_name: str, catalog_name: str | None, db_name: str | None) -> list[dict]:
+    async def _get_table_columns_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        catalog_name: str | None,
+        db_name: str | None,
+    ) -> list[dict[str, Any]]:
         """Get table column information"""
         try:
             # SECURITY FIX: Build safe table reference and pass auth_context
@@ -368,7 +382,12 @@ class DataQualityTools:
             logger.warning(f"Failed to get table columns info: {str(e)}")
             return []
 
-    async def _get_table_partitions(self, connection, table_name: str, db_name: str | None = None) -> list[dict]:
+    async def _get_table_partitions(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        db_name: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Get table partition information"""
         try:
             # SECURITY FIX: Validate identifiers and use parameterized query
@@ -384,8 +403,8 @@ class DataQualityTools:
                 return []
 
             # Build parameterized query
-            params = []
-            where_conditions = []
+            params: list[str] = []
+            where_conditions: list[str] = []
 
             if db_name:
                 where_conditions.append("TABLE_SCHEMA = %s")
@@ -430,7 +449,12 @@ class DataQualityTools:
             logger.warning(f"Failed to get table partitions: {str(e)}")
             return []
 
-    async def _get_table_bucket_info(self, connection, table_name: str, db_name: str | None = None) -> dict | None:
+    async def _get_table_bucket_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        db_name: str | None = None,
+    ) -> dict[str, Any] | None:
         """Get table buckets information"""
         try:
             # Query bucket information
@@ -440,7 +464,7 @@ class DataQualityTools:
                 return None
 
             pattern = r"DISTRIBUTED BY (HASH\(([^)]+)\)|RANDOM) BUCKETS (\d+|AUTO)"
-            matches = re.findall(pattern, cast(str, ddl_statement))
+            matches = re.findall(pattern, ddl_statement)
 
             if matches:
                 dist_type, columns, buckets = matches[0]
@@ -456,12 +480,16 @@ class DataQualityTools:
                         "type": "RANDOM",
                         "bucket_num": buckets,
                     }
+            return None
         except Exception as e:
             logger.warning(f"Failed to get table buckets: {str(e)}")
             return None
 
     async def _get_table_ddl(
-        self, connection, table_name: str, db_name: str | None
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        db_name: str | None,
     ) -> str | None:
         """Get table DDL statement"""
         try:
@@ -470,13 +498,18 @@ class DataQualityTools:
             auth_context = get_auth_context()
             result = await connection.execute(query, auth_context=auth_context)
             if result.data:
-                return result.data[0].get("Create Table")
+                ddl_statement = result.data[0].get("Create Table")
+                return str(ddl_statement) if ddl_statement is not None else None
             return None
         except Exception as e:
             logger.error(f"Error getting DDL for table {table_name}: {e}")
             return None
 
-    async def _get_table_size_info(self, connection, table_name: str) -> dict[str, Any]:
+    async def _get_table_size_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> dict[str, Any]:
         """Get table size information"""
         try:
             # SECURITY FIX: Validate and use parameterized query
@@ -516,11 +549,23 @@ class DataQualityTools:
             logger.warning(f"Failed to get table size info: {str(e)}")
             return {"engine": "Unknown", "estimated_rows": 0, "data_length": 0, "index_length": 0, "total_size": 0}
 
-    async def _determine_sampling_strategy(self, connection, table_name: str, total_rows: int, sample_size: int) -> dict[str, Any]:
+    async def _determine_sampling_strategy(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        total_rows: int,
+        sample_size: int,
+    ) -> dict[str, Any]:
         """Determine sampling strategy (compatibility version)"""
         return await self._determine_optimized_sampling_strategy(connection, table_name, total_rows, sample_size)
 
-    async def _determine_optimized_sampling_strategy(self, connection, table_name: str, total_rows: int, sample_size: int) -> dict[str, Any]:
+    async def _determine_optimized_sampling_strategy(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        total_rows: int,
+        sample_size: int,
+    ) -> dict[str, Any]:
         """Determine optimized sampling strategy"""
         safe_sample_size = validate_integer(
             sample_size,
@@ -589,8 +634,15 @@ class DataQualityTools:
                 "original_sample_size": safe_sample_size
             }
 
-    async def _analyze_columns_batch(self, connection, table_name: str, columns_info: list[dict],
-                                   sampling_info: dict, analysis_types: list[str], detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_columns_batch(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns_info: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+        analysis_types: list[str],
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Batch analyze multiple columns (optimized version)"""
         result = {}
         table_expr = sampling_info.get("sample_table_expression", table_name)
@@ -623,8 +675,15 @@ class DataQualityTools:
             logger.info("🔄 Falling back to sequential analysis...")
             return await self._analyze_columns_sequential(connection, table_name, columns_info, sampling_info, analysis_types, detailed_response)
 
-    async def _analyze_columns_sequential(self, connection, table_name: str, columns_info: list[dict],
-                                        sampling_info: dict, analysis_types: list[str], detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_columns_sequential(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns_info: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+        analysis_types: list[str],
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Sequential column analysis (fallback solution)"""
         result = {}
 
@@ -640,7 +699,12 @@ class DataQualityTools:
 
         return result
 
-    async def _analyze_completeness_batch(self, connection, table_expr: str, columns_info: list[dict]) -> dict[str, Any]:
+    async def _analyze_completeness_batch(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        columns_info: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Batch completeness analysis"""
         try:
             # Build batch completeness query
@@ -704,7 +768,13 @@ class DataQualityTools:
             logger.error(f"❌ Batch completeness analysis failed: {str(e)}")
             raise
 
-    async def _analyze_distribution_batch(self, connection, table_expr: str, columns_info: list[dict], detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_distribution_batch(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        columns_info: list[dict[str, Any]],
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Batch distribution analysis"""
         try:
             # Classify columns
@@ -738,7 +808,12 @@ class DataQualityTools:
             logger.error(f"❌ Batch distribution analysis failed: {str(e)}")
             raise
 
-    async def _analyze_numeric_distributions_batch(self, connection, table_expr: str, numeric_columns: list[dict]) -> dict[str, Any]:
+    async def _analyze_numeric_distributions_batch(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        numeric_columns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Batch numeric distribution analysis"""
         try:
             select_clauses = []
@@ -796,7 +871,12 @@ class DataQualityTools:
             logger.error(f"❌ Batch numeric analysis failed: {str(e)}")
             return {}
 
-    async def _analyze_categorical_distributions_batch(self, connection, table_expr: str, categorical_columns: list[dict]) -> dict[str, Any]:
+    async def _analyze_categorical_distributions_batch(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        categorical_columns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Batch categorical distribution analysis"""
         categorical_results = {}
 
@@ -836,7 +916,12 @@ class DataQualityTools:
 
         return categorical_results
 
-    async def _analyze_temporal_distributions_batch(self, connection, table_expr: str, temporal_columns: list[dict]) -> dict[str, Any]:
+    async def _analyze_temporal_distributions_batch(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        temporal_columns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Batch temporal distribution analysis"""
         try:
             select_clauses = []
@@ -887,7 +972,13 @@ class DataQualityTools:
             logger.error(f"❌ Batch temporal analysis failed: {str(e)}")
             return {}
 
-    async def _analyze_completeness(self, connection, table_name: str, columns_info: list[dict], sampling_info: dict) -> dict[str, Any]:
+    async def _analyze_completeness(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns_info: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze column completeness"""
         logger.info(f"🔍 Analyzing completeness for {len(columns_info)} columns")
 
@@ -960,7 +1051,14 @@ class DataQualityTools:
             }
         }
 
-    async def _analyze_distribution(self, connection, table_name: str, columns_info: list[dict], sampling_info: dict, detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_distribution(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns_info: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Analyze column distribution"""
         logger.info(f"🔍 Analyzing distribution for {len(columns_info)} columns")
 
@@ -1021,7 +1119,13 @@ class DataQualityTools:
         temporal_types = ["date", "datetime", "timestamp", "time"]
         return any(tt in data_type.lower() for tt in temporal_types)
 
-    async def _analyze_numeric_distributions(self, connection, table_expr: str, numeric_columns: list[dict], detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_numeric_distributions(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        numeric_columns: list[dict[str, Any]],
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Analyze numeric column distributions"""
         numeric_analysis = {}
 
@@ -1067,7 +1171,13 @@ class DataQualityTools:
 
         return numeric_analysis
 
-    async def _analyze_categorical_distributions(self, connection, table_expr: str, categorical_columns: list[dict], detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_categorical_distributions(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        categorical_columns: list[dict[str, Any]],
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Analyze categorical column distributions"""
         categorical_analysis = {}
 
@@ -1128,7 +1238,13 @@ class DataQualityTools:
 
         return categorical_analysis
 
-    async def _analyze_temporal_distributions(self, connection, table_expr: str, temporal_columns: list[dict], detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_temporal_distributions(
+        self,
+        connection: DorisConnection,
+        table_expr: str,
+        temporal_columns: list[dict[str, Any]],
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Analyze temporal column distributions"""
         temporal_analysis = {}
 
@@ -1176,7 +1292,14 @@ class DataQualityTools:
 
         return temporal_analysis
 
-    async def _analyze_physical_distribution(self, connection, table_name: str, catalog_name: str | None, db_name: str | None, detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_physical_distribution(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        catalog_name: str | None,
+        db_name: str | None,
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Analyze physical distribution"""
         try:
             # Get partition information
@@ -1219,7 +1342,12 @@ class DataQualityTools:
             logger.warning(f"Failed to analyze physical distribution: {str(e)}")
             return {"error": str(e)}
 
-    async def _analyze_storage_info(self, connection, table_name: str, detailed_response: bool) -> dict[str, Any]:
+    async def _analyze_storage_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        detailed_response: bool,
+    ) -> dict[str, Any]:
         """Analyze storage information"""
         try:
             # Get storage information

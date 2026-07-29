@@ -22,11 +22,17 @@ Supports independent encapsulation implementation of Resources, Tools, and Promp
 Supports both stdio and streamable HTTP startup modes
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import logging
 import os
 import sys
+
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.types import Receive, Scope, Send
 
 from ._version import __version__
 from .health import liveness_payload, readiness_payload
@@ -78,8 +84,6 @@ def _multiworker_environment(
     }
 
 
-
-
 class DorisServer:
     """Apache Doris MCP Server main class"""
 
@@ -90,12 +94,21 @@ class DorisServer:
         self.security_manager = DorisSecurityManager(config)
 
         # Initialize connection manager, pass in security manager and token manager for token-bound DB config
-        token_manager = self.security_manager.auth_provider.token_manager if hasattr(self.security_manager, 'auth_provider') and hasattr(self.security_manager.auth_provider, 'token_manager') else None
-        self.connection_manager = DorisConnectionManager(config, self.security_manager, token_manager)
+        token_manager = (
+            self.security_manager.auth_provider.token_manager
+            if hasattr(self.security_manager, "auth_provider")
+            and hasattr(self.security_manager.auth_provider, "token_manager")
+            else None
+        )
+        self.connection_manager = DorisConnectionManager(
+            config, self.security_manager, token_manager
+        )
 
         # Set connection manager reference in security manager for database validation
         self.security_manager.connection_manager = self.connection_manager
-        self.security_manager.auth_provider.configure_doris_oauth(self.connection_manager)
+        self.security_manager.auth_provider.configure_doris_oauth(
+            self.connection_manager
+        )
 
         # Initialize independent managers
         self.resources_manager = DorisResourcesManager(self.connection_manager)
@@ -104,6 +117,7 @@ class DorisServer:
 
         # Import here to avoid circular imports
         from .utils.logger import get_logger
+
         self.logger = get_logger(f"{__name__}.DorisServer")
         self.server = create_doris_mcp_server(
             resources_manager=self.resources_manager,
@@ -114,7 +128,7 @@ class DorisServer:
             logger=self.logger,
         )
 
-    async def start_stdio(self):
+    async def start_stdio(self) -> None:
         """Start stdio transport mode"""
         self.logger.info("Starting Doris MCP Server (stdio mode)")
 
@@ -152,14 +166,19 @@ class DorisServer:
 
                 # Try to get more error information
                 import traceback
+
                 self.logger.error("Complete error stack:")
                 self.logger.error(traceback.format_exc())
 
                 # If it's ExceptionGroup, try to parse
-                if hasattr(inner_e, 'exceptions'):
-                    self.logger.error(f"ExceptionGroup contains {len(inner_e.exceptions)} exceptions:")
+                if hasattr(inner_e, "exceptions"):
+                    self.logger.error(
+                        f"ExceptionGroup contains {len(inner_e.exceptions)} exceptions:"
+                    )
                     for i, exc in enumerate(inner_e.exceptions):
-                        self.logger.error(f"  Exception {i+1}: {type(exc).__name__}: {exc}")
+                        self.logger.error(
+                            f"  Exception {i + 1}: {type(exc).__name__}: {exc}"
+                        )
 
                 raise inner_e
 
@@ -168,9 +187,12 @@ class DorisServer:
             self.logger.error(f"Error type: {type(e)}")
             raise
 
-
-
-    async def start_http(self, host: str = os.getenv("SERVER_HOST", _default_config.server_host), port: int = os.getenv("SERVER_PORT", _default_config.server_port), workers: int = 1):
+    async def start_http(
+        self,
+        host: str = os.getenv("SERVER_HOST", _default_config.server_host),
+        port: int = int(os.getenv("SERVER_PORT", str(_default_config.server_port))),
+        workers: int = 1,
+    ) -> None:
         """Start Streamable HTTP transport mode with workers support"""
         effective_auth = get_effective_auth_config(self.config)
         bind_warning = validate_http_bind_auth_policy(
@@ -181,12 +203,11 @@ class DorisServer:
                 self.config.security.allow_unauthenticated_non_loopback
             ),
         )
-        if (
-            bind_warning
-            and bind_warning not in effective_auth.auth_config_warnings
-        ):
+        if bind_warning and bind_warning not in effective_auth.auth_config_warnings:
             self.logger.warning(bind_warning)
-        self.logger.info(f"Starting Doris MCP Server (Streamable HTTP mode) - {host}:{port}, workers: {workers}")
+        self.logger.info(
+            f"Starting Doris MCP Server (Streamable HTTP mode) - {host}:{port}, workers: {workers}"
+        )
 
         try:
             # Initialize security manager first (includes JWT setup if enabled)
@@ -194,9 +215,13 @@ class DorisServer:
             self.logger.info("Security manager initialization completed")
 
             # For HTTP mode, try to initialize global connection pool with graceful degradation
-            global_pool_created = await self.connection_manager.initialize_for_http_mode()
+            global_pool_created = (
+                await self.connection_manager.initialize_for_http_mode()
+            )
             if global_pool_created:
-                self.logger.info("Global database connection pool available for HTTP mode")
+                self.logger.info(
+                    "Global database connection pool available for HTTP mode"
+                )
             else:
                 effective_auth = get_effective_auth_config(self.config)
                 if effective_auth.enable_doris_oauth_auth:
@@ -204,7 +229,9 @@ class DorisServer:
                         "Doris OAuth requires the configured service/global Doris account "
                         "to initialize successfully in Phase 3"
                     )
-                self.logger.info("HTTP mode running without global database pool, will use token-bound configurations")
+                self.logger.info(
+                    "HTTP mode running without global database pool, will use token-bound configurations"
+                )
             await self.tools_manager.start()
 
             # Use the SDK v2 dual-era Streamable HTTP manager.
@@ -214,7 +241,7 @@ class DorisServer:
             import uvicorn
             from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
             from starlette.applications import Starlette
-            from starlette.responses import JSONResponse, Response
+            from starlette.responses import JSONResponse
             from starlette.routing import Route
 
             # Create session manager
@@ -229,10 +256,12 @@ class DorisServer:
                 ),
             )
 
-            self.logger.info(f"StreamableHTTP session manager created, will start at http://{host}:{port}")
+            self.logger.info(
+                f"StreamableHTTP session manager created, will start at http://{host}:{port}"
+            )
 
             # Health check endpoint
-            async def health_check(request):
+            async def health_check(request: Request) -> Response:
                 return JSONResponse(
                     liveness_payload(
                         service=self.config.server_name,
@@ -241,7 +270,7 @@ class DorisServer:
                     )
                 )
 
-            async def live_check(request):
+            async def live_check(request: Request) -> Response:
                 return JSONResponse(
                     liveness_payload(
                         service=self.config.server_name,
@@ -249,7 +278,7 @@ class DorisServer:
                     )
                 )
 
-            async def readiness_check(request):
+            async def readiness_check(request: Request) -> Response:
                 payload, status_code = await readiness_payload(
                     self.connection_manager,
                     service=self.config.server_name,
@@ -259,50 +288,53 @@ class DorisServer:
 
             # OAuth endpoints
             from .auth.oauth_handlers import OAuthHandlers
+
             oauth_handlers = OAuthHandlers(self.security_manager)
 
-            async def oauth_login(request):
+            async def oauth_login(request: Request) -> Response:
                 return await oauth_handlers.handle_login(request)
 
-            async def oauth_callback(request):
+            async def oauth_callback(request: Request) -> Response:
                 return await oauth_handlers.handle_callback(request)
 
-            async def oauth_provider_info(request):
+            async def oauth_provider_info(request: Request) -> Response:
                 return await oauth_handlers.handle_provider_info(request)
 
-            async def oauth_protected_resource_metadata(request):
-                return await oauth_handlers.handle_protected_resource_metadata(
-                    request
-                )
+            async def oauth_protected_resource_metadata(
+                request: Request,
+            ) -> Response:
+                return await oauth_handlers.handle_protected_resource_metadata(request)
 
-            async def oauth_demo(request):
+            async def oauth_demo(request: Request) -> Response:
                 return await oauth_handlers.handle_demo_page(request)
 
             # Token management endpoints
             from .auth.token_handlers import TokenHandlers
+
             token_handlers = TokenHandlers(self.security_manager, self.config)
 
-            async def token_create(request):
+            async def token_create(request: Request) -> Response:
                 return await token_handlers.handle_create_token(request)
 
-            async def token_revoke(request):
+            async def token_revoke(request: Request) -> Response:
                 return await token_handlers.handle_revoke_token(request)
 
-            async def token_list(request):
+            async def token_list(request: Request) -> Response:
                 return await token_handlers.handle_list_tokens(request)
 
-            async def token_stats(request):
+            async def token_stats(request: Request) -> Response:
                 return await token_handlers.handle_token_stats(request)
 
-            async def token_cleanup(request):
+            async def token_cleanup(request: Request) -> Response:
                 return await token_handlers.handle_cleanup_tokens(request)
 
-            async def token_management(request):
+            async def token_management(request: Request) -> Response:
                 return await token_handlers.handle_management_page(request)
 
             doris_oauth_handlers = None
             if self.security_manager.auth_provider.doris_oauth_provider:
                 from .auth.doris_oauth_handlers import DorisOAuthHandlers
+
                 doris_oauth_handlers = DorisOAuthHandlers(
                     self.security_manager.auth_provider.doris_oauth_provider
                 )
@@ -324,27 +356,31 @@ class DorisServer:
                 Route("/ready", readiness_check, methods=["GET"]),
             ]
             if effective_auth.enable_external_oauth_auth:
-                routes.extend([
-                    Route(
-                        "/.well-known/oauth-protected-resource",
-                        oauth_protected_resource_metadata,
-                        methods=["GET"],
-                    ),
-                    Route("/auth/login", oauth_login, methods=["GET"]),
-                    Route("/auth/callback", oauth_callback, methods=["GET"]),
-                    Route("/auth/provider", oauth_provider_info, methods=["GET"]),
-                    Route("/auth/demo", oauth_demo, methods=["GET"]),
-                ])
+                routes.extend(
+                    [
+                        Route(
+                            "/.well-known/oauth-protected-resource",
+                            oauth_protected_resource_metadata,
+                            methods=["GET"],
+                        ),
+                        Route("/auth/login", oauth_login, methods=["GET"]),
+                        Route("/auth/callback", oauth_callback, methods=["GET"]),
+                        Route("/auth/provider", oauth_provider_info, methods=["GET"]),
+                        Route("/auth/demo", oauth_demo, methods=["GET"]),
+                    ]
+                )
             if effective_auth.enable_doris_oauth_auth and doris_oauth_handlers:
                 routes.extend(doris_oauth_handlers.routes())
-            routes.extend([
-                Route("/token/create", token_create, methods=["GET", "POST"]),
-                Route("/token/revoke", token_revoke, methods=["GET", "DELETE"]),
-                Route("/token/list", token_list, methods=["GET"]),
-                Route("/token/stats", token_stats, methods=["GET"]),
-                Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
-                Route("/token/management", token_management, methods=["GET"]),
-            ])
+            routes.extend(
+                [
+                    Route("/token/create", token_create, methods=["GET", "POST"]),
+                    Route("/token/revoke", token_revoke, methods=["GET", "DELETE"]),
+                    Route("/token/list", token_list, methods=["GET"]),
+                    Route("/token/stats", token_stats, methods=["GET"]),
+                    Route("/token/cleanup", token_cleanup, methods=["GET", "POST"]),
+                    Route("/token/management", token_management, methods=["GET"]),
+                ]
+            )
 
             # Create ASGI application - use direct session manager as ASGI app
             starlette_app = Starlette(
@@ -355,7 +391,11 @@ class DorisServer:
 
             from .auth.mcp_auth_middleware import MCPAuthASGIMiddleware
 
-            async def authenticated_mcp_downstream(scope, receive, send):
+            async def authenticated_mcp_downstream(
+                scope: Scope,
+                receive: Receive,
+                send: Send,
+            ) -> None:
                 """Handle authenticated MCP request after auth context is set."""
                 await session_manager.handle_request(scope, receive, send)
 
@@ -366,7 +406,11 @@ class DorisServer:
             )
 
             # Custom ASGI app that keeps auxiliary routes outside MCP auth.
-            async def mcp_app(scope, receive, send):
+            async def mcp_app(
+                scope: Scope,
+                receive: Receive,
+                send: Send,
+            ) -> None:
                 # Handle lifespan events
                 if scope["type"] == "lifespan":
                     await starlette_app(scope, receive, send)
@@ -379,19 +423,25 @@ class DorisServer:
 
                     try:
                         # Handle health check, auth, OAuth, and token management endpoints.
-                        if effective_auth.enable_doris_oauth_auth and path.startswith("/auth/"):
-                            response = JSONResponse({"error": "external_oauth_disabled"}, status_code=404)
+                        if effective_auth.enable_doris_oauth_auth and path.startswith(
+                            "/auth/"
+                        ):
+                            response: Response = JSONResponse(
+                                {"error": "external_oauth_disabled"},
+                                status_code=404,
+                            )
                             await response(scope, receive, send)
                             return
 
                         if (
-                            path.rstrip("/") in {"/health", "/live", "/ready"} or
-                            path.startswith("/auth/") or
-                            path.startswith("/token/") or
-                            path.startswith("/.well-known/") or
-                            path.startswith("/oauth/") or
-                            path == "/doris-login" or
-                            path.startswith("/api/auth/")):
+                            path.rstrip("/") in {"/health", "/live", "/ready"}
+                            or path.startswith("/auth/")
+                            or path.startswith("/token/")
+                            or path.startswith("/.well-known/")
+                            or path.startswith("/oauth/")
+                            or path == "/doris-login"
+                            or path.startswith("/api/auth/")
+                        ):
                             await starlette_app(scope, receive, send)
                             return
 
@@ -407,6 +457,7 @@ class DorisServer:
                     except Exception as e:
                         self.logger.error(f"Error handling request for {path}: {e}")
                         import traceback
+
                         self.logger.error(traceback.format_exc())
                         response = Response("Internal Server Error", status_code=500)
                         await response(scope, receive, send)
@@ -418,7 +469,9 @@ class DorisServer:
             # Choose startup method based on worker count
             if workers > 1:
                 self.logger.info(f"Using multi-process mode with {workers} workers")
-                self.logger.info("Note: Multi-worker mode provides full MCP functionality with independent worker processes")
+                self.logger.info(
+                    "Note: Multi-worker mode provides full MCP functionality with independent worker processes"
+                )
 
                 # Uvicorn workers import ``multiworker_app`` in fresh processes.
                 # Persist the already-resolved parent configuration so CLI
@@ -438,41 +491,43 @@ class DorisServer:
                     host=host,
                     port=port,
                     workers=workers,
-                    log_level="info"
+                    log_level="info",
                 )
 
             else:
                 self.logger.info("Using single-process mode")
                 # Single worker mode, use original logic with session manager lifecycle
                 config = uvicorn.Config(
-                    app=mcp_app,
-                    host=host,
-                    port=port,
-                    log_level="info"
+                    app=mcp_app, host=host, port=port, log_level="info"
                 )
                 server = uvicorn.Server(config)
 
                 # Run session manager and server together
                 async with session_manager.run():
-                    self.logger.info("Session manager started, now starting HTTP server")
+                    self.logger.info(
+                        "Session manager started, now starting HTTP server"
+                    )
                     await server.serve()
 
         except Exception as e:
             self.logger.error(f"Streamable HTTP server startup failed: {e}")
             import traceback
+
             self.logger.error("Complete error stack:")
             self.logger.error(traceback.format_exc())
 
             # If it's ExceptionGroup, try to parse
-            if hasattr(e, 'exceptions'):
-                self.logger.error(f"ExceptionGroup contains {len(e.exceptions)} exceptions:")
+            if hasattr(e, "exceptions"):
+                self.logger.error(
+                    f"ExceptionGroup contains {len(e.exceptions)} exceptions:"
+                )
                 for i, exc in enumerate(e.exceptions):
-                    self.logger.error(f"  Exception {i+1}: {type(exc).__name__}: {exc}")
+                    self.logger.error(
+                        f"  Exception {i + 1}: {type(exc).__name__}: {exc}"
+                    )
             raise
 
-
-
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Shutdown server"""
         self.logger.info("Shutting down Doris MCP Server")
         try:
@@ -488,7 +543,7 @@ class DorisServer:
             self.logger.error(f"Error occurred while shutting down server: {e}")
 
 
-def create_arg_parser():
+def create_arg_parser() -> argparse.ArgumentParser:
     """Create command line argument parser"""
     parser = argparse.ArgumentParser(
         description="Apache Doris MCP Server - Enterprise Database Service",
@@ -506,7 +561,7 @@ Examples:
 
   # Backward compatibility: --db-* parameters are also supported
   python -m doris_mcp_server --transport stdio --db-host localhost --db-port 9030
-        """
+        """,
     )
 
     parser.add_argument(
@@ -534,35 +589,51 @@ Examples:
         "--port",
         type=int,
         default=3000,
-        help="Port number for HTTP mode (default: 3000)"
+        help="Port number for HTTP mode (default: 3000)",
     )
 
     parser.add_argument(
         "--workers",
         type=int,
         default=1,
-        help="Number of worker processes for HTTP mode (default: 1, use 0 for auto-detect CPU cores)"
+        help="Number of worker processes for HTTP mode (default: 1, use 0 for auto-detect CPU cores)",
     )
 
     parser.add_argument(
-        "--doris-host", "--db-host",
+        "--doris-host",
+        "--db-host",
         type=str,
         default=os.getenv("DORIS_HOST", _default_config.database.host),
         help=f"Doris database host address (default: {_default_config.database.host})",
     )
 
     parser.add_argument(
-        "--doris-port", "--db-port", type=int, default=9030, help="Doris database port number (default: 9030)"
+        "--doris-port",
+        "--db-port",
+        type=int,
+        default=9030,
+        help="Doris database port number (default: 9030)",
     )
 
     parser.add_argument(
-        "--doris-user", "--db-user", type=str, default=os.getenv("DORIS_USER", _default_config.database.user), help=f"Doris database username (default: {_default_config.database.user})"
+        "--doris-user",
+        "--db-user",
+        type=str,
+        default=os.getenv("DORIS_USER", _default_config.database.user),
+        help=f"Doris database username (default: {_default_config.database.user})",
     )
 
-    parser.add_argument("--doris-password", "--db-password", type=str, default=os.getenv("DORIS_PASSWORD", ""), help="Doris database password")
+    parser.add_argument(
+        "--doris-password",
+        "--db-password",
+        type=str,
+        default=os.getenv("DORIS_PASSWORD", ""),
+        help="Doris database password",
+    )
 
     parser.add_argument(
-        "--doris-database", "--db-database",
+        "--doris-database",
+        "--db-database",
         type=str,
         default=os.getenv("DORIS_DATABASE", _default_config.database.database),
         help=f"Doris database name (default: {_default_config.database.database})",
@@ -579,7 +650,7 @@ Examples:
     return parser
 
 
-def update_configuration(config: DorisConfig):
+def update_configuration(config: DorisConfig) -> None:
     """Update doris configuration object"""
     # For some arguments, if not specified, environment variables or default configurations will be used as default values
     parser = create_arg_parser()
@@ -587,7 +658,11 @@ def update_configuration(config: DorisConfig):
     argv = sys.argv[1:]
 
     def cli_has(*options: str) -> bool:
-        return any(arg == option or arg.startswith(f"{option}=") for arg in argv for option in options)
+        return any(
+            arg == option or arg.startswith(f"{option}=")
+            for arg in argv
+            for option in options
+        )
 
     # Update config values
     # Command line arguments override configuration (if provided)
@@ -619,12 +694,12 @@ def update_configuration(config: DorisConfig):
         config.logging.level = args.log_level
 
     # workers (add to config for HTTP mode)
-    if hasattr(args, 'workers') and cli_has("--workers"):
+    if hasattr(args, "workers") and cli_has("--workers"):
         config.workers = args.workers
         _mark_source(config, "workers", "cli")
 
 
-async def main():
+async def main() -> int:
     """Main function"""
     # Create configuration - priority: command line arguments > env variables > .env file > default values
     # First load from .env file and environment variables
@@ -635,11 +710,13 @@ async def main():
 
     # Initialize enhanced logging system
     from .utils.config import ConfigManager
+
     config_manager = ConfigManager(config)
     config_manager.setup_logging()
 
     # Get logger with proper configuration
     from .utils.logger import get_logger, log_system_info
+
     logger = get_logger(__name__)
 
     # Log system information for debugging
@@ -669,7 +746,7 @@ async def main():
         if config.transport == "stdio":
             await server.start_stdio()
         elif config.transport == "http":
-            workers = getattr(config, 'workers', effective_auth.effective_workers)
+            workers = getattr(config, "workers", effective_auth.effective_workers)
             await server.start_http(config.server_host, config.server_port, workers)
         else:
             logger.error(f"Unsupported transport protocol: {config.transport}")
@@ -695,12 +772,13 @@ async def main():
 
         # Shutdown logging system
         from .utils.logger import shutdown_logging
+
         shutdown_logging()
 
     return 0
 
 
-def main_sync():
+def main_sync() -> None:
     """Synchronous main function for entry point"""
     exit_code = asyncio.run(main())
     exit(exit_code)

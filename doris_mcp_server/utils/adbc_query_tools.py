@@ -25,16 +25,17 @@ import socket
 import time
 from datetime import datetime
 from importlib.util import find_spec
-from typing import Any
+from typing import Any, cast
 
 from ..utils.db import DorisConnectionManager
 from ..utils.logger import get_logger
+from ..utils.security import AuthContext
 from ..utils.sql_security_utils import get_auth_context
 
 logger = get_logger(__name__)
 
 
-def _convert_numpy_types(obj):
+def _convert_numpy_types(obj: Any) -> Any:
     """Convert numpy types to native Python types for JSON serialization"""
     try:
         # Import numpy only when needed
@@ -60,11 +61,13 @@ def _convert_numpy_types(obj):
         return obj
 
 
-def _convert_dataframe_to_json_serializable(df):
+def _convert_dataframe_to_json_serializable(
+    df: Any,
+) -> list[dict[str, Any]]:
     """Convert DataFrame to JSON serializable format"""
     if find_spec("numpy") is None or find_spec("pandas") is None:
         # Fallback to basic dict conversion
-        return df.to_dict('records')
+        return cast(list[dict[str, Any]], df.to_dict("records"))
 
     # Convert DataFrame to records
     records = df.to_dict('records')
@@ -85,9 +88,9 @@ class DorisADBCQueryTools:
 
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-        self.adbc_client = None
-        self.flight_sql_module = None
-        self.adbc_manager_module = None
+        self.adbc_client: Any | None = None
+        self.flight_sql_module: Any | None = None
+        self.adbc_manager_module: Any | None = None
 
     async def exec_adbc_query(
         self,
@@ -159,17 +162,17 @@ class DorisADBCQueryTools:
         """Check Arrow Flight SQL port configuration and availability"""
         try:
             # Check environment variables
-            fe_port = os.getenv("FE_ARROW_FLIGHT_SQL_PORT")
-            be_port = os.getenv("BE_ARROW_FLIGHT_SQL_PORT")
+            fe_port_raw = os.getenv("FE_ARROW_FLIGHT_SQL_PORT")
+            be_port_raw = os.getenv("BE_ARROW_FLIGHT_SQL_PORT")
 
-            if not fe_port:
+            if not fe_port_raw:
                 return {
                     "success": False,
                     "error": "Missing environment variable FE_ARROW_FLIGHT_SQL_PORT, please configure Arrow Flight SQL FE port in .env file",
                     "error_type": "missing_fe_port_config"
                 }
 
-            if not be_port:
+            if not be_port_raw:
                 return {
                     "success": False,
                     "error": "Missing environment variable BE_ARROW_FLIGHT_SQL_PORT, please configure Arrow Flight SQL BE port in .env file",
@@ -178,8 +181,8 @@ class DorisADBCQueryTools:
 
             # Convert to integer and validate
             try:
-                fe_port = int(fe_port)
-                be_port = int(be_port)
+                fe_port = int(fe_port_raw)
+                be_port = int(be_port_raw)
             except ValueError:
                 return {
                     "success": False,
@@ -265,6 +268,7 @@ class DorisADBCQueryTools:
 
     async def _get_be_hosts(self) -> list[str]:
         """Get BE host list"""
+        connection = None
         try:
             db_config = self.connection_manager.config.database
 
@@ -292,6 +296,12 @@ class DorisADBCQueryTools:
         except Exception as e:
             logger.error(f"Failed to get BE hosts: {str(e)}")
             return []
+        finally:
+            if connection is not None:
+                await self.connection_manager.release_connection(
+                    "query",
+                    connection,
+                )
 
     async def _import_adbc_modules(self) -> dict[str, Any]:
         """Import ADBC related modules"""
@@ -335,8 +345,25 @@ class DorisADBCQueryTools:
     async def _create_adbc_connection(self) -> dict[str, Any]:
         """Create ADBC connection"""
         try:
+            if (
+                self.adbc_manager_module is None
+                or self.flight_sql_module is None
+            ):
+                return {
+                    "success": False,
+                    "error": "ADBC modules have not been loaded",
+                    "error_type": "missing_adbc_modules",
+                }
+
             db_config = self.connection_manager.config.database
-            fe_port = int(os.getenv("FE_ARROW_FLIGHT_SQL_PORT"))
+            fe_port_raw = os.getenv("FE_ARROW_FLIGHT_SQL_PORT")
+            if not fe_port_raw:
+                return {
+                    "success": False,
+                    "error": "Missing environment variable FE_ARROW_FLIGHT_SQL_PORT",
+                    "error_type": "missing_fe_port_config",
+                }
+            fe_port = int(fe_port_raw)
 
             # Build connection URI
             uri = f"grpc://{db_config.host}:{fe_port}"
@@ -384,7 +411,7 @@ class DorisADBCQueryTools:
                 }
 
             # SECURITY FIX: Perform SQL security validation before executing
-            auth_context = get_auth_context()
+            auth_context = get_auth_context() or AuthContext()
             if self.connection_manager.security_manager:
                 # Always perform security validation, even without auth_context
                 # Use a default context for basic SQL security checks
@@ -531,7 +558,7 @@ class DorisADBCQueryTools:
                 "timestamp": datetime.now().isoformat()
             }
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Cleanup resources"""
         try:
             if self.adbc_client:

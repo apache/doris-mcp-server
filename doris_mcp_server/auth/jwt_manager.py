@@ -23,13 +23,14 @@ Provides comprehensive JWT token management including generation, validation, re
 import asyncio
 import time
 import uuid
-from typing import Any
+from typing import Any, cast
 
 try:
     import jwt
 except ImportError:
     raise ImportError("PyJWT is required for JWT functionality. Install with: pip install PyJWT[crypto]")
 
+from ..utils.config import DorisConfig, SecurityConfig
 from ..utils.logger import get_logger
 from .key_manager import KeyManager
 from .token_validators import TokenBlacklist, TokenValidator
@@ -48,7 +49,7 @@ class JWTManager:
     - Automatic key rotation
     """
 
-    def __init__(self, config):
+    def __init__(self, config: DorisConfig | SecurityConfig) -> None:
         """Initialize JWT manager
 
         Args:
@@ -76,7 +77,7 @@ class JWTManager:
         self.validator = TokenValidator(config, self.token_blacklist)
 
         # Automatic key rotation task
-        self._key_rotation_task = None
+        self._key_rotation_task: asyncio.Task[None] | None = None
 
         logger.info(f"JWTManager initialized with algorithm: {self.algorithm}")
 
@@ -102,7 +103,7 @@ class JWTManager:
             logger.error(f"Failed to initialize JWTManager: {e}")
             return False
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Shutdown JWT manager"""
         try:
             # Stop key rotation task
@@ -207,15 +208,10 @@ class JWTManager:
         """
         try:
             signing_key = self.key_manager.get_private_key()
+            if signing_key is None:
+                raise RuntimeError("JWT signing key is not initialized")
 
-            if self.algorithm == "HS256":
-                # Symmetric key signing
-                token = jwt.encode(payload, signing_key, algorithm=self.algorithm)
-            else:
-                # Asymmetric key signing
-                token = jwt.encode(payload, signing_key, algorithm=self.algorithm)
-
-            return token
+            return jwt.encode(payload, signing_key, algorithm=self.algorithm)
 
         except Exception as e:
             logger.error(f"Failed to sign token: {e}")
@@ -237,6 +233,8 @@ class JWTManager:
         try:
             # Decode token
             verification_key = self.key_manager.get_public_key()
+            if verification_key is None:
+                raise RuntimeError("JWT verification key is not initialized")
 
             # Get security configuration
             if hasattr(self.config, 'security'):
@@ -342,6 +340,8 @@ class JWTManager:
         try:
             # Decode token to get JTI and expiration time
             verification_key = self.key_manager.get_public_key()
+            if verification_key is None:
+                raise RuntimeError("JWT verification key is not initialized")
             payload = jwt.decode(
                 token,
                 verification_key,
@@ -377,7 +377,7 @@ class JWTManager:
         """
         try:
             payload = jwt.decode(token, options={'verify_signature': False})
-            return payload
+            return cast(dict[str, Any], payload)
         except Exception as e:
             logger.error(f"Failed to decode token: {e}")
             raise
@@ -412,7 +412,7 @@ class JWTManager:
             logger.error(f"Failed to get token info: {e}")
             raise
 
-    async def _auto_key_rotation(self):
+    async def _auto_key_rotation(self) -> None:
         """Automatic key rotation task"""
         while True:
             try:

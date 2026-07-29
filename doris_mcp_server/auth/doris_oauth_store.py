@@ -21,7 +21,7 @@ from .doris_oauth_types import (
 class DorisOAuthStore:
     """Process-local OAuth store with hash-only credential lookup."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._hash_key = secrets.token_bytes(32)
         self.clients_by_id: dict[str, RegisteredClientRecord] = {}
         self.transactions_by_txn_hash: dict[str, AuthTransactionRecord] = {}
@@ -280,7 +280,7 @@ class DorisOAuthStore:
             self.refresh_by_hash[refresh_hash] = replace(refresh, revoked_at=refresh.revoked_at or now)
             access_hash = self.access_id_to_hash.get(refresh.access_token_id)
             access = self.access_by_hash.get(access_hash or "")
-            if access:
+            if access and access_hash:
                 self.access_by_hash[access_hash] = replace(access, revoked_at=access.revoked_at or now)
 
     def revoke_family_by_access_token_id(self, access_token_id: str) -> None:
@@ -317,30 +317,40 @@ class DorisOAuthStore:
     def active_users(self) -> set[str]:
         now = time.time()
         users: set[str] = set()
-        for record in self.access_by_hash.values():
-            if record.revoked_at is None and record.expires_at > now:
-                users.add(record.doris_user)
-        for record in self.refresh_by_hash.values():
-            if record.revoked_at is None and record.expires_at > now:
-                users.add(record.doris_user)
+        for access_record in self.access_by_hash.values():
+            if access_record.revoked_at is None and access_record.expires_at > now:
+                users.add(access_record.doris_user)
+        for refresh_record in self.refresh_by_hash.values():
+            if refresh_record.revoked_at is None and refresh_record.expires_at > now:
+                users.add(refresh_record.doris_user)
         return users
 
     def cleanup_expired(self) -> None:
         now = time.time()
-        for client_id, record in list(self.clients_by_id.items()):
-            if record.source == "dcr" and record.expires_at is not None and record.expires_at <= now:
+        for client_id, client_record in list(self.clients_by_id.items()):
+            if (
+                client_record.source == "dcr"
+                and client_record.expires_at is not None
+                and client_record.expires_at <= now
+            ):
                 self.clients_by_id.pop(client_id, None)
-        for txn_hash, record in list(self.transactions_by_txn_hash.items()):
-            if record.expires_at <= now:
+        for txn_hash, txn_record in list(self.transactions_by_txn_hash.items()):
+            if txn_record.expires_at <= now:
                 self.transactions_by_txn_hash.pop(txn_hash, None)
-        for code_hash, record in list(self.codes_by_hash.items()):
-            if record.expires_at <= now or record.used_at is not None:
+        for code_hash, code_record in list(self.codes_by_hash.items()):
+            if code_record.expires_at <= now or code_record.used_at is not None:
                 self.codes_by_hash.pop(code_hash, None)
-        for access_hash, record in list(self.access_by_hash.items()):
-            if record.expires_at <= now and record.revoked_at is not None:
+        for access_hash, access_record in list(self.access_by_hash.items()):
+            if (
+                access_record.expires_at <= now
+                and access_record.revoked_at is not None
+            ):
                 self.access_by_hash.pop(access_hash, None)
-                self.access_id_to_hash.pop(record.token_id, None)
-        for refresh_hash, record in list(self.refresh_by_hash.items()):
-            if record.expires_at <= now and record.revoked_at is not None:
+                self.access_id_to_hash.pop(access_record.token_id, None)
+        for refresh_hash, refresh_record in list(self.refresh_by_hash.items()):
+            if (
+                refresh_record.expires_at <= now
+                and refresh_record.revoked_at is not None
+            ):
                 self.refresh_by_hash.pop(refresh_hash, None)
-                self.refresh_id_to_hash.pop(record.token_id, None)
+                self.refresh_id_to_hash.pop(refresh_record.token_id, None)

@@ -798,7 +798,7 @@ class DorisMonitoringTools:
 
     def _parse_prometheus_metrics(self, metrics_text: str) -> dict[str, Any]:
         """Parse Prometheus format monitoring metrics"""
-        metrics = {}
+        metrics: dict[str, Any] = {}
 
         for line in metrics_text.strip().split('\n'):
             line = line.strip()
@@ -814,7 +814,7 @@ class DorisMonitoringTools:
                     labels_part = metric_part[metric_part.find('{'):metric_part.rfind('}')+1]
 
                     # Parse labels
-                    labels = {}
+                    labels: dict[str, str] = {}
                     labels_content = labels_part[1:-1]  # Remove {}
                     if labels_content:
                         for label_pair in labels_content.split(','):
@@ -837,15 +837,21 @@ class DorisMonitoringTools:
                 else:
                     # Metrics without labels
                     metric_name, value_part = line.rsplit(' ', 1)
-                    value = float(value_part) if '.' in value_part else int(value_part)
+                    metric_value = (
+                        float(value_part)
+                        if "." in value_part
+                        else int(value_part)
+                    )
 
                     # Check if this metric already exists as a list (with labels)
                     if metric_name in metrics and isinstance(metrics[metric_name], list):
                         # Add as an entry with empty labels
-                        metrics[metric_name].append({"labels": {}, "value": value})
+                        metrics[metric_name].append(
+                            {"labels": {}, "value": metric_value}
+                        )
                     else:
                         # Store as simple value
-                        metrics[metric_name] = value
+                        metrics[metric_name] = metric_value
 
             except Exception as e:
                 logger.warning(f"Failed to parse metric line: {line}, error: {e}")
@@ -877,7 +883,7 @@ class DorisMonitoringTools:
             Dict containing monitoring metrics data with summary aggregations
         """
         try:
-            result = {
+            result: dict[str, Any] = {
                 "success": True,
                 "role": role,
                 "monitor_type": monitor_type,
@@ -1483,7 +1489,12 @@ class DorisMonitoringTools:
 
         return {k: v for k, v in be_metrics.items() if v is not None}
 
-    def _get_simple_value(self, raw_metrics: dict[str, Any], metric_name: str, labels: dict[str, str] = None) -> float:
+    def _get_simple_value(
+        self,
+        raw_metrics: dict[str, Any],
+        metric_name: str,
+        labels: dict[str, str] | None = None,
+    ) -> float | None:
         """
         Get simple metric value, optionally filtered by labels
         """
@@ -1510,20 +1521,33 @@ class DorisMonitoringTools:
         except (ValueError, TypeError, KeyError):
             return None
 
-    def _get_rate_value(self, raw_metrics: dict[str, Any], metric_name: str, labels: dict[str, str] = None) -> float:
+    def _get_rate_value(
+        self,
+        raw_metrics: dict[str, Any],
+        metric_name: str,
+        labels: dict[str, str] | None = None,
+    ) -> float | None:
         """
         Get rate value (would need historical data for actual rate calculation, using current value as approximation)
         """
         # For now, return the current value as rate calculation needs time series data
         return self._get_simple_value(raw_metrics, metric_name, labels)
 
-    def _get_quantile_value(self, raw_metrics: dict[str, Any], metric_name: str, quantile: str) -> float:
+    def _get_quantile_value(
+        self,
+        raw_metrics: dict[str, Any],
+        metric_name: str,
+        quantile: str,
+    ) -> float | None:
         """
         Get quantile value from metrics
         """
         return self._get_simple_value(raw_metrics, metric_name, labels={"quantile": quantile})
 
-    def _calculate_jvm_heap_usage_percent(self, raw_metrics: dict[str, Any]) -> float:
+    def _calculate_jvm_heap_usage_percent(
+        self,
+        raw_metrics: dict[str, Any],
+    ) -> float | None:
         """
         Calculate JVM heap usage percentage: used / max * 100
         """
@@ -1537,7 +1561,11 @@ class DorisMonitoringTools:
         except (ValueError, TypeError, ZeroDivisionError):
             return None
 
-    def _calculate_gc_avg_time(self, raw_metrics: dict[str, Any], gc_metric_name: str) -> float:
+    def _calculate_gc_avg_time(
+        self,
+        raw_metrics: dict[str, Any],
+        gc_metric_name: str,
+    ) -> float | None:
         """
         Calculate GC average time: total_time / count
         """
@@ -1551,7 +1579,10 @@ class DorisMonitoringTools:
         except (ValueError, TypeError, ZeroDivisionError):
             return None
 
-    def _calculate_disk_usage_percent(self, raw_metrics: dict[str, Any]) -> float:
+    def _calculate_disk_usage_percent(
+        self,
+        raw_metrics: dict[str, Any],
+    ) -> float | None:
         """
         Calculate disk usage percentage: used / total * 100
         """
@@ -1565,7 +1596,10 @@ class DorisMonitoringTools:
         except (ValueError, TypeError, ZeroDivisionError):
             return None
 
-    def _calculate_fd_usage_percent(self, raw_metrics: dict[str, Any]) -> float:
+    def _calculate_fd_usage_percent(
+        self,
+        raw_metrics: dict[str, Any],
+    ) -> float | None:
         """
         Calculate file descriptor usage percentage: used / limit * 100
         """
@@ -1579,7 +1613,10 @@ class DorisMonitoringTools:
         except (ValueError, TypeError, ZeroDivisionError):
             return None
 
-    def _calculate_cpu_usage_percent(self, raw_metrics: dict[str, Any]) -> float:
+    def _calculate_cpu_usage_percent(
+        self,
+        raw_metrics: dict[str, Any],
+    ) -> float | None:
         """
         Calculate CPU usage percentage based on dashboard logic: 100 - idle%
         """
@@ -1591,8 +1628,8 @@ class DorisMonitoringTools:
             if not isinstance(cpu_data, list):
                 return None
 
-            total_idle = 0
-            total_time = 0
+            total_idle = 0.0
+            total_time = 0.0
 
             for item in cpu_data:
                 if isinstance(item, dict) and "labels" in item and "value" in item:
@@ -1611,7 +1648,11 @@ class DorisMonitoringTools:
         except (ValueError, TypeError, ZeroDivisionError):
             return None
 
-    def _aggregate_network_bytes(self, raw_metrics: dict[str, Any], metric_name: str) -> int:
+    def _aggregate_network_bytes(
+        self,
+        raw_metrics: dict[str, Any],
+        metric_name: str,
+    ) -> int | None:
         """
         Aggregate network bytes excluding loopback interface
         """

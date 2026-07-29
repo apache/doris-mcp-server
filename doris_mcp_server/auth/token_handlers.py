@@ -23,43 +23,57 @@ listing, and statistics. Used for administrative token management in HTTP mode.
 """
 
 import json
+from typing import TYPE_CHECKING
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from ..utils.config import DatabaseConfig
+from ..utils.config import DorisConfig
 from ..utils.logger import get_logger
+from .token_manager import DatabaseConfig
 from .token_security_middleware import TokenSecurityMiddleware
+
+if TYPE_CHECKING:
+    from ..utils.security import DorisSecurityManager
 
 
 class TokenHandlers:
     """Token Authentication HTTP Handlers"""
 
-    def __init__(self, security_manager, config=None):
+    def __init__(
+        self,
+        security_manager: "DorisSecurityManager",
+        config: DorisConfig | None = None,
+    ) -> None:
         self.security_manager = security_manager
         self.logger = get_logger(__name__)
+        self.security_middleware: TokenSecurityMiddleware | None
 
         # Initialize security middleware if config is provided
         if config:
             self.security_middleware = TokenSecurityMiddleware(config)
         else:
             self.security_middleware = None
-            self.logger.warning("Token handlers initialized without security middleware - access control disabled")
+            self.logger.warning(
+                "Token handlers initialized without security middleware - access control disabled"
+            )
 
     async def handle_create_token(self, request: Request) -> JSONResponse:
         """Handle token creation request"""
         # Apply security checks
         if self.security_middleware:
-            security_response = await self.security_middleware.check_token_management_access(request)
+            security_response = (
+                await self.security_middleware.check_token_management_access(request)
+            )
             if security_response:
                 return security_response
 
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
-                return JSONResponse({
-                    "error": "Token authentication is not enabled"
-                }, status_code=503)
+                return JSONResponse(
+                    {"error": "Token authentication is not enabled"}, status_code=503
+                )
 
             # Parse request data
             if request.method == "GET":
@@ -78,16 +92,14 @@ class TokenHandlers:
                         user=query_params.get("db_user", "root"),
                         password=query_params.get("db_password", ""),
                         database=query_params.get("db_database", "information_schema"),
-                        fe_http_port=int(query_params.get("db_fe_http_port", "8030"))
+                        fe_http_port=int(query_params.get("db_fe_http_port", "8030")),
                     )
             else:
                 # POST request with JSON body
                 try:
                     body = await request.json()
                 except Exception:
-                    return JSONResponse({
-                        "error": "Invalid JSON body"
-                    }, status_code=400)
+                    return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
 
                 token_id = body.get("token_id")
                 expires_hours_str = body.get("expires_hours")
@@ -104,18 +116,16 @@ class TokenHandlers:
                             user=db_data.get("user", "root"),
                             password=db_data.get("password", ""),
                             database=db_data.get("database", "information_schema"),
-                            fe_http_port=int(db_data.get("fe_http_port", 8030))
+                            fe_http_port=int(db_data.get("fe_http_port", 8030)),
                         )
                     except (ValueError, TypeError):
-                        return JSONResponse({
-                            "error": "Invalid database configuration"
-                        }, status_code=400)
+                        return JSONResponse(
+                            {"error": "Invalid database configuration"}, status_code=400
+                        )
 
             # Validate required fields
             if not token_id:
-                return JSONResponse({
-                    "error": "token_id is required"
-                }, status_code=400)
+                return JSONResponse({"error": "token_id is required"}, status_code=400)
 
             # Parse expires_hours
             expires_hours = None
@@ -123,9 +133,9 @@ class TokenHandlers:
                 try:
                     expires_hours = int(expires_hours_str)
                 except ValueError:
-                    return JSONResponse({
-                        "error": "expires_hours must be an integer"
-                    }, status_code=400)
+                    return JSONResponse(
+                        {"error": "expires_hours must be an integer"}, status_code=400
+                    )
 
             # Create token using the actual API
             try:
@@ -134,50 +144,50 @@ class TokenHandlers:
                     expires_hours=expires_hours,
                     description=description,
                     custom_token=custom_token,
-                    database_config=db_config
+                    database_config=db_config,
                 )
 
-                return JSONResponse({
-                    "success": True,
-                    "token_id": token_id,
-                    "token": token,
-                    "expires_hours": expires_hours,
-                    "description": description,
-                    "message": "Token created successfully"
-                })
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "token_id": token_id,
+                        "token": token,
+                        "expires_hours": expires_hours,
+                        "description": description,
+                        "message": "Token created successfully",
+                    }
+                )
 
             except Exception as e:
                 self.logger.error(
                     "Token creation failed (%s)",
                     type(e).__name__,
                 )
-                return JSONResponse({
-                    "error": "Token creation failed"
-                }, status_code=400)
+                return JSONResponse({"error": "Token creation failed"}, status_code=400)
 
         except Exception as e:
             self.logger.error(
                 "Error in handle_create_token (%s)",
                 type(e).__name__,
             )
-            return JSONResponse({
-                "error": "Internal server error"
-            }, status_code=500)
+            return JSONResponse({"error": "Internal server error"}, status_code=500)
 
     async def handle_revoke_token(self, request: Request) -> JSONResponse:
         """Handle token revocation request"""
         # Apply security checks
         if self.security_middleware:
-            security_response = await self.security_middleware.check_token_management_access(request)
+            security_response = (
+                await self.security_middleware.check_token_management_access(request)
+            )
             if security_response:
                 return security_response
 
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
-                return JSONResponse({
-                    "error": "Token authentication is not enabled"
-                }, status_code=503)
+                return JSONResponse(
+                    {"error": "Token authentication is not enabled"}, status_code=503
+                )
 
             # Get token_id from query parameters or path
             token_id = request.query_params.get("token_id")
@@ -188,141 +198,145 @@ class TokenHandlers:
                     token_id = path_parts[-1]
 
             if not token_id:
-                return JSONResponse({
-                    "error": "token_id is required"
-                }, status_code=400)
+                return JSONResponse({"error": "token_id is required"}, status_code=400)
 
             # Revoke token
             success = await self.security_manager.revoke_token(token_id)
 
             if success:
-                return JSONResponse({
-                    "success": True,
-                    "token_id": token_id,
-                    "message": "Token revoked successfully"
-                })
+                return JSONResponse(
+                    {
+                        "success": True,
+                        "token_id": token_id,
+                        "message": "Token revoked successfully",
+                    }
+                )
             else:
-                return JSONResponse({
-                    "success": False,
-                    "token_id": token_id,
-                    "message": "Token not found or already revoked"
-                }, status_code=404)
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "token_id": token_id,
+                        "message": "Token not found or already revoked",
+                    },
+                    status_code=404,
+                )
 
         except Exception as e:
             self.logger.error(
                 "Error in handle_revoke_token (%s)",
                 type(e).__name__,
             )
-            return JSONResponse({
-                "error": "Internal server error"
-            }, status_code=500)
+            return JSONResponse({"error": "Internal server error"}, status_code=500)
 
     async def handle_list_tokens(self, request: Request) -> JSONResponse:
         """Handle token listing request"""
         # Apply security checks
         if self.security_middleware:
-            security_response = await self.security_middleware.check_token_management_access(request)
+            security_response = (
+                await self.security_middleware.check_token_management_access(request)
+            )
             if security_response:
                 return security_response
 
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
-                return JSONResponse({
-                    "error": "Token authentication is not enabled"
-                }, status_code=503)
+                return JSONResponse(
+                    {"error": "Token authentication is not enabled"}, status_code=503
+                )
 
             # Get tokens list
             tokens = await self.security_manager.list_tokens()
 
-            return JSONResponse({
-                "success": True,
-                "count": len(tokens),
-                "tokens": tokens
-            })
+            return JSONResponse(
+                {"success": True, "count": len(tokens), "tokens": tokens}
+            )
 
         except Exception as e:
             self.logger.error(
                 "Error in handle_list_tokens (%s)",
                 type(e).__name__,
             )
-            return JSONResponse({
-                "error": "Internal server error"
-            }, status_code=500)
+            return JSONResponse({"error": "Internal server error"}, status_code=500)
 
     async def handle_token_stats(self, request: Request) -> JSONResponse:
         """Handle token statistics request"""
         # Apply security checks
         if self.security_middleware:
-            security_response = await self.security_middleware.check_token_management_access(request)
+            security_response = (
+                await self.security_middleware.check_token_management_access(request)
+            )
             if security_response:
                 return security_response
 
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
-                return JSONResponse({
-                    "error": "Token authentication is not enabled"
-                }, status_code=503)
+                return JSONResponse(
+                    {"error": "Token authentication is not enabled"}, status_code=503
+                )
 
             # Get token statistics
             stats = self.security_manager.get_token_stats()
 
-            return JSONResponse({
-                "success": True,
-                "stats": stats
-            })
+            return JSONResponse({"success": True, "stats": stats})
 
         except Exception as e:
             self.logger.error(
                 "Error in handle_token_stats (%s)",
                 type(e).__name__,
             )
-            return JSONResponse({
-                "error": "Internal server error"
-            }, status_code=500)
+            return JSONResponse({"error": "Internal server error"}, status_code=500)
 
     async def handle_cleanup_tokens(self, request: Request) -> JSONResponse:
         """Handle expired tokens cleanup request"""
         # Apply security checks
         if self.security_middleware:
-            security_response = await self.security_middleware.check_token_management_access(request)
+            security_response = (
+                await self.security_middleware.check_token_management_access(request)
+            )
             if security_response:
                 return security_response
 
         try:
             # Check if token manager is available
             if not self.security_manager.auth_provider.token_manager:
-                return JSONResponse({
-                    "error": "Token authentication is not enabled"
-                }, status_code=503)
+                return JSONResponse(
+                    {"error": "Token authentication is not enabled"}, status_code=503
+                )
 
             # Cleanup expired tokens
             cleaned_count = await self.security_manager.cleanup_expired_tokens()
 
-            return JSONResponse({
-                "success": True,
-                "cleaned_count": cleaned_count,
-                "message": f"Cleaned up {cleaned_count} expired tokens"
-            })
+            return JSONResponse(
+                {
+                    "success": True,
+                    "cleaned_count": cleaned_count,
+                    "message": f"Cleaned up {cleaned_count} expired tokens",
+                }
+            )
 
         except Exception as e:
             self.logger.error(
                 "Error in handle_cleanup_tokens (%s)",
                 type(e).__name__,
             )
-            return JSONResponse({
-                "error": "Internal server error"
-            }, status_code=500)
+            return JSONResponse({"error": "Internal server error"}, status_code=500)
 
     async def handle_management_page(self, request: Request) -> HTMLResponse:
         """Handle token management demo page"""
         # Apply security checks
         if self.security_middleware:
-            security_response = await self.security_middleware.check_token_management_access(request)
+            security_response = (
+                await self.security_middleware.check_token_management_access(request)
+            )
             if security_response:
                 # Convert JSON response to HTML for demo page
-                error_data = security_response.body.decode('utf-8') if hasattr(security_response, 'body') else '{"error": "Access denied"}'
+                error_data = (
+                    bytes(security_response.body).decode("utf-8")
+                    if hasattr(security_response, "body")
+                    else '{"error": "Access denied"}'
+                )
                 try:
                     error_info = json.loads(error_data)
                 except json.JSONDecodeError:
@@ -345,9 +359,9 @@ class TokenHandlers:
                         <h1>🔐 Token Management - Access Denied</h1>
                         <div class="error">
                             <h3>Access Denied</h3>
-                            <p><strong>Error:</strong> {error_info.get('error', 'Access denied')}</p>
-                            <p><strong>Message:</strong> {error_info.get('message', 'Token management access is restricted')}</p>
-                            {'<p><strong>Your IP:</strong> ' + str(error_info.get('client_ip', 'Unknown')) + '</p>' if 'client_ip' in error_info else ''}
+                            <p><strong>Error:</strong> {error_info.get("error", "Access denied")}</p>
+                            <p><strong>Message:</strong> {error_info.get("message", "Token management access is restricted")}</p>
+                            {"<p><strong>Your IP:</strong> " + str(error_info.get("client_ip", "Unknown")) + "</p>" if "client_ip" in error_info else ""}
                         </div>
 
                         <div class="security-info">
@@ -369,7 +383,9 @@ class TokenHandlers:
                 </body>
                 </html>
                 """
-                return HTMLResponse(error_html, status_code=security_response.status_code)
+                return HTMLResponse(
+                    error_html, status_code=security_response.status_code
+                )
 
         try:
             # Check if token manager is available
@@ -440,20 +456,20 @@ class TokenHandlers:
                         <h2>📊 Token Statistics</h2>
                         <div class="stats">
                             <div class="stat-item">
-                                <div class="stat-value">{stats.get('total_tokens', 0)}</div>
+                                <div class="stat-value">{stats.get("total_tokens", 0)}</div>
                                 <div>Total Tokens</div>
                             </div>
                             <div class="stat-item">
-                                <div class="stat-value">{stats.get('active_tokens', 0)}</div>
+                                <div class="stat-value">{stats.get("active_tokens", 0)}</div>
                                 <div>Active Tokens</div>
                             </div>
                             <div class="stat-item">
-                                <div class="stat-value">{stats.get('expired_tokens', 0)}</div>
+                                <div class="stat-value">{stats.get("expired_tokens", 0)}</div>
                                 <div>Expired Tokens</div>
                             </div>
                         </div>
-                        <p><strong>Token Expiry:</strong> {'Enabled' if stats.get('expiry_enabled') else 'Disabled'}</p>
-                        <p><strong>Default Expiry:</strong> {stats.get('default_expiry_hours', 0)} hours</p>
+                        <p><strong>Token Expiry:</strong> {"Enabled" if stats.get("expiry_enabled") else "Disabled"}</p>
+                        <p><strong>Default Expiry:</strong> {stats.get("default_expiry_hours", 0)} hours</p>
                     </div>
 
                     <div class="section">

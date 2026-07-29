@@ -22,6 +22,7 @@ Integrates OAuth 2.0/OIDC authentication with the existing authentication framew
 
 from typing import Any
 
+from ..utils.config import DorisConfig
 from ..utils.datetime_utils import utc_now
 from ..utils.logger import get_logger
 from ..utils.security import AuthContext, SecurityLevel
@@ -38,7 +39,7 @@ logger = get_logger(__name__)
 class OAuthAuthenticationProvider:
     """OAuth authentication provider for Doris MCP Server"""
 
-    def __init__(self, config):
+    def __init__(self, config: DorisConfig) -> None:
         """Initialize OAuth authentication provider
 
         Args:
@@ -66,7 +67,7 @@ class OAuthAuthenticationProvider:
             logger.error("Failed to initialize OAuth authentication provider")
         return success
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Shutdown OAuth authentication provider"""
         if self.enabled:
             await self.oauth_client.shutdown()

@@ -17,10 +17,10 @@
 # under the License.
 """Shared ASGI authentication middleware for MCP HTTP routes."""
 
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ..utils.auth_credentials import BearerCredentials
 from ..utils.config import EffectiveAuthConfig
@@ -42,12 +42,11 @@ from .oauth_resource import (
 )
 from .operation_policy import OperationAuthorizationError
 
-ASGIApp = Callable[[dict[str, Any], Callable[..., Awaitable[Any]], Callable[..., Awaitable[Any]]], Awaitable[Any]]
 logger = get_logger(__name__)
 
 
 async def extract_bearer_credentials_from_scope(
-    scope: dict[str, Any],
+    scope: Scope,
 ) -> BearerCredentials:
     """Extract canonical bearer credentials from an ASGI scope."""
     headers = dict(scope.get("headers", []))
@@ -70,8 +69,13 @@ class MCPAuthASGIMiddleware:
         self.downstream = downstream
         self.effective_auth = effective_auth
 
-    async def __call__(self, scope, receive, send):
-        credentials = None
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        credentials: BearerCredentials | None = None
         try:
             credentials = await extract_bearer_credentials_from_scope(scope)
             auth_context = await self.security_manager.authenticate_request(credentials)

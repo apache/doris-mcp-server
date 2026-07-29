@@ -20,6 +20,8 @@ Doris Query Execution Module
 Implements query optimization, cache management and performance monitoring functionality
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -27,12 +29,17 @@ import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import sqlparse
 
 from .datetime_utils import utc_now
-from .db import DorisConnectionManager, QueryResult, get_first_sql_keyword
+from .db import (
+    DorisConnection,
+    DorisConnectionManager,
+    QueryResult,
+    get_first_sql_keyword,
+)
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -40,6 +47,9 @@ from .sql_security_utils import (
     quote_identifier,
     validate_identifier,
 )
+
+if TYPE_CHECKING:
+    from .security import AuthContext
 
 
 @dataclass
@@ -70,7 +80,7 @@ class CachedQuery:
             return False
         return (utc_now() - self.created_at).total_seconds() > self.ttl
 
-    def access(self):
+    def access(self) -> None:
         """Record access"""
         self.access_count += 1
         self.last_accessed = utc_now()
@@ -151,7 +161,7 @@ class QueryCache:
 
         return cache_key
 
-    async def _evict_oldest(self):
+    async def _evict_oldest(self) -> None:
         """Clean up oldest cache item"""
         if not self.cache:
             return
@@ -162,7 +172,7 @@ class QueryCache:
         del self.cache[oldest_key]
         self.logger.debug(f"Cleaned up oldest cache: {oldest_key}")
 
-    async def clear_expired(self):
+    async def clear_expired(self) -> None:
         """Clean up all expired cache"""
         expired_keys = [
             key for key, cached_query in self.cache.items() if cached_query.is_expired()
@@ -174,7 +184,7 @@ class QueryCache:
         if expired_keys:
             self.logger.info(f"Cleaned up {len(expired_keys)} expired cache items")
 
-    async def clear_all(self):
+    async def clear_all(self) -> None:
         """Clean up all cache"""
         cache_count = len(self.cache)
         self.cache.clear()
@@ -198,7 +208,7 @@ class QueryCache:
 class QueryOptimizer:
     """Query optimizer"""
 
-    def __init__(self, config):
+    def __init__(self, config: Any) -> None:
         self.config = config
         self.logger = get_logger(__name__)
         self.optimization_rules = self._load_optimization_rules()
@@ -267,7 +277,7 @@ class QueryOptimizer:
 
         elif condition_type == "query_size":
             max_size = condition.get("max_size", 1000)
-            return len(context.get("sql", "")) <= max_size
+            return len(str(context.get("sql", ""))) <= int(max_size)
 
         return True
 
@@ -321,7 +331,11 @@ class QueryOptimizer:
 class DorisQueryExecutor:
     """Doris query executor with caching and optimization"""
 
-    def __init__(self, connection_manager: DorisConnectionManager, config=None):
+    def __init__(
+        self,
+        connection_manager: DorisConnectionManager,
+        config: Any | None = None,
+    ) -> None:
         self.connection_manager = connection_manager
         self.config = config or self._create_default_config()
         self.logger = get_logger(__name__)
@@ -348,14 +362,14 @@ class DorisQueryExecutor:
         # Background tasks
         self._background_tasks: list[asyncio.Task[None]] = []
 
-    def _create_default_config(self):
+    def _create_default_config(self) -> Any:
         """Create default configuration"""
         class DefaultConfig:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.performance = DefaultPerformanceConfig()
 
         class DefaultPerformanceConfig:
-            def __init__(self):
+            def __init__(self) -> None:
                 self.max_cache_size = 1000
                 self.cache_ttl = 300
                 self.max_concurrent_queries = 50
@@ -372,7 +386,7 @@ class DorisQueryExecutor:
         cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
         self._background_tasks.append(cleanup_task)
 
-    async def _cache_cleanup_loop(self):
+    async def _cache_cleanup_loop(self) -> None:
         """Background cache cleanup loop"""
         while True:
             try:
@@ -384,7 +398,9 @@ class DorisQueryExecutor:
                 self.logger.error(f"Cache cleanup error: {e}")
 
     async def execute_query(
-        self, query_request: QueryRequest, auth_context=None
+        self,
+        query_request: QueryRequest,
+        auth_context: AuthContext | None = None,
     ) -> QueryResult:
         """Execute query with caching and optimization"""
         start_time = time.time()
@@ -439,7 +455,9 @@ class DorisQueryExecutor:
             self._update_execution_metrics(execution_time)
 
     async def _execute_query_internal(
-        self, query_request: QueryRequest, auth_context
+        self,
+        query_request: QueryRequest,
+        auth_context: AuthContext | None,
     ) -> QueryResult:
         """Internal query execution"""
 
@@ -466,7 +484,7 @@ class DorisQueryExecutor:
 
         return result
 
-    def _update_execution_metrics(self, execution_time: float):
+    def _update_execution_metrics(self, execution_time: float) -> None:
         """Update execution metrics"""
         self.metrics.total_execution_time += execution_time
 
@@ -484,11 +502,12 @@ class DorisQueryExecutor:
             )
 
     async def execute_batch_sqls_for_mcp(
-            self, sqls: list[str],
-            timeout: int = 30,
-            session_id: str = "mcp_session",
-            user_id: str = "mcp_user",
-            auth_context=None
+        self,
+        sqls: list[str],
+        timeout: int = 30,
+        session_id: str = "mcp_session",
+        user_id: str = "mcp_user",
+        auth_context: AuthContext | None = None,
     ) -> dict[str, Any]:
         """Execute multiple sqls in batch"""
         if not sqls:
@@ -529,11 +548,11 @@ class DorisQueryExecutor:
         }
 
     async def execute_batch_queries(
-        self, query_requests: list[QueryRequest], auth_context=None
+        self,
+        query_requests: list[QueryRequest],
+        auth_context: AuthContext | None = None,
     ) -> list[QueryResult]:
         """Execute multiple queries in batch"""
-        results = []
-
         # Check concurrent query limit
         if len(query_requests) > self.max_concurrent_queries:
             raise Exception(
@@ -545,14 +564,13 @@ class DorisQueryExecutor:
             self.execute_query(request, auth_context) for request in query_requests
         ]
 
-        query_results = []
+        query_results: list[QueryResult] = []
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 self.logger.error(f"Batch query execution failed: {result}")
                 raise result
-            else:
-                query_results.append(result)
+            query_results.append(result)
 
         return query_results
 
@@ -571,7 +589,11 @@ class DorisQueryExecutor:
             statements.append(f"USE {safe_db}")
         return statements
 
-    async def _acquire_routed_connection(self, session_id: str, auth_context=None):
+    async def _acquire_routed_connection(
+        self,
+        session_id: str,
+        auth_context: AuthContext | None = None,
+    ) -> DorisConnection:
         """Acquire a routed connection, preserving an explicit auth context."""
         get_connection_for_auth_context = getattr(
             self.connection_manager,
@@ -589,13 +611,20 @@ class DorisQueryExecutor:
                 if callable(get_effective_auth_context)
                 else auth_context
             )
-            return await get_connection_for_auth_context(
-                session_id,
-                effective_auth_context,
+            return cast(
+                DorisConnection,
+                await get_connection_for_auth_context(
+                    session_id,
+                    effective_auth_context,
+                ),
             )
         return await self.connection_manager.get_connection(session_id)
 
-    async def _release_routed_connection(self, session_id: str, connection) -> None:
+    async def _release_routed_connection(
+        self,
+        session_id: str,
+        connection: DorisConnection,
+    ) -> None:
         release_connection = getattr(self.connection_manager, "release_connection", None)
         if callable(release_connection):
             await release_connection(session_id, connection)
@@ -621,7 +650,7 @@ class DorisQueryExecutor:
         timeout: int = 30,
         session_id: str = "mcp_session",
         user_id: str = "mcp_user",
-        auth_context=None,
+        auth_context: AuthContext | None = None,
     ) -> dict[str, Any]:
         """Execute optional catalog/db context and target SQL on one routed connection."""
         try:
@@ -692,9 +721,14 @@ class DorisQueryExecutor:
         """Get query execution plan"""
         explain_sql = f"EXPLAIN {sql}"
 
-        connection = await self.connection_manager.get_connection(session_id)
-        auth_context = get_auth_context()
-        result = await connection.execute(explain_sql, auth_context=auth_context)
+        async with self.connection_manager.get_connection_context(
+            session_id
+        ) as connection:
+            auth_context = get_auth_context()
+            result = await connection.execute(
+                explain_sql,
+                auth_context=auth_context,
+            )
 
         return {
             "query": sql,
@@ -733,7 +767,7 @@ class DorisQueryExecutor:
             },
         }
 
-    async def clear_cache(self):
+    async def clear_cache(self) -> None:
         """Clear query cache"""
         await self.query_cache.clear_all()
 
@@ -746,7 +780,7 @@ class DorisQueryExecutor:
         user_id: str = "mcp_user",
         db_name: str | None = None,
         catalog_name: str | None = None,
-        auth_context = None  # FIX for Issue #62 Bug 1: Accept auth_context with token
+        auth_context: AuthContext | None = None,
     ) -> dict[str, Any]:
         """Execute SQL query for MCP interface - unified method
 
@@ -911,12 +945,6 @@ class DorisQueryExecutor:
                     retry_count += 1
                     self.logger.warning(f"Connection error detected, retrying ({retry_count}/{max_retries}): {e}")
 
-                    # Release the problematic connection
-                    try:
-                        await self.connection_manager.release_connection(session_id)
-                    except Exception:
-                        pass  # Ignore cleanup errors
-
                     # Wait a bit before retry
                     await asyncio.sleep(0.5 * retry_count)
                     continue
@@ -949,7 +977,7 @@ class DorisQueryExecutor:
 
     def _serialize_row_data(self, row_data: dict[str, Any]) -> dict[str, Any]:
         """Serialize row data for JSON response"""
-        serialized = {}
+        serialized: dict[str, Any] = {}
 
         for key, value in row_data.items():
             if value is None:
@@ -1019,7 +1047,7 @@ class DorisQueryExecutor:
                 "user_message": f"Query execution failed: {error_message}"
             }
 
-    async def close(self):
+    async def close(self) -> None:
         """Close query executor and cleanup resources"""
         # Cancel background tasks
         for task in self._background_tasks:
@@ -1037,14 +1065,14 @@ class DorisQueryExecutor:
 class QueryPerformanceMonitor:
     """Query performance monitor"""
 
-    def __init__(self, query_executor: DorisQueryExecutor):
+    def __init__(self, query_executor: DorisQueryExecutor) -> None:
         self.query_executor = query_executor
         self.logger = get_logger(__name__)
-        self.performance_records = []
+        self.performance_records: list[dict[str, Any]] = []
 
     async def record_query_performance(
         self, query_request: QueryRequest, result: QueryResult, execution_time: float
-    ):
+    ) -> None:
         """Record query performance"""
         record = {
             "timestamp": utc_now(),
@@ -1095,8 +1123,8 @@ class QueryPerformanceMonitor:
         self, records: list[dict[str, Any]]
     ) -> dict[str, Any]:
         """Analyze query distribution"""
-        query_types = {}
-        user_distribution = {}
+        query_types: dict[str, int] = {}
+        user_distribution: dict[str, int] = {}
 
         for record in records:
             # Analyze query type
@@ -1122,7 +1150,11 @@ class QueryPerformanceMonitor:
 
 
 # Unified convenience function for MCP integration
-async def execute_sql_query(sql: str, connection_manager: DorisConnectionManager, **kwargs) -> dict[str, Any]:
+async def execute_sql_query(
+    sql: str,
+    connection_manager: DorisConnectionManager,
+    **kwargs: Any,
+) -> dict[str, Any]:
     """Execute SQL query - unified convenience function for MCP tools
 
     This function now includes security validation to ensure safe query execution.

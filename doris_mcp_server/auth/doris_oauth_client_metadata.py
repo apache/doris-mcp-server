@@ -26,7 +26,7 @@ import socket
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import aiohttp
@@ -464,13 +464,10 @@ class DorisOAuthClientMetadataResolver:
         application_type: str,
     ) -> tuple[str, ...]:
         try:
-            return cast(
-                tuple[str, ...],
-                self.redirect_policy.validate_redirect_uris(
-                    redirect_uris,
-                    application_type=application_type,
-                    source="client_id_metadata",
-                ),
+            return self.redirect_policy.validate_redirect_uris(
+                redirect_uris,
+                application_type=application_type,
+                source="client_id_metadata",
             )
         except TokenEndpointError as exc:
             raise ClientMetadataError(

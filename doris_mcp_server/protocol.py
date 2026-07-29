@@ -298,7 +298,11 @@ def create_doris_mcp_server(
             )
         except Exception as exc:
             prompt_error_code = getattr(exc, "error_code", None)
-            message = _PROMPT_INVALID_PARAMS_MESSAGES.get(prompt_error_code)
+            message = (
+                _PROMPT_INVALID_PARAMS_MESSAGES.get(prompt_error_code)
+                if isinstance(prompt_error_code, str)
+                else None
+            )
             if message is not None:
                 data = {
                     "name": redact_sensitive_text(params.name),
@@ -371,7 +375,7 @@ def create_doris_mcp_server(
         async def enforce_required_client_capabilities(
             ctx: ServerRequestContext,
             call_next: CallNext,
-        ):
+        ) -> Any:
             required = requirements.get(ctx.method)
             if ctx.method == "tools/call" and ctx.params is not None:
                 tool_name = ctx.params.get("name")

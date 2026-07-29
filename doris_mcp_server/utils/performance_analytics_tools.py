@@ -23,9 +23,9 @@ import statistics
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, TypedDict
 
-from .db import DorisConnectionManager
+from .db import DorisConnection, DorisConnectionManager
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -37,6 +37,13 @@ from .sql_security_utils import (
 )
 
 logger = get_logger(__name__)
+
+
+class DailyGrowthData(TypedDict):
+    """Per-day partition growth aggregation."""
+
+    rows: int
+    size_mb: float
 
 
 class PerformanceAnalyticsTools:
@@ -65,6 +72,7 @@ class PerformanceAnalyticsTools:
         Returns:
             Slow query analysis results
         """
+        connection = None
         try:
             days = validate_integer(days, "days", minimum=1, maximum=3650)
             top_n = validate_integer(top_n, "top N", minimum=1, maximum=1000)
@@ -128,11 +136,19 @@ class PerformanceAnalyticsTools:
                 "error": str(e),
                 "analysis_timestamp": datetime.now().isoformat()
             }
+        finally:
+            release_connection = getattr(
+                self.connection_manager,
+                "release_connection",
+                None,
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
 
     async def analyze_resource_growth_curves(
         self,
         days: int = 30,
-        resource_types: list[str] = None,
+        resource_types: list[str] | None = None,
         include_predictions: bool = False,
         detailed_response: bool = False
     ) -> dict[str, Any]:
@@ -148,6 +164,7 @@ class PerformanceAnalyticsTools:
         Returns:
             Resource growth analysis results
         """
+        connection = None
         try:
             days = validate_integer(days, "days", minimum=1, maximum=3650)
             start_time = time.time()
@@ -221,10 +238,23 @@ class PerformanceAnalyticsTools:
                 "error": str(e),
                 "analysis_timestamp": datetime.now().isoformat()
             }
+        finally:
+            release_connection = getattr(
+                self.connection_manager,
+                "release_connection",
+                None,
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
 
     # ==================== Private Helper Methods ====================
 
-    async def _analyze_query_volume_growth(self, connection, days: int, detailed_response: bool = False) -> dict[str, Any]:
+    async def _analyze_query_volume_growth(
+        self,
+        connection: DorisConnection,
+        days: int,
+        detailed_response: bool = False,
+    ) -> dict[str, Any]:
         """Analyze query volume growth patterns"""
         try:
             start_date = datetime.now() - timedelta(days=days)
@@ -305,7 +335,12 @@ class PerformanceAnalyticsTools:
                 "error": str(e)
             }
 
-    async def _analyze_user_activity_growth(self, connection, days: int, detailed_response: bool = False) -> dict[str, Any]:
+    async def _analyze_user_activity_growth(
+        self,
+        connection: DorisConnection,
+        days: int,
+        detailed_response: bool = False,
+    ) -> dict[str, Any]:
         """Analyze user activity growth patterns"""
         try:
             start_date = datetime.now() - timedelta(days=days)
@@ -381,7 +416,12 @@ class PerformanceAnalyticsTools:
                 "error": str(e)
             }
 
-    async def _get_slow_query_data(self, connection, days: int, min_execution_time_ms: int) -> list[dict]:
+    async def _get_slow_query_data(
+        self,
+        connection: DorisConnection,
+        days: int,
+        min_execution_time_ms: int,
+    ) -> list[dict[str, Any]]:
         """Get slow query data from audit logs"""
         try:
             start_date = datetime.now() - timedelta(days=days)
@@ -558,13 +598,20 @@ class PerformanceAnalyticsTools:
             "query_type_distribution": dict(query_types),
             "temporal_patterns": {
                 "hourly_distribution": dict(hour_distribution),
-                "peak_hour": max(hour_distribution, key=hour_distribution.get) if hour_distribution else None
+                "peak_hour": (
+                    max(
+                        hour_distribution,
+                        key=lambda hour: hour_distribution[hour],
+                    )
+                    if hour_distribution
+                    else None
+                )
             }
         }
 
     async def _analyze_query_patterns(self, slow_queries: list[dict]) -> dict[str, Any]:
         """Analyze query patterns in slow queries"""
-        patterns = {
+        patterns: dict[str, Any] = {
             "common_issues": Counter(),
             "table_access_patterns": Counter(),
             "query_complexity": []
@@ -640,7 +687,10 @@ class PerformanceAnalyticsTools:
         return complexity
 
     async def _analyze_storage_growth_with_real_data(
-        self, connection, days: int, detailed_response: bool = False
+        self,
+        connection: DorisConnection,
+        days: int,
+        detailed_response: bool = False,
     ) -> dict[str, Any]:
         """Analyze storage growth patterns based on real historical data with intelligent table selection"""
         try:
@@ -727,7 +777,10 @@ class PerformanceAnalyticsTools:
             logger.error(f"Failed to analyze storage growth with real data: {str(e)}")
             return {"error": str(e)}
 
-    async def _get_all_tables_sizes_fast(self, connection) -> list[dict]:
+    async def _get_all_tables_sizes_fast(
+        self,
+        connection: DorisConnection,
+    ) -> list[dict[str, Any]]:
         """Fast collection of all tables sizes using information_schema optimization"""
         try:
             # Stage 1: Get database-level overview using information_schema
@@ -844,7 +897,11 @@ class PerformanceAnalyticsTools:
             "coverage_percentage": coverage_percentage
         }
 
-    async def _get_database_table_details_from_schema(self, connection, db_name: str) -> list[dict]:
+    async def _get_database_table_details_from_schema(
+        self,
+        connection: DorisConnection,
+        db_name: str,
+    ) -> list[dict[str, Any]]:
         """Get table details for a specific database using information_schema"""
         try:
             # SECURITY FIX: Validate db_name and use parameterized query
@@ -915,7 +972,11 @@ class PerformanceAnalyticsTools:
             logger.error(f"Failed to get table details for database {db_name}: {str(e)}")
             return []
 
-    async def _get_database_table_details(self, connection, db_name: str) -> list[dict]:
+    async def _get_database_table_details(
+        self,
+        connection: DorisConnection,
+        db_name: str,
+    ) -> list[dict[str, Any]]:
         """Get table details for a specific database using session-consistent queries"""
         try:
             # SECURITY FIX: Validate db_name before using in SQL
@@ -978,7 +1039,11 @@ class PerformanceAnalyticsTools:
             logger.warning(f"Failed to get table details for {db_name}: {str(e)}")
             return []
 
-    async def _get_database_table_details_fallback(self, connection, db_name: str) -> list[dict]:
+    async def _get_database_table_details_fallback(
+        self,
+        connection: DorisConnection,
+        db_name: str,
+    ) -> list[dict[str, Any]]:
         """Fallback method to get table details using individual queries"""
         try:
             # SECURITY FIX: Validate db_name and get auth_context
@@ -1104,7 +1169,10 @@ class PerformanceAnalyticsTools:
             "coverage_percentage": coverage_percentage
         }
 
-    async def _get_all_tables_info(self, connection) -> list[dict]:
+    async def _get_all_tables_info(
+        self,
+        connection: DorisConnection,
+    ) -> list[dict[str, Any]]:
         """Get basic information for all tables (fallback method)"""
         try:
             auth_context = get_auth_context()
@@ -1133,8 +1201,13 @@ class PerformanceAnalyticsTools:
             return []
 
     async def _analyze_single_table_storage_growth(
-        self, connection, full_table_name: str, table_name: str, schema_name: str, days: int
-    ) -> dict | None:
+        self,
+        connection: DorisConnection,
+        full_table_name: str,
+        table_name: str,
+        schema_name: str,
+        days: int,
+    ) -> dict[str, Any] | None:
         """Analyze storage growth for a single table"""
         try:
             # Get current table size
@@ -1189,7 +1262,11 @@ class PerformanceAnalyticsTools:
             logger.warning(f"Failed to analyze growth for table {full_table_name}: {str(e)}")
             return None
 
-    async def _get_current_table_size(self, connection, full_table_name: str) -> dict | None:
+    async def _get_current_table_size(
+        self,
+        connection: DorisConnection,
+        full_table_name: str,
+    ) -> dict[str, Any] | None:
         """Get current table size"""
         try:
             # SECURITY FIX: Get auth_context and use parameterized query
@@ -1217,7 +1294,7 @@ class PerformanceAnalyticsTools:
 
             result = await connection.execute(size_sql, params=(full_table_name, table_name_only), auth_context=auth_context)
             if result.data and result.data[0]:
-                return result.data[0]
+                return dict(result.data[0])
 
             # If information_schema has no data, try COUNT query
             # full_table_name should already be validated by caller using build_table_reference
@@ -1243,8 +1320,12 @@ class PerformanceAnalyticsTools:
             return None
 
     async def _get_partition_based_growth_data(
-        self, connection, table_name: str, schema_name: str, days: int
-    ) -> list[dict]:
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        schema_name: str,
+        days: int,
+    ) -> list[dict[str, Any]]:
         """Get historical growth data based on partitions"""
         try:
             # SECURITY FIX: Validate identifiers and use parameterized query
@@ -1284,7 +1365,9 @@ class PerformanceAnalyticsTools:
                 return []
 
             # Process partition data, aggregate by date
-            daily_data = defaultdict(lambda: {"rows": 0, "size_mb": 0})
+            daily_data: defaultdict[str, DailyGrowthData] = defaultdict(
+                lambda: {"rows": 0, "size_mb": 0.0}
+            )
 
             for partition in result.data:
                 create_date = partition["create_time"]
@@ -1292,8 +1375,8 @@ class PerformanceAnalyticsTools:
                     create_date = datetime.fromisoformat(create_date.replace('Z', '+00:00'))
 
                 date_key = create_date.date().isoformat()
-                table_rows = partition.get("table_rows", 0) or 0
-                data_length = partition.get("data_length", 0) or 0
+                table_rows = int(partition.get("table_rows", 0) or 0)
+                data_length = float(partition.get("data_length", 0) or 0)
                 daily_data[date_key]["rows"] += table_rows
                 daily_data[date_key]["size_mb"] += (data_length / 1024 / 1024)
 
@@ -1314,8 +1397,13 @@ class PerformanceAnalyticsTools:
             return []
 
     async def _get_timestamp_based_growth_data(
-        self, connection, full_table_name: str, table_name: str, schema_name: str, days: int
-    ) -> list[dict]:
+        self,
+        connection: DorisConnection,
+        full_table_name: str,
+        table_name: str,
+        schema_name: str,
+        days: int,
+    ) -> list[dict[str, Any]]:
         """Get historical growth data based on timestamp fields"""
         try:
             # SECURITY FIX: Get auth_context
@@ -1377,7 +1465,12 @@ class PerformanceAnalyticsTools:
             logger.warning(f"Failed to get timestamp-based growth data: {str(e)}")
             return []
 
-    async def _find_timestamp_columns(self, connection, table_name: str, schema_name: str) -> list[str]:
+    async def _find_timestamp_columns(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        schema_name: str,
+    ) -> list[str]:
         """Find timestamp fields in table"""
         try:
             # SECURITY FIX: Validate identifiers and use parameterized query
@@ -1427,8 +1520,11 @@ class PerformanceAnalyticsTools:
             return []
 
     async def _get_audit_based_growth_estimation(
-        self, connection, table_name: str, days: int
-    ) -> list[dict]:
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        days: int,
+    ) -> list[dict[str, Any]]:
         """Estimate growth data based on audit logs"""
         try:
             # SECURITY FIX: Validate table_name and use parameterized query

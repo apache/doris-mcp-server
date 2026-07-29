@@ -23,9 +23,12 @@ Provides token validation, blacklist management and security features
 import asyncio
 import time
 from collections import defaultdict
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from ..utils.config import DorisConfig, SecurityConfig
 
 logger = get_logger(__name__)
 
@@ -46,16 +49,16 @@ class TokenBlacklist:
         self.cleanup_interval = cleanup_interval
         # Storage format: {token_jti: expiry_timestamp}
         self._blacklisted_tokens: dict[str, float] = {}
-        self._cleanup_task = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
         logger.info("TokenBlacklist initialized")
 
-    async def start(self):
+    async def start(self) -> None:
         """Start blacklist manager"""
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
         logger.info("TokenBlacklist started with periodic cleanup")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop blacklist manager"""
         if self._cleanup_task:
             self._cleanup_task.cancel()
@@ -65,7 +68,7 @@ class TokenBlacklist:
                 pass
         logger.info("TokenBlacklist stopped")
 
-    async def add_token(self, jti: str, exp: float):
+    async def add_token(self, jti: str, exp: float) -> None:
         """Add token to blacklist
 
         Args:
@@ -133,7 +136,7 @@ class TokenBlacklist:
             "cleanup_interval": self.cleanup_interval
         }
 
-    async def _periodic_cleanup(self):
+    async def _periodic_cleanup(self) -> None:
         """Periodically clean up expired tokens"""
         while True:
             try:
@@ -158,7 +161,7 @@ class RateLimiter:
         self.max_requests = max_requests
         self.time_window = time_window
         # Storage format: {user_id: [timestamp1, timestamp2, ...]}
-        self._request_history: dict[str, list] = defaultdict(list)
+        self._request_history: dict[str, list[float]] = defaultdict(list)
 
         logger.info(f"RateLimiter initialized: {max_requests} requests per {time_window} seconds")
 
@@ -219,7 +222,11 @@ class TokenValidator:
     claim validation, blacklist checking and rate limiting
     """
 
-    def __init__(self, config, blacklist: TokenBlacklist | None = None):
+    def __init__(
+        self,
+        config: "DorisConfig | SecurityConfig",
+        blacklist: TokenBlacklist | None = None,
+    ) -> None:
         """Initialize token validator
 
         Args:
@@ -322,17 +329,17 @@ class TokenValidator:
             "payload": payload
         }
 
-    async def start(self):
+    async def start(self) -> None:
         """Start validator"""
         await self.blacklist.start()
         logger.info("TokenValidator started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop validator"""
         await self.blacklist.stop()
         logger.info("TokenValidator stopped")
 
-    async def revoke_token(self, jti: str, exp: float):
+    async def revoke_token(self, jti: str, exp: float) -> None:
         """Revoke token
 
         Args:

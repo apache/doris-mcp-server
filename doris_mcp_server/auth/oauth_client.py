@@ -32,6 +32,7 @@ try:
 except ImportError:
     raise ImportError("aiohttp is required for OAuth functionality. Install with: pip install aiohttp")
 
+from ..utils.config import DorisConfig, SecurityConfig
 from ..utils.datetime_utils import utc_now
 from ..utils.logger import get_logger
 from .oauth_token_validation import (
@@ -63,16 +64,16 @@ class OAuthStateManager:
         """
         self.state_expiry = state_expiry
         self._states: dict[str, OAuthState] = {}
-        self._cleanup_task = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
         logger.info("OAuthStateManager initialized")
 
-    async def start(self):
+    async def start(self) -> None:
         """Start periodic cleanup task"""
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
         logger.info("OAuth state manager started")
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop periodic cleanup task"""
         if self._cleanup_task:
             self._cleanup_task.cancel()
@@ -128,7 +129,11 @@ class OAuthStateManager:
             OAuth state object or None if not found/expired
         """
         oauth_state = self._states.get(state)
-        if oauth_state and oauth_state.expires_at > utc_now():
+        if (
+            oauth_state
+            and oauth_state.expires_at is not None
+            and oauth_state.expires_at > utc_now()
+        ):
             return oauth_state
         elif oauth_state:
             # Remove expired state
@@ -151,7 +156,7 @@ class OAuthStateManager:
             logger.debug(f"Consumed OAuth state: {state}")
         return oauth_state
 
-    async def _periodic_cleanup(self):
+    async def _periodic_cleanup(self) -> None:
         """Periodic cleanup of expired states"""
         while True:
             try:
@@ -159,7 +164,10 @@ class OAuthStateManager:
                 current_time = utc_now()
                 expired_states = [
                     state for state, oauth_state in self._states.items()
-                    if oauth_state.expires_at <= current_time
+                    if (
+                        oauth_state.expires_at is not None
+                        and oauth_state.expires_at <= current_time
+                    )
                 ]
 
                 for state in expired_states:
@@ -177,7 +185,7 @@ class OAuthStateManager:
 class OAuthClient:
     """OAuth 2.0/OIDC Client implementation"""
 
-    def __init__(self, config):
+    def __init__(self, config: DorisConfig | SecurityConfig) -> None:
         """Initialize OAuth client
 
         Args:
@@ -220,7 +228,9 @@ class OAuthClient:
 
         logger.info(f"OAuthClient initialized for provider: {self.provider_config.provider.value}")
 
-    def _build_provider_config(self, security_config) -> OAuthProviderConfig:
+    def _build_provider_config(
+        self, security_config: SecurityConfig
+    ) -> OAuthProviderConfig:
         """Build OAuth provider configuration
 
         Args:
@@ -312,7 +322,7 @@ class OAuthClient:
             await self.shutdown()
             return False
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Shutdown OAuth client"""
         if not self.enabled:
             return
@@ -330,7 +340,7 @@ class OAuthClient:
         except Exception as e:
             logger.error(f"Error during OAuth client shutdown: {e}")
 
-    async def _discover_oidc_endpoints(self):
+    async def _discover_oidc_endpoints(self) -> OIDCDiscovery:
         """Discover OIDC endpoints using discovery URL"""
         try:
             # Check cache first
@@ -338,9 +348,15 @@ class OAuthClient:
                 utc_now() - self._discovery_cache_time < timedelta(hours=1)):
                 return self._discovery_cache
 
-            logger.info(f"Discovering OIDC endpoints: {self.provider_config.discovery_url}")
+            discovery_url = self.provider_config.discovery_url
+            if not discovery_url:
+                raise ValueError("OIDC discovery URL is not configured")
+            if not self._session:
+                raise ValueError("OAuth client is not initialized")
 
-            async with self._session.get(self.provider_config.discovery_url) as response:
+            logger.info(f"Discovering OIDC endpoints: {discovery_url}")
+
+            async with self._session.get(discovery_url) as response:
                 response.raise_for_status()
                 data = await response.json()
 
@@ -444,6 +460,8 @@ class OAuthClient:
         """
         if not self.enabled:
             raise ValueError("OAuth client is not enabled")
+        if not self._session:
+            raise ValueError("OAuth client is not initialized")
 
         # Validate and consume state
         oauth_state = self.state_manager.consume_state(state)
@@ -548,6 +566,8 @@ class OAuthClient:
         """
         if not self.enabled:
             raise ValueError("OAuth client is not enabled")
+        if not self._session:
+            raise ValueError("OAuth client is not initialized")
 
         if not self.provider_config.userinfo_endpoint:
             raise ValueError("Userinfo endpoint not configured")
@@ -595,6 +615,8 @@ class OAuthClient:
         """
         if not self.enabled:
             raise ValueError("OAuth client is not enabled")
+        if not self._session:
+            raise ValueError("OAuth client is not initialized")
 
         try:
             data = {

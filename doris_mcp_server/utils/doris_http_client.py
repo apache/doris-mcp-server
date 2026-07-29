@@ -143,7 +143,7 @@ def _normalize_host(host: Any) -> str:
 def _validate_port(port: Any) -> int:
     if isinstance(port, bool) or not isinstance(port, int) or not (1 <= port <= 65535):
         raise DorisHTTPPolicyError("Doris HTTP port must be between 1 and 65535")
-    return port
+    return int(port)
 
 
 def _address_allowed(address: str) -> bool:
@@ -340,6 +340,7 @@ class DorisHTTPClient:
             raise DorisHTTPRequestError("Doris HTTP request failed") from exc
 
     async def _resolve_addresses(self, host: str, port: int) -> tuple[str, ...]:
+        addresses: tuple[str, ...]
         try:
             literal = ipaddress.ip_address(host)
         except ValueError:

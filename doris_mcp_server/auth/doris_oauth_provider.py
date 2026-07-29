@@ -7,9 +7,11 @@ import hashlib
 import secrets
 import time
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from ..utils.auth_credentials import BearerCredentials
+from ..utils.config import DorisConfig, EffectiveAuthConfig
 from ..utils.logger import get_logger
 from ..utils.security import (
     RESERVED_DORIS_OAUTH_TOKEN_PREFIX,
@@ -28,18 +30,28 @@ from .doris_oauth_types import (
     AuthorizeError,
     AuthTransactionRecord,
     ProtectedResourceAuthError,
+    RegisteredClientRecord,
     RevocationEndpointError,
     TokenEndpointError,
 )
+
+if TYPE_CHECKING:
+    from ..utils.db import DorisConnectionManager
 
 
 class DorisOAuthProvider:
     """Memory-only Doris OAuth provider."""
 
-    def __init__(self, config, store: DorisOAuthStore | None = None):
+    def __init__(
+        self,
+        config: DorisConfig,
+        store: DorisOAuthStore | None = None,
+    ) -> None:
         self.config = config
         self.security_config = config.security
-        self.effective_auth = getattr(config, "effective_auth", None)
+        self.effective_auth: EffectiveAuthConfig | None = getattr(
+            config, "effective_auth", None
+        )
         self.store = store or DorisOAuthStore()
         self.scope_policy = DorisOAuthScopePolicy(self.security_config)
         self.redirect_policy = DorisOAuthRedirectPolicy(
@@ -82,7 +94,7 @@ class DorisOAuthProvider:
                 1000,
             ),
         )
-        self.connection_manager = None
+        self.connection_manager: DorisConnectionManager | None = None
         self._lock = asyncio.Lock()
         self.logger = get_logger(__name__)
 
@@ -94,7 +106,9 @@ class DorisOAuthProvider:
     def resource(self) -> str:
         return f"{self.issuer}/mcp"
 
-    def configure_connection_manager(self, connection_manager) -> None:
+    def configure_connection_manager(
+        self, connection_manager: "DorisConnectionManager"
+    ) -> None:
         self.connection_manager = connection_manager
 
     async def shutdown(self) -> None:
@@ -225,7 +239,7 @@ class DorisOAuthProvider:
         client_id: str,
         *,
         client_ip: str,
-    ):
+    ) -> RegisteredClientRecord | None:
         client = self.store.get_client(client_id)
         if client and client.source != "client_id_metadata":
             return client
@@ -369,7 +383,9 @@ class DorisOAuthProvider:
             },
         )
 
-    async def exchange_code(self, payload: dict) -> dict:
+    async def exchange_code(
+        self, payload: dict[str, Any]
+    ) -> dict[str, object]:
         client = self._authenticate_token_client(payload)
         code = payload.get("code")
         if not code:
@@ -405,7 +421,9 @@ class DorisOAuthProvider:
             )
         return self._token_response(pair.access_token, pair.refresh_token, record.scopes)
 
-    async def refresh_token(self, payload: dict) -> dict:
+    async def refresh_token(
+        self, payload: dict[str, Any]
+    ) -> dict[str, object]:
         client = self._authenticate_token_client(payload)
         raw_refresh = payload.get("refresh_token")
         if not raw_refresh:
@@ -437,7 +455,7 @@ class DorisOAuthProvider:
             )
         return self._token_response(pair.access_token, pair.refresh_token, scopes)
 
-    async def revoke(self, payload: dict) -> None:
+    async def revoke(self, payload: dict[str, Any]) -> None:
         raw_token = payload.get("token")
         if not raw_token:
             raise RevocationEndpointError("invalid_request", "Missing token", status_code=400)
@@ -460,7 +478,12 @@ class DorisOAuthProvider:
             self.store.revoke_token(str(raw_token))
             await self._cleanup_inactive_pools()
 
-    async def issue_cli_token(self, username: str, password: str, scope: str | None) -> dict:
+    async def issue_cli_token(
+        self,
+        username: str,
+        password: str,
+        scope: str | None,
+    ) -> dict[str, object]:
         if not username or not password:
             raise TokenEndpointError("invalid_request", "Invalid username or password", status_code=400)
         if not self.connection_manager:
@@ -560,7 +583,9 @@ class DorisOAuthProvider:
         )
         return auth_context
 
-    def _authenticate_token_client(self, payload: dict):
+    def _authenticate_token_client(
+        self, payload: dict[str, Any]
+    ) -> RegisteredClientRecord:
         client_id = payload.get("client_id")
         if not client_id:
             raise TokenEndpointError("invalid_client", "Missing client_id", status_code=401)
@@ -576,7 +601,7 @@ class DorisOAuthProvider:
             )
         return client
 
-    def _get_or_create_cli_client(self):
+    def _get_or_create_cli_client(self) -> RegisteredClientRecord:
         client_id = "cli"
         client = self.store.get_client(client_id)
         if client:
@@ -593,7 +618,12 @@ class DorisOAuthProvider:
             registration_ip=None,
         )
 
-    def _token_response(self, access_token: str, refresh_token: str, scopes: tuple[str, ...]) -> dict:
+    def _token_response(
+        self,
+        access_token: str,
+        refresh_token: str,
+        scopes: tuple[str, ...],
+    ) -> dict[str, object]:
         return {
             "access_token": access_token,
             "token_type": "Bearer",
@@ -615,5 +645,5 @@ class DorisOAuthProvider:
         return secrets.compare_digest(challenge, expected_challenge)
 
     async def _cleanup_inactive_pools(self) -> None:
-        if self.connection_manager and hasattr(self.connection_manager, "cleanup_idle_doris_user_pools"):
+        if self.connection_manager:
             await self.connection_manager.cleanup_idle_doris_user_pools(self.store.active_users())

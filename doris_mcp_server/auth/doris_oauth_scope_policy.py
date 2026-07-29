@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Scope issuance policy for Doris-backed OAuth."""
 
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
 from .doris_oauth_types import TokenEndpointError
+
+if TYPE_CHECKING:
+    from ..utils.config import SecurityConfig
 
 BASE_DORIS_OAUTH_SCOPES = frozenset({"tool:list"})
 RESOURCE_SCOPES = frozenset({"resource:list", "resource:read"})
@@ -56,7 +62,11 @@ class DorisOAuthScopePolicy:
     allowlist so standard MCP clients can work without hand-authored scopes.
     """
 
-    def __init__(self, security_config=None, server_allowed_scopes: set[str] | None = None):
+    def __init__(
+        self,
+        security_config: "SecurityConfig | None" = None,
+        server_allowed_scopes: set[str] | None = None,
+    ) -> None:
         if server_allowed_scopes is None:
             self.server_allowed_scopes = self._build_server_allowed_scopes(security_config)
         else:
@@ -70,7 +80,9 @@ class DorisOAuthScopePolicy:
             | set(FORBIDDEN_DORIS_OAUTH_SCOPES)
         )
 
-    def _build_server_allowed_scopes(self, security_config) -> set[str]:
+    def _build_server_allowed_scopes(
+        self, security_config: "SecurityConfig | None"
+    ) -> set[str]:
         allowed = set(BASE_DORIS_OAUTH_SCOPES)
         allowed.update(RESOURCE_SCOPES)
 
@@ -101,7 +113,9 @@ class DorisOAuthScopePolicy:
 
         return allowed
 
-    def _configured_tool_names(self, configured_tools) -> list[str]:
+    def _configured_tool_names(
+        self, configured_tools: str | Iterable[object]
+    ) -> list[str]:
         if isinstance(configured_tools, str):
             return [part.strip() for part in configured_tools.split(",") if part.strip()]
         return [str(tool).strip() for tool in configured_tools if str(tool).strip()]

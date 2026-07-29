@@ -23,7 +23,7 @@ import math
 from datetime import datetime
 from typing import Any
 
-from .db import DorisConnectionManager
+from .db import DorisConnection, DorisConnectionManager
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -58,7 +58,11 @@ class DataExplorationTools:
         else:
             return build_table_reference(table_name, catalog_name=effective_catalog)
 
-    async def _get_table_basic_info(self, connection, table_name: str) -> dict | None:
+    async def _get_table_basic_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> dict[str, Any] | None:
         """Get basic table information including row count"""
         try:
             # SECURITY FIX: Get auth_context for security validation
@@ -80,7 +84,13 @@ class DataExplorationTools:
             logger.warning(f"Failed to get basic info for table {table_name}: {str(e)}")
             return {"row_count": 0}
 
-    async def _get_table_columns_info(self, connection, table_name: str, catalog_name: str | None, db_name: str | None) -> list[dict]:
+    async def _get_table_columns_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        catalog_name: str | None,
+        db_name: str | None,
+    ) -> list[dict[str, Any]]:
         """Get detailed column information"""
         try:
             # SECURITY FIX: Validate identifiers and use parameterized query
@@ -95,7 +105,7 @@ class DataExplorationTools:
                 return []
 
             # Build parameterized query
-            params = [table_name]
+            params: list[str] = [table_name]
             where_conditions = ["table_name = %s"]
 
             if db_name:
@@ -128,7 +138,13 @@ class DataExplorationTools:
             logger.warning(f"Failed to get columns info for table {table_name}: {str(e)}")
             return []
 
-    async def _determine_sampling_strategy(self, connection, table_name: str, total_rows: int, sample_size: int) -> dict[str, Any]:
+    async def _determine_sampling_strategy(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        total_rows: int,
+        sample_size: int,
+    ) -> dict[str, Any]:
         """Determine optimal sampling strategy based on table size"""
         safe_sample_size = validate_integer(
             sample_size,
@@ -202,7 +218,13 @@ class DataExplorationTools:
         temporal_types = ['date', 'datetime', 'timestamp', 'time']
         return any(temp_type in data_type.lower() for temp_type in temporal_types)
 
-    async def _analyze_numeric_distributions(self, connection, table_name: str, numeric_columns: list[dict], sampling_info: dict) -> dict[str, Any]:
+    async def _analyze_numeric_distributions(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        numeric_columns: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze distribution patterns for numeric columns"""
         numeric_analysis = {}
 
@@ -263,7 +285,13 @@ class DataExplorationTools:
 
         return numeric_analysis
 
-    async def _calculate_percentiles(self, connection, table_name: str, col_name: str, sampling_info: dict) -> dict[str, float]:
+    async def _calculate_percentiles(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        col_name: str,
+        sampling_info: dict[str, Any],
+    ) -> dict[str, float | None]:
         """Calculate percentiles for numeric column"""
         try:
             safe_column = quote_identifier(col_name, "column name")
@@ -301,14 +329,23 @@ class DataExplorationTools:
 
         return {}
 
-    async def _detect_numeric_outliers(self, connection, table_name: str, col_name: str, percentiles: dict, sampling_info: dict) -> dict[str, Any]:
+    async def _detect_numeric_outliers(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        col_name: str,
+        percentiles: dict[str, float | None],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Detect outliers using IQR method"""
         try:
-            if "25%" not in percentiles or "75%" not in percentiles:
+            q1_value = percentiles.get("25%")
+            q3_value = percentiles.get("75%")
+            if q1_value is None or q3_value is None:
                 return {"outlier_count": 0, "outlier_rate": 0.0}
 
-            q1 = percentiles["25%"]
-            q3 = percentiles["75%"]
+            q1 = float(q1_value)
+            q3 = float(q3_value)
             iqr = q3 - q1
 
             lower_bound = q1 - 1.5 * iqr
@@ -353,7 +390,15 @@ class DataExplorationTools:
 
         return {"outlier_count": 0, "outlier_rate": 0.0}
 
-    async def _analyze_distribution_shape(self, connection, table_name: str, col_name: str, stats: dict, percentiles: dict, sampling_info: dict) -> dict[str, Any]:
+    async def _analyze_distribution_shape(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        col_name: str,
+        stats: dict[str, Any],
+        percentiles: dict[str, float | None],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze the shape of data distribution"""
         try:
             mean = stats.get("mean_value", 0)
@@ -371,9 +416,17 @@ class DataExplorationTools:
                 skew_indicator = "left_skewed"
 
             # Estimate kurtosis based on percentile spread
-            if "25%" in percentiles and "75%" in percentiles:
-                iqr = percentiles["75%"] - percentiles["25%"]
-                range_90 = percentiles.get("90%", percentiles["75%"]) - percentiles.get("10%", percentiles["25%"])
+            q25 = percentiles.get("25%")
+            q75 = percentiles.get("75%")
+            if q25 is not None and q75 is not None:
+                iqr = q75 - q25
+                q90 = percentiles.get("90%")
+                q10 = percentiles.get("10%")
+                range_90 = (
+                    q90 if q90 is not None else q75
+                ) - (
+                    q10 if q10 is not None else q25
+                )
 
                 if iqr > 0:
                     kurtosis_indicator = "normal" if 2.5 <= range_90/iqr <= 3.5 else ("heavy_tailed" if range_90/iqr > 3.5 else "light_tailed")
@@ -406,7 +459,13 @@ class DataExplorationTools:
         else:
             return "non_normal"
 
-    async def _analyze_categorical_distributions(self, connection, table_name: str, categorical_columns: list[dict], sampling_info: dict) -> dict[str, Any]:
+    async def _analyze_categorical_distributions(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        categorical_columns: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze distribution patterns for categorical columns"""
         categorical_analysis = {}
 
@@ -458,7 +517,14 @@ class DataExplorationTools:
 
         return categorical_analysis
 
-    async def _get_categorical_value_distribution(self, connection, table_name: str, col_name: str, sampling_info: dict, total_count: int) -> list[dict]:
+    async def _get_categorical_value_distribution(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        col_name: str,
+        sampling_info: dict[str, Any],
+        total_count: int,
+    ) -> list[dict[str, Any]]:
         """Get value distribution for categorical column"""
         try:
             # Use sample table expression if sampling is enabled
@@ -466,7 +532,8 @@ class DataExplorationTools:
             safe_column = quote_identifier(col_name, "column name")
 
             # SQL sink audit: metadata column -> quote_identifier; table_expr
-            # originates from a safe table/sampler.
+            # originates from a safe table/sampler before
+            # DorisConnection.execute.
             distribution_sql = f"""
             SELECT
                 {safe_column} as value,
@@ -511,7 +578,13 @@ class DataExplorationTools:
 
         return entropy
 
-    async def _analyze_temporal_distributions(self, connection, table_name: str, temporal_columns: list[dict], sampling_info: dict) -> dict[str, Any]:
+    async def _analyze_temporal_distributions(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        temporal_columns: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze distribution patterns for temporal columns"""
         temporal_analysis = {}
 
@@ -566,7 +639,11 @@ class DataExplorationTools:
 
         return temporal_analysis
 
-    def _calculate_date_span(self, earliest, latest) -> dict[str, Any]:
+    def _calculate_date_span(
+        self,
+        earliest: datetime | str,
+        latest: datetime | str,
+    ) -> dict[str, Any]:
         """Calculate date span information"""
         try:
             if isinstance(earliest, str):
@@ -600,7 +677,13 @@ class DataExplorationTools:
         else:
             return "years"
 
-    async def _analyze_temporal_patterns(self, connection, table_name: str, col_name: str, sampling_info: dict) -> dict[str, Any]:
+    async def _analyze_temporal_patterns(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        col_name: str,
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze temporal patterns like seasonality and trends"""
         try:
             table_expr = sampling_info.get("sample_table_expression", table_name)
@@ -630,7 +713,8 @@ class DataExplorationTools:
                     weekly_pattern.append(round(percentage, 3))
 
             # Monthly trend analysis (simplified)
-            # SQL sink audit: same quoted metadata column and safe table_expr.
+            # SQL sink audit: same quote_identifier result and safe table_expr
+            # flow into DorisConnection.execute.
             monthly_trend_sql = f"""
             SELECT
                 YEAR({safe_column}) as year,
@@ -674,7 +758,13 @@ class DataExplorationTools:
         seasonality = min(variance * 10, 1.0)  # Scaling factor
         return round(seasonality, 3)
 
-    async def _generate_data_quality_insights(self, connection, table_name: str, columns: list[dict], sampling_info: dict) -> dict[str, Any]:
+    async def _generate_data_quality_insights(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Generate overall data quality insights"""
         try:
             total_columns = len(columns)
@@ -711,7 +801,13 @@ class DataExplorationTools:
             logger.warning(f"Failed to generate data quality insights: {str(e)}")
             return {"data_quality_score": 0.0, "error": str(e)}
 
-    async def _analyze_overall_null_rates(self, connection, table_name: str, columns: list[dict], sampling_info: dict) -> dict[str, Any]:
+    async def _analyze_overall_null_rates(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns: list[dict[str, Any]],
+        sampling_info: dict[str, Any],
+    ) -> dict[str, Any]:
         """Analyze null rates across all columns"""
         column_null_rates = {}
         total_null_count = 0
@@ -785,7 +881,7 @@ class DataExplorationTools:
 
     def _generate_analysis_summary(self, distribution_analysis: dict[str, Any]) -> dict[str, Any]:
         """Generate high-level summary of distribution analysis"""
-        summary = {
+        summary: dict[str, Any] = {
             "numeric_columns_count": len(distribution_analysis.get("numeric_columns", {})),
             "categorical_columns_count": len(distribution_analysis.get("categorical_columns", {})),
             "temporal_columns_count": len(distribution_analysis.get("temporal_columns", {}))

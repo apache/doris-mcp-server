@@ -24,7 +24,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from typing import Any
 
-from .db import DorisConnectionManager
+from .db import DorisConnection, DorisConnectionManager
 from .logger import get_logger
 from .sql_security_utils import get_auth_context, validate_integer
 
@@ -178,20 +178,27 @@ class SecurityAnalyticsTools:
 
     # ==================== Private Helper Methods ====================
 
-    async def _get_audit_log_data(self, connection, start_date: datetime, end_date: datetime, include_system_users: bool) -> list[dict]:
+    async def _get_audit_log_data(
+        self,
+        connection: DorisConnection,
+        start_date: datetime,
+        end_date: datetime,
+        include_system_users: bool,
+    ) -> list[dict[str, Any]]:
         """Retrieve audit log data for the specified period"""
         try:
             # System users filter
             system_user_filter = ""
-            params = [start_date, end_date]
+            params: list[Any] = [start_date, end_date]
             if not include_system_users:
                 system_users = ['root', 'admin', 'system', 'doris', 'information_schema']
                 placeholders = ", ".join("%s" for _ in system_users)
                 system_user_filter = f"AND `user` NOT IN ({placeholders})"
                 params.extend(system_users)
 
-            # SQL sink audit: filter has only fixed local variants; date/user
-            # values are bound through params before DorisConnection.execute.
+            # SQL sink audit: system_user_filter build_path has only fixed
+            # local variants; date/user values are bound through params before
+            # DorisConnection.execute.
             audit_sql = f"""
             SELECT
                 `user` as user_name,
@@ -226,8 +233,8 @@ class SecurityAnalyticsTools:
             logger.warning(f"Failed to get audit log data: {str(e)}")
             # Try alternative method without detailed metrics
             try:
-                # SQL sink audit: same fixed filter and bound values as the
-                # primary audit query.
+                # SQL sink audit: same fixed build_path and bound values as the
+                # primary query before DorisConnection.execute.
                 simple_audit_sql = f"""
                 SELECT
                     `user` as user_name,
@@ -256,21 +263,27 @@ class SecurityAnalyticsTools:
                 logger.error(f"Failed to get simplified audit log data: {str(e2)}")
                 return []
 
-    async def _analyze_user_access_patterns(self, audit_data: list[dict], min_query_threshold: int) -> list[dict]:
+    async def _analyze_user_access_patterns(
+        self,
+        audit_data: list[dict[str, Any]],
+        min_query_threshold: int,
+    ) -> list[dict[str, Any]]:
         """Analyze access patterns for individual users"""
-        user_stats = defaultdict(lambda: {
-            "total_queries": 0,
-            "unique_tables_accessed": set(),
-            "hosts": set(),
-            "query_types": Counter(),
-            "query_times": [],
-            "failed_queries": 0,
-            "data_volume_read_bytes": 0,
-            "data_volume_read_rows": 0,
-            "hourly_pattern": [0] * 24,
-            "daily_pattern": [0] * 7,
-            "query_statements": []
-        })
+        user_stats: defaultdict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "total_queries": 0,
+                "unique_tables_accessed": set(),
+                "hosts": set(),
+                "query_types": Counter(),
+                "query_times": [],
+                "failed_queries": 0,
+                "data_volume_read_bytes": 0,
+                "data_volume_read_rows": 0,
+                "hourly_pattern": [0] * 24,
+                "daily_pattern": [0] * 7,
+                "query_statements": [],
+            }
+        )
 
         # Process audit data
         for entry in audit_data:
@@ -334,7 +347,7 @@ class SecurityAnalyticsTools:
                 })
 
         # Convert to analysis results
-        user_analysis = []
+        user_analysis: list[dict[str, Any]] = []
         for user_name, stats in user_stats.items():
             if stats["total_queries"] >= min_query_threshold:
                 # Calculate patterns and insights
@@ -455,21 +468,27 @@ class SecurityAnalyticsTools:
         else:
             return "irregular_pattern"
 
-    async def _analyze_role_access_patterns(self, connection, user_access_analysis: list[dict]) -> dict[str, Any]:
+    async def _analyze_role_access_patterns(
+        self,
+        connection: DorisConnection,
+        user_access_analysis: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Analyze access patterns by role"""
         try:
             # Get user roles information
             user_roles = await self._get_user_roles(connection)
 
             # Group users by roles
-            role_stats = defaultdict(lambda: {
-                "user_count": 0,
-                "total_queries": 0,
-                "unique_tables": set(),
-                "query_types": Counter(),
-                "avg_queries_per_user": 0,
-                "users": []
-            })
+            role_stats: defaultdict[str, dict[str, Any]] = defaultdict(
+                lambda: {
+                    "user_count": 0,
+                    "total_queries": 0,
+                    "unique_tables": set(),
+                    "query_types": Counter(),
+                    "avg_queries_per_user": 0,
+                    "users": [],
+                }
+            )
 
             # Process user access data
             for user_data in user_access_analysis:
@@ -491,14 +510,14 @@ class SecurityAnalyticsTools:
                         stats["query_types"][query_type] += count
 
             # Calculate role analysis
-            role_analysis = {}
+            role_analysis: dict[str, Any] = {}
             for role, stats in role_stats.items():
                 if stats["user_count"] > 0:
                     avg_queries = stats["total_queries"] / stats["user_count"]
 
                     # Calculate privilege usage (simplified)
                     total_role_queries = sum(stats["query_types"].values())
-                    privilege_usage = {}
+                    privilege_usage: dict[str, float] = {}
                     if total_role_queries > 0:
                         privilege_usage = {
                             query_type: round(count / total_role_queries, 3)
@@ -521,7 +540,10 @@ class SecurityAnalyticsTools:
             logger.warning(f"Failed to analyze role access patterns: {str(e)}")
             return {}
 
-    async def _get_user_roles(self, connection) -> dict[str, list[str]]:
+    async def _get_user_roles(
+        self,
+        connection: DorisConnection,
+    ) -> dict[str, list[str]]:
         """Get user roles mapping"""
         try:
             auth_context = get_auth_context()
@@ -542,7 +564,7 @@ class SecurityAnalyticsTools:
                     mask_result=False,
                 )
 
-            user_roles = defaultdict(list)
+            user_roles: defaultdict[str, list[str]] = defaultdict(list)
             if result.data:
                 for row in result.data:
                     normalized = {
@@ -591,9 +613,13 @@ class SecurityAnalyticsTools:
         else:
             return "minimal"
 
-    async def _detect_security_anomalies(self, audit_data: list[dict], user_access_analysis: list[dict]) -> list[dict]:
+    async def _detect_security_anomalies(
+        self,
+        audit_data: list[dict[str, Any]],
+        user_access_analysis: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """Detect potential security anomalies"""
-        alerts = []
+        alerts: list[dict[str, Any]] = []
 
         # 1. Detect unusual access times
         for user_data in user_access_analysis:
@@ -673,9 +699,13 @@ class SecurityAnalyticsTools:
 
         return sorted(alerts, key=lambda x: {"high": 3, "medium": 2, "low": 1}.get(x["severity"], 0), reverse=True)
 
-    async def _generate_access_insights(self, user_access_analysis: list[dict], role_analysis: dict[str, Any]) -> dict[str, Any]:
+    async def _generate_access_insights(
+        self,
+        user_access_analysis: list[dict[str, Any]],
+        role_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
         """Generate access insights and patterns"""
-        insights = {
+        insights: dict[str, Any] = {
             "user_behavior_patterns": {},
             "role_effectiveness": {},
             "security_posture": {}

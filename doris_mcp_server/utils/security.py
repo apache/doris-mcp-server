@@ -20,14 +20,16 @@ Doris Security Management Module
 Implements enterprise-level authentication, authorization, SQL security validation and data masking functionality
 """
 
+from __future__ import annotations
+
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from contextvars import Token as ContextToken
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import sqlparse
 from sqlparse.sql import Statement
@@ -35,15 +37,32 @@ from sqlparse.tokens import Keyword, Name
 
 from .auth_credentials import BearerCredentials, normalize_bearer_credentials
 from .config import (
-    DatabaseConfig,
+    DorisConfig,
+    EffectiveAuthConfig,
     get_effective_auth_config,
 )
 from .datetime_utils import utc_now
 from .logger import get_logger
 
+if TYPE_CHECKING:
+    from ..auth.doris_oauth_provider import DorisOAuthProvider
+    from ..auth.jwt_manager import JWTManager
+    from ..auth.oauth_provider import OAuthAuthenticationProvider
+    from ..auth.token_manager import (
+        DatabaseConfig as TokenDatabaseConfig,
+    )
+    from ..auth.token_manager import (
+        TokenInfo,
+        TokenManager,
+    )
+    from .db import DorisConnectionManager
+
 # Global ContextVar for auth_context - must be a single instance shared across all modules
 # This allows token-bound database configuration to work correctly in concurrent requests
-mcp_auth_context_var: ContextVar['AuthContext'] = ContextVar('mcp_auth_context', default=None)
+mcp_auth_context_var: ContextVar[AuthContext | None] = ContextVar(
+    "mcp_auth_context",
+    default=None,
+)
 
 RESERVED_DORIS_OAUTH_TOKEN_PREFIX = "doa_"
 
@@ -65,7 +84,9 @@ class AuthContext:
     user_id: str = ""  # User identifier
     roles: list[str] = field(default_factory=list)  # User roles
     permissions: list[str] = field(default_factory=list)  # User permissions
-    security_level: 'SecurityLevel' = field(default_factory=lambda: SecurityLevel.INTERNAL)  # Security level
+    security_level: SecurityLevel = field(
+        default_factory=lambda: SecurityLevel.INTERNAL
+    )  # Security level
     client_ip: str = "unknown"  # Client IP address
     session_id: str = ""  # Session identifier
     login_time: datetime = field(default_factory=utc_now)
@@ -80,6 +101,12 @@ class AuthContext:
     oauth_resource: str = ""
     oauth_audiences: list[str] = field(default_factory=list)
     pool_key: str = ""
+    doris_oauth_db_tools_enabled: bool = False
+    doris_oauth_db_tool_allowlist: tuple[str, ...] = field(default_factory=tuple)
+    doris_oauth_query_tools_enabled: bool = False
+    doris_oauth_query_tool_allowlist: tuple[str, ...] = field(default_factory=tuple)
+    doris_oauth_explain_tools_enabled: bool = False
+    doris_oauth_explain_tool_allowlist: tuple[str, ...] = field(default_factory=tuple)
 
 
 def get_current_auth_context() -> AuthContext | None:
@@ -87,17 +114,19 @@ def get_current_auth_context() -> AuthContext | None:
     return mcp_auth_context_var.get()
 
 
-def set_current_auth_context(auth_context: AuthContext) -> ContextToken:
+def set_current_auth_context(
+    auth_context: AuthContext,
+) -> ContextToken[AuthContext | None]:
     """Set auth context and return the ContextVar token for reset."""
     return mcp_auth_context_var.set(auth_context)
 
 
-def clear_current_auth_context() -> ContextToken:
+def clear_current_auth_context() -> ContextToken[AuthContext | None]:
     """Force-clear auth context and return the ContextVar token."""
     return mcp_auth_context_var.set(None)
 
 
-def reset_auth_context(token: ContextToken) -> None:
+def reset_auth_context(token: ContextToken[AuthContext | None]) -> None:
     """Reset auth context using the token returned by set_current_auth_context."""
     mcp_auth_context_var.reset(token)
 
@@ -109,11 +138,7 @@ class ValidationResult:
     is_valid: bool
     error_message: str | None = None
     risk_level: str = "low"
-    blocked_operations: list[str] = None
-
-    def __post_init__(self):
-        if self.blocked_operations is None:
-            self.blocked_operations = []
+    blocked_operations: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -126,13 +151,20 @@ class MaskingRule:
     security_level: SecurityLevel
 
 
+MaskingAlgorithm = Callable[[str, dict[str, Any]], str]
+
+
 class DorisSecurityManager:
     """Doris security manager
 
     Provides complete security control functionality, including authentication, authorization, SQL security validation and data masking
     """
 
-    def __init__(self, config, connection_manager=None):
+    def __init__(
+        self,
+        config: DorisConfig,
+        connection_manager: DorisConnectionManager | None = None,
+    ) -> None:
         self.config = config
         self.logger = get_logger(__name__)
         self.connection_manager = connection_manager
@@ -151,7 +183,7 @@ class DorisSecurityManager:
         # Track initialization state
         self._initialized = False
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize security manager components"""
         if self._initialized:
             return
@@ -167,10 +199,10 @@ class DorisSecurityManager:
             self.logger.error(f"Failed to initialize DorisSecurityManager: {e}")
             raise
 
-    def _get_effective_auth_config(self):
+    def _get_effective_auth_config(self) -> EffectiveAuthConfig:
         return get_effective_auth_config(self.config)
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Shutdown security manager components"""
         try:
             await self.auth_provider.shutdown()
@@ -183,23 +215,7 @@ class DorisSecurityManager:
 
     def _load_blocked_keywords(self) -> set[str]:
         """Load blocked SQL keywords from configuration"""
-        # Load keywords from configuration, unified source of truth
-        if hasattr(self.config, 'get'):
-            # Dictionary-style configuration
-            blocked_keywords = self.config.get("blocked_keywords", [])
-        elif hasattr(self.config, 'security') and hasattr(self.config.security, 'blocked_keywords'):
-            # DorisConfig object, get through security.blocked_keywords
-            blocked_keywords = self.config.security.blocked_keywords
-        else:
-            # Fallback to default if no configuration available
-            blocked_keywords = [
-                "DROP", "CREATE", "ALTER", "TRUNCATE",
-                "DELETE", "INSERT", "UPDATE",
-                "GRANT", "REVOKE",
-                "EXEC", "EXECUTE", "SHUTDOWN", "KILL"
-            ]
-
-        return set(blocked_keywords)
+        return set(self.config.security.blocked_keywords)
 
     def _load_sensitive_tables(self) -> dict[str, SecurityLevel]:
         """Load sensitive table configuration"""
@@ -210,20 +226,12 @@ class DorisSecurityManager:
             "public_reports": SecurityLevel.PUBLIC,
         }
 
-        if hasattr(self.config, 'get'):
-            config_tables = self.config.get("sensitive_tables", {})
-            # Convert string values to SecurityLevel enum
-            for table_name, level in config_tables.items():
-                if isinstance(level, str):
-                    try:
-                        default_tables[table_name] = SecurityLevel(level.lower())
-                    except ValueError:
-                        default_tables[table_name] = SecurityLevel.INTERNAL
-                else:
-                    default_tables[table_name] = level
-            return default_tables
-        else:
-            return default_tables
+        for table_name, level in self.config.security.sensitive_tables.items():
+            try:
+                default_tables[table_name] = SecurityLevel(level.lower())
+            except ValueError:
+                default_tables[table_name] = SecurityLevel.INTERNAL
+        return default_tables
 
     def _load_masking_rules(self) -> list[MaskingRule]:
         """Load data masking rules"""
@@ -249,17 +257,8 @@ class DorisSecurityManager:
         ]
 
         # Load custom rules from configuration
-        custom_rules = []
-        if hasattr(self.config, 'get'):
-            custom_rules = self.config.get("masking_rules", [])
-        elif hasattr(self.config, 'security') and hasattr(self.config.security, 'masking_rules'):
-            custom_rules = self.config.security.masking_rules
-
-        for rule_config in custom_rules:
-            if isinstance(rule_config, dict):
-                default_rules.append(MaskingRule(**rule_config))
-            elif isinstance(rule_config, MaskingRule):
-                default_rules.append(rule_config)
+        for rule_config in self.config.security.masking_rules:
+            default_rules.append(MaskingRule(**rule_config))
 
         return default_rules
 
@@ -275,13 +274,16 @@ class DorisSecurityManager:
         """
         effective_auth = self._get_effective_auth_config()
         credentials = normalize_bearer_credentials(auth_input)
-        legacy_auth_type = ""
+        legacy_auth_info: dict[str, Any] | None = None
         if isinstance(auth_input, Mapping):
-            legacy_auth_type = str(auth_input.get("type") or "")
+            legacy_auth_info = dict(auth_input)
+        legacy_auth_type = (
+            str(legacy_auth_info.get("type") or "") if legacy_auth_info else ""
+        )
 
         if not effective_auth.auth_methods:
-            if legacy_auth_type:
-                return await self.auth_provider.authenticate(dict(auth_input))
+            if legacy_auth_type and legacy_auth_info is not None:
+                return await self.auth_provider.authenticate(legacy_auth_info)
             self.logger.debug("All authentication methods are disabled")
             return AuthContext(
                 token_id="anonymous",
@@ -300,7 +302,9 @@ class DorisSecurityManager:
         for auth_method in effective_auth.auth_methods:
             try:
                 if auth_method == "doris_oauth":
-                    return await self.auth_provider.authenticate_doris_oauth(credentials)
+                    return await self.auth_provider.authenticate_doris_oauth(
+                        credentials
+                    )
                 if auth_method == "token":
                     return await self.auth_provider.authenticate_token(credentials)
                 if auth_method == "jwt":
@@ -310,11 +314,8 @@ class DorisSecurityManager:
             except Exception as e:
                 self.logger.debug(f"{auth_method} authentication failed: {e}")
                 last_error = e
-                if (
-                    auth_method == "doris_oauth"
-                    and credentials.token.startswith(
-                        RESERVED_DORIS_OAUTH_TOKEN_PREFIX
-                    )
+                if auth_method == "doris_oauth" and credentials.token.startswith(
+                    RESERVED_DORIS_OAUTH_TOKEN_PREFIX
                 ):
                     raise
 
@@ -325,7 +326,11 @@ class DorisSecurityManager:
 
         if isinstance(last_error, OAuthAccessTokenValidationError):
             raise last_error
-        error_message = f"Authentication failed: {str(last_error)}" if last_error else "No authentication method succeeded"
+        error_message = (
+            f"Authentication failed: {str(last_error)}"
+            if last_error
+            else "No authentication method succeeded"
+        )
         self.logger.warning(
             f"Authentication failed for client {credentials.client_ip}: {error_message}"
         )
@@ -393,7 +398,7 @@ class DorisSecurityManager:
         expires_hours: int | None = None,
         description: str = "",
         custom_token: str | None = None,
-        database_config: DatabaseConfig | None = None
+        database_config: TokenDatabaseConfig | None = None,
     ) -> str:
         """Create a new API access token
 
@@ -415,7 +420,7 @@ class DorisSecurityManager:
             expires_hours=expires_hours,
             description=description,
             custom_token=custom_token,
-            database_config=database_config
+            database_config=database_config,
         )
 
     async def revoke_token(self, token_id: str) -> bool:
@@ -465,7 +470,11 @@ class DorisSecurityManager:
 
         return self.auth_provider.token_manager.get_token_stats()
 
-    async def _validate_token_database_config(self, token: str, token_info) -> None:
+    async def _validate_token_database_config(
+        self,
+        token: str,
+        token_info: TokenInfo,
+    ) -> None:
         """Validate database configuration for token immediately during authentication
 
         This ensures database connectivity issues are caught at authentication time,
@@ -480,14 +489,20 @@ class DorisSecurityManager:
         """
         try:
             if not self.connection_manager:
-                self.logger.warning("Connection manager not available for immediate database validation")
+                self.logger.warning(
+                    "Connection manager not available for immediate database validation"
+                )
                 return
 
             # Configure and test database connection for this token
-            success, config_source = await self.connection_manager.configure_for_token(token)
+            success, config_source = await self.connection_manager.configure_for_token(
+                token
+            )
 
             if success:
-                self.logger.info(f"Database configuration validated successfully for token {token_info.token_id} (source: {config_source})")
+                self.logger.info(
+                    f"Database configuration validated successfully for token {token_info.token_id} (source: {config_source})"
+                )
             else:
                 raise ValueError("Database configuration validation failed")
 
@@ -500,14 +515,18 @@ class DorisSecurityManager:
 class AuthenticationProvider:
     """Authentication provider"""
 
-    def __init__(self, config, security_manager=None):
+    def __init__(
+        self,
+        config: DorisConfig,
+        security_manager: DorisSecurityManager | None = None,
+    ) -> None:
         self.config = config
         self.logger = get_logger(__name__)
-        self.session_cache = {}
-        self.jwt_manager = None
-        self.oauth_provider = None
-        self.doris_oauth_provider = None
-        self.token_manager = None
+        self.session_cache: dict[str, AuthContext] = {}
+        self.jwt_manager: JWTManager | None = None
+        self.oauth_provider: OAuthAuthenticationProvider | None = None
+        self.doris_oauth_provider: DorisOAuthProvider | None = None
+        self.token_manager: TokenManager | None = None
         self.security_manager = security_manager
         self.effective_auth = get_effective_auth_config(config)
 
@@ -534,14 +553,19 @@ class AuthenticationProvider:
             auth_methods_enabled.append("Doris OAuth")
 
         if auth_methods_enabled:
-            self.logger.info(f"Authentication enabled with methods: {', '.join(auth_methods_enabled)}")
+            self.logger.info(
+                f"Authentication enabled with methods: {', '.join(auth_methods_enabled)}"
+            )
         else:
-            self.logger.info("All authentication methods are disabled - anonymous access allowed")
+            self.logger.info(
+                "All authentication methods are disabled - anonymous access allowed"
+            )
 
-    def _initialize_jwt_manager(self):
+    def _initialize_jwt_manager(self) -> None:
         """Initialize JWT manager"""
         try:
             from ..auth.jwt_manager import JWTManager
+
             self.jwt_manager = JWTManager(self.config)
             self.logger.info("JWT manager initialized")
         except ImportError as e:
@@ -551,10 +575,11 @@ class AuthenticationProvider:
             self.logger.error(f"Failed to initialize JWT manager: {e}")
             raise
 
-    def _initialize_token_manager(self):
+    def _initialize_token_manager(self) -> None:
         """Initialize Token manager"""
         try:
             from ..auth.token_manager import TokenManager
+
             self.token_manager = TokenManager(self.config)
             self.logger.info("Token manager initialized")
         except ImportError as e:
@@ -564,10 +589,11 @@ class AuthenticationProvider:
             self.logger.error(f"Failed to initialize Token manager: {e}")
             raise
 
-    def _initialize_oauth_provider(self):
+    def _initialize_oauth_provider(self) -> None:
         """Initialize OAuth provider"""
         try:
             from ..auth.oauth_provider import OAuthAuthenticationProvider
+
             self.oauth_provider = OAuthAuthenticationProvider(self.config)
             self.logger.info("OAuth provider initialized")
         except ImportError as e:
@@ -577,10 +603,11 @@ class AuthenticationProvider:
             self.logger.error(f"Failed to initialize OAuth provider: {e}")
             raise
 
-    def _initialize_doris_oauth_provider(self):
+    def _initialize_doris_oauth_provider(self) -> None:
         """Initialize Doris-backed OAuth provider shell."""
         try:
             from ..auth.doris_oauth_provider import DorisOAuthProvider
+
             self.doris_oauth_provider = DorisOAuthProvider(self.config)
             self.logger.info("Doris OAuth provider initialized")
         except ImportError as e:
@@ -590,12 +617,15 @@ class AuthenticationProvider:
             self.logger.error(f"Failed to initialize Doris OAuth provider: {e}")
             raise
 
-    def configure_doris_oauth(self, connection_manager) -> None:
+    def configure_doris_oauth(
+        self,
+        connection_manager: DorisConnectionManager,
+    ) -> None:
         """Inject the Phase 2 connection manager after it is created."""
         if self.doris_oauth_provider:
             self.doris_oauth_provider.configure_connection_manager(connection_manager)
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """Initialize authentication provider asynchronously"""
         if self.jwt_manager:
             success = await self.jwt_manager.initialize()
@@ -613,7 +643,7 @@ class AuthenticationProvider:
                 raise RuntimeError("Failed to initialize OAuth provider")
             self.logger.info("OAuth authentication provider initialized successfully")
 
-    async def shutdown(self):
+    async def shutdown(self) -> None:
         """Shutdown authentication provider"""
         if self.jwt_manager:
             await self.jwt_manager.shutdown()
@@ -706,9 +736,8 @@ class AuthenticationProvider:
         """Authenticate a Doris OAuth doa_ access token."""
         if not self.effective_auth.enable_doris_oauth_auth:
             raise ValueError("Doris OAuth authentication is not enabled")
-        if (
-            not credentials.is_bearer
-            or not credentials.token.startswith(RESERVED_DORIS_OAUTH_TOKEN_PREFIX)
+        if not credentials.is_bearer or not credentials.token.startswith(
+            RESERVED_DORIS_OAUTH_TOKEN_PREFIX
         ):
             raise ValueError("Missing Doris OAuth access token")
         if not self.doris_oauth_provider:
@@ -728,6 +757,7 @@ class AuthenticationProvider:
         try:
             # Use JWT middleware for authentication
             from ..auth.auth_middleware import AuthMiddleware
+
             middleware = AuthMiddleware(self.jwt_manager)
             return await middleware.authenticate_request(credentials)
 
@@ -769,13 +799,19 @@ class AuthenticationProvider:
             validation_result = await self.token_manager.validate_token(token)
 
             if not validation_result.is_valid:
-                raise ValueError(f"Token validation failed: {validation_result.error_message}")
+                raise ValueError(
+                    f"Token validation failed: {validation_result.error_message}"
+                )
 
             token_info = validation_result.token_info
+            if token_info is None:
+                raise ValueError("Token validation did not return token information")
 
             # Immediately validate database configuration for this token
             if self.security_manager:
-                await self.security_manager._validate_token_database_config(token, token_info)
+                await self.security_manager._validate_token_database_config(
+                    token, token_info
+                )
 
             return AuthContext(
                 token_id=token_info.token_id,
@@ -796,13 +832,14 @@ class AuthenticationProvider:
             self.logger.error(f"Token authentication failed: {e}")
             raise ValueError(f"Token authentication failed: {str(e)}")
 
+
 class AuthorizationProvider:
     """Authorization provider"""
 
-    def __init__(self, config):
+    def __init__(self, config: DorisConfig | Mapping[str, Any]) -> None:
         self.config = config
         self.logger = get_logger(__name__)
-        self.permission_cache = {}
+        self.permission_cache: dict[str, bool] = {}
 
         # Load sensitive tables configuration
         self.sensitive_tables = self._load_sensitive_tables()
@@ -816,7 +853,7 @@ class AuthorizationProvider:
             "public_reports": SecurityLevel.PUBLIC,
         }
 
-        if hasattr(self.config, 'get'):
+        if isinstance(self.config, Mapping):
             config_tables = self.config.get("sensitive_tables", {})
             # Convert string values to SecurityLevel enum
             for table_name, level in config_tables.items():
@@ -942,31 +979,26 @@ class AuthorizationProvider:
 class SQLSecurityValidator:
     """SQL security validator"""
 
-    def __init__(self, config):
+    def __init__(self, config: DorisConfig | Mapping[str, Any]) -> None:
         self.config = config
         self.logger = get_logger(__name__)
+        self.blocked_keywords: set[str]
+        self.max_query_complexity: int
+        self.enable_security_check: bool
 
         # Handle DorisConfig object or dictionary configuration
-        if hasattr(config, 'get'):
+        if isinstance(config, Mapping):
             # Dictionary configuration
-            self.blocked_keywords = set(config.get("blocked_keywords", []))
-            self.max_query_complexity = config.get("max_query_complexity", 100)
-            self.enable_security_check = config.get("enable_security_check", True)
-        elif hasattr(config, 'security'):
+            self.blocked_keywords = {
+                str(keyword) for keyword in config.get("blocked_keywords", [])
+            }
+            self.max_query_complexity = int(config.get("max_query_complexity", 100))
+            self.enable_security_check = bool(config.get("enable_security_check", True))
+        else:
             # DorisConfig object with security attribute - unified source from config
             self.blocked_keywords = set(config.security.blocked_keywords)
             self.max_query_complexity = config.security.max_query_complexity
-            self.enable_security_check = getattr(config.security, 'enable_security_check', True)
-        else:
-            # Fallback to default if no configuration available
-            self.blocked_keywords = {
-                "DROP", "CREATE", "ALTER", "TRUNCATE",
-                "DELETE", "INSERT", "UPDATE",
-                "GRANT", "REVOKE",
-                "EXEC", "EXECUTE", "SHUTDOWN", "KILL"
-            }
-            self.max_query_complexity = 100
-            self.enable_security_check = True
+            self.enable_security_check = config.security.enable_security_check
 
     async def validate(self, sql: str, auth_context: AuthContext) -> ValidationResult:
         """Validate SQL query security"""
@@ -984,13 +1016,13 @@ class SQLSecurityValidator:
                 return ValidationResult(
                     is_valid=False,
                     error_message="Empty or invalid SQL statement",
-                    risk_level="medium"
+                    risk_level="medium",
                 )
 
             # SECURITY FIX: Validate each statement individually
             for idx, parsed in enumerate(all_statements):
                 # Skip empty statements (e.g., from trailing semicolons)
-                if not parsed.tokens or str(parsed).strip() == '':
+                if not parsed.tokens or str(parsed).strip() == "":
                     continue
 
                 self.logger.debug(
@@ -1002,25 +1034,33 @@ class SQLSecurityValidator:
                 # Check blocked operations first (more specific)
                 keyword_result = await self._check_blocked_keywords(parsed)
                 if not keyword_result.is_valid:
-                    keyword_result.error_message = f"Statement {idx + 1}: {keyword_result.error_message}"
+                    keyword_result.error_message = (
+                        f"Statement {idx + 1}: {keyword_result.error_message}"
+                    )
                     return keyword_result
 
                 # Check SQL injection risks
                 injection_result = await self._check_sql_injection(sql, parsed)
                 if not injection_result.is_valid:
-                    injection_result.error_message = f"Statement {idx + 1}: {injection_result.error_message}"
+                    injection_result.error_message = (
+                        f"Statement {idx + 1}: {injection_result.error_message}"
+                    )
                     return injection_result
 
                 # Check query complexity
                 complexity_result = await self._check_query_complexity(parsed)
                 if not complexity_result.is_valid:
-                    complexity_result.error_message = f"Statement {idx + 1}: {complexity_result.error_message}"
+                    complexity_result.error_message = (
+                        f"Statement {idx + 1}: {complexity_result.error_message}"
+                    )
                     return complexity_result
 
                 # Check table access permissions
                 table_result = await self._check_table_access(parsed, auth_context)
                 if not table_result.is_valid:
-                    table_result.error_message = f"Statement {idx + 1}: {table_result.error_message}"
+                    table_result.error_message = (
+                        f"Statement {idx + 1}: {table_result.error_message}"
+                    )
                     return table_result
 
             return ValidationResult(is_valid=True)
@@ -1045,27 +1085,20 @@ class SQLSecurityValidator:
         injection_patterns = [
             # Stacked queries with dangerous operations (true injection risk)
             r";\s*(DROP|DELETE|TRUNCATE|ALTER|CREATE|INSERT|UPDATE)\s+",
-
             # UNION-based injection (but allow legitimate UNION queries)
             # Only flag if UNION is followed by suspicious patterns like SELECT with WHERE 1=1
             r"UNION\s+(ALL\s+)?SELECT\s+.*\s+(WHERE|AND|OR)\s+\d+\s*=\s*\d+",
             r"UNION\s+(ALL\s+)?SELECT\s+.*\b(PASSWORD|SECRET|TOKEN|CREDENTIAL|ADMIN)\b",
-
             # Boolean tautology injection. BETWEEN clauses are cleaned below before this is applied.
             r"\b(OR|AND)\s+\d+\s*=\s*\d+\b",
-
             # Boolean-based blind injection with comments (true injection pattern)
             r"(WHERE|AND|OR)\s+\d+\s*=\s*\d+\s*(--|#|/\*)",
-
             # Quote-based injection attempts (but not in legitimate strings)
             r"(WHERE|AND|OR)\s+(['\"])[^\2]*\2\s*=\s*\2[^\2]*\2",
-
             # Time-based blind injection
             r"(SLEEP|WAITFOR|BENCHMARK)\s*\(",
-
             # System stored procedure injection
             r"(EXEC|EXECUTE|SP_|XP_)\s*\(",
-
             # Script injection attempts
             r"<\s*(SCRIPT|JAVASCRIPT|VBSCRIPT)",
         ]
@@ -1086,7 +1119,9 @@ class SQLSecurityValidator:
             between_pattern = r"BETWEEN\s+[^\s]+\s+AND\s+[^\s]+"
             if re.search(between_pattern, sql_upper, re.IGNORECASE):
                 # Remove BETWEEN clauses before checking other patterns
-                sql_cleaned = re.sub(between_pattern, "BETWEEN_CLAUSE", sql_upper, flags=re.IGNORECASE)
+                sql_cleaned = re.sub(
+                    between_pattern, "BETWEEN_CLAUSE", sql_upper, flags=re.IGNORECASE
+                )
                 sql_to_check = sql_cleaned
             else:
                 sql_to_check = sql_upper
@@ -1095,7 +1130,9 @@ class SQLSecurityValidator:
 
         for pattern in injection_patterns:
             if re.search(pattern, sql_to_check, re.IGNORECASE):
-                self.logger.warning(f"Potential SQL injection pattern detected: {pattern}")
+                self.logger.warning(
+                    f"Potential SQL injection pattern detected: {pattern}"
+                )
                 return ValidationResult(
                     is_valid=False,
                     error_message="Potential SQL injection risk detected",
@@ -1143,16 +1180,14 @@ class SQLSecurityValidator:
                     # Comments are generally OK, but check for suspicious injection patterns
                     comment_value = str(token).lower()
                     comment_body = re.sub(r"^(--|#|/\*)\s*", "", comment_value).strip()
-                    truncation_pattern = (
-                        r"^(and|or|union|select|drop|delete|insert|update|exec|execute)\b"
-                    )
-                    sensitive_pattern = (
-                        r"\b(admin|credential|password|secret|token)\b"
-                    )
+                    truncation_pattern = r"^(and|or|union|select|drop|delete|insert|update|exec|execute)\b"
+                    sensitive_pattern = r"\b(admin|credential|password|secret|token)\b"
                     if re.search(truncation_pattern, comment_body) or re.search(
                         sensitive_pattern, comment_body
                     ):
-                        self.logger.warning(f"Suspicious SQL keyword in comment: {token}")
+                        self.logger.warning(
+                            f"Suspicious SQL keyword in comment: {token}"
+                        )
                         return True
                     # Normal comments are OK
                     continue
@@ -1161,7 +1196,7 @@ class SQLSecurityValidator:
                     non_string_content.append(str(token))
 
             # Check for unmatched quotes in non-string content
-            non_string_text = ''.join(non_string_content)
+            non_string_text = "".join(non_string_content)
             single_quotes = non_string_text.count("'")
             double_quotes = non_string_text.count('"')
 
@@ -1187,14 +1222,16 @@ class SQLSecurityValidator:
         # Check all tokens in the parsed statement
         for token in parsed.flatten():
             # Check if token is a keyword (including DML/DDL) or name that matches blocked operations
-            if (token.ttype is Keyword or
-                token.ttype is Name or
-                (token.ttype and str(token.ttype).startswith('Token.Keyword'))):
+            if (
+                token.ttype is Keyword
+                or token.ttype is Name
+                or (token.ttype and str(token.ttype).startswith("Token.Keyword"))
+            ):
                 token_value = token.value.upper().strip()
                 if token_value in self.blocked_keywords:
                     blocked_operations.append(token_value)
             # Also check for DDL/DML keywords in token values
-            elif hasattr(token, 'value') and token.value:
+            elif hasattr(token, "value") and token.value:
                 token_value = token.value.upper().strip()
                 for blocked_keyword in self.blocked_keywords:
                     if blocked_keyword in token_value:
@@ -1240,10 +1277,6 @@ class SQLSecurityValidator:
         self, parsed: Statement, auth_context: AuthContext
     ) -> ValidationResult:
         """Check table access permissions"""
-        # If no auth_context, skip table access checks (rely on other security checks)
-        if auth_context is None:
-            return ValidationResult(is_valid=True)
-
         # Extract table names from query
         tables = self._extract_table_names(parsed)
 
@@ -1290,10 +1323,12 @@ class SQLSecurityValidator:
 class DataMaskingProcessor:
     """Data masking processor"""
 
-    def __init__(self, config):
+    def __init__(self, config: DorisConfig | Mapping[str, Any]) -> None:
         self.config = config
         self.logger = get_logger(__name__)
-        self.masking_algorithms = self._init_masking_algorithms()
+        self.masking_algorithms: dict[str, MaskingAlgorithm] = (
+            self._init_masking_algorithms()
+        )
         self.masking_rules = self._load_masking_rules()
 
     def _load_masking_rules(self) -> list[MaskingRule]:
@@ -1320,23 +1355,27 @@ class DataMaskingProcessor:
         ]
 
         # Load custom rules from configuration
-        if hasattr(self.config, 'get'):
+        if isinstance(self.config, Mapping):
             custom_rules = self.config.get("masking_rules", [])
             for rule_config in custom_rules:
                 if isinstance(rule_config, dict):
                     # Convert string security level to enum
-                    if 'security_level' in rule_config and isinstance(rule_config['security_level'], str):
+                    if "security_level" in rule_config and isinstance(
+                        rule_config["security_level"], str
+                    ):
                         try:
-                            rule_config['security_level'] = SecurityLevel(rule_config['security_level'].lower())
+                            rule_config["security_level"] = SecurityLevel(
+                                rule_config["security_level"].lower()
+                            )
                         except ValueError:
-                            rule_config['security_level'] = SecurityLevel.INTERNAL
+                            rule_config["security_level"] = SecurityLevel.INTERNAL
                     default_rules.append(MaskingRule(**rule_config))
                 elif isinstance(rule_config, MaskingRule):
                     default_rules.append(rule_config)
 
         return default_rules
 
-    def _init_masking_algorithms(self) -> dict[str, callable]:
+    def _init_masking_algorithms(self) -> dict[str, MaskingAlgorithm]:
         """Initialize masking algorithms"""
         return {
             "phone_mask": self._mask_phone,
@@ -1356,9 +1395,9 @@ class DataMaskingProcessor:
         # Get applicable masking rules
         applicable_rules = self._get_applicable_rules(auth_context)
 
-        masked_data = []
+        masked_data: list[dict[str, Any]] = []
         for row in data:
-            masked_row = {}
+            masked_row: dict[str, Any] = {}
             for column, value in row.items():
                 masked_value = await self._apply_masking_rules(
                     column, value, applicable_rules
@@ -1370,7 +1409,7 @@ class DataMaskingProcessor:
 
     def _get_applicable_rules(self, auth_context: AuthContext) -> list[MaskingRule]:
         """Get applicable masking rules"""
-        applicable_rules = []
+        applicable_rules: list[MaskingRule] = []
 
         for rule in self.masking_rules:
             # Decide whether to apply masking rules based on user security level
@@ -1419,9 +1458,9 @@ class DataMaskingProcessor:
         if len(value) < 7:
             return value
 
-        mask_char = params.get("mask_char", "*")
-        keep_prefix = params.get("keep_prefix", 3)
-        keep_suffix = params.get("keep_suffix", 4)
+        mask_char = str(params.get("mask_char", "*"))
+        keep_prefix = int(params.get("keep_prefix", 3))
+        keep_suffix = int(params.get("keep_suffix", 4))
 
         if len(value) <= keep_prefix + keep_suffix:
             return mask_char * len(value)
@@ -1437,7 +1476,7 @@ class DataMaskingProcessor:
         if "@" not in value:
             return value
 
-        mask_char = params.get("mask_char", "*")
+        mask_char = str(params.get("mask_char", "*"))
         local, domain = value.split("@", 1)
 
         if len(local) <= 2:
@@ -1452,9 +1491,9 @@ class DataMaskingProcessor:
         if len(value) < 10:
             return value
 
-        mask_char = params.get("mask_char", "*")
-        keep_prefix = params.get("keep_prefix", 6)
-        keep_suffix = params.get("keep_suffix", 4)
+        mask_char = str(params.get("mask_char", "*"))
+        keep_prefix = int(params.get("keep_prefix", 6))
+        keep_suffix = int(params.get("keep_suffix", 4))
 
         if len(value) <= keep_prefix + keep_suffix:
             return mask_char * len(value)
@@ -1470,7 +1509,7 @@ class DataMaskingProcessor:
         if len(value) <= 1:
             return value
 
-        mask_char = params.get("mask_char", "*")
+        mask_char = str(params.get("mask_char", "*"))
 
         if len(value) == 2:
             return value[0] + mask_char
@@ -1479,8 +1518,8 @@ class DataMaskingProcessor:
 
     def _mask_partial(self, value: str, params: dict[str, Any]) -> str:
         """Partial masking"""
-        mask_char = params.get("mask_char", "*")
-        mask_ratio = params.get("mask_ratio", 0.5)
+        mask_char = str(params.get("mask_char", "*"))
+        mask_ratio = float(params.get("mask_ratio", 0.5))
 
         mask_length = int(len(value) * mask_ratio)
         start_pos = (len(value) - mask_length) // 2

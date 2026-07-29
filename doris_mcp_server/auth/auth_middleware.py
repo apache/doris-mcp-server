@@ -22,6 +22,8 @@ Provides middleware for JWT authentication in HTTP and MCP contexts
 
 from datetime import UTC, datetime
 
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
 from ..utils.auth_credentials import (
     BearerCredentials,
     normalize_bearer_credentials,
@@ -144,7 +146,11 @@ class AuthMiddleware:
             'X-Auth-Security-Level': auth_context.security_level.value
         }
 
-    def create_http_middleware(self, skip_paths: list | None = None):
+    def create_http_middleware(
+        self,
+        app: ASGIApp,
+        skip_paths: list[str] | None = None,
+    ) -> ASGIApp:
         """Create HTTP middleware function
 
         Args:
@@ -161,11 +167,16 @@ class AuthMiddleware:
             '/openapi.json',
         ]
 
-        async def middleware(scope, receive, send):
+        async def middleware(
+            scope: Scope,
+            receive: Receive,
+            send: Send,
+        ) -> None:
             """HTTP authentication middleware"""
             if scope['type'] != 'http':
                 # Pass through non-HTTP requests directly
-                return await self.app(scope, receive, send)
+                await app(scope, receive, send)
+                return
 
             path = scope.get('path', '')
 
@@ -174,7 +185,8 @@ class AuthMiddleware:
                 path == skip or path.startswith(f"{skip}/")
                 for skip in skip_paths
             ):
-                return await self.app(scope, receive, send)
+                await app(scope, receive, send)
+                return
 
             # Extract authentication information
             headers = dict(scope.get('headers', []))
@@ -189,7 +201,7 @@ class AuthMiddleware:
                 scope['auth_context'] = auth_context
 
                 # Create response wrapper to add authentication headers
-                async def send_wrapper(message):
+                async def send_wrapper(message: Message) -> None:
                     if message['type'] == 'http.response.start':
                         headers = dict(message.get('headers', []))
                         auth_headers = await self.create_auth_response_headers(auth_context)
@@ -201,7 +213,7 @@ class AuthMiddleware:
 
                     await send(message)
 
-                return await self.app(scope, receive, send_wrapper)
+                await app(scope, receive, send_wrapper)
 
             except Exception:
                 # Authentication failed, return 401 error

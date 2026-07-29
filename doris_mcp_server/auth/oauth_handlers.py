@@ -21,6 +21,8 @@ Provides HTTP endpoints for OAuth authentication flow
 """
 
 
+from typing import TYPE_CHECKING
+
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
@@ -29,13 +31,16 @@ from ..utils.logger import get_logger
 from ..utils.redaction import redact_sensitive_text
 from .oauth_resource import external_oauth_protected_resource_metadata
 
+if TYPE_CHECKING:
+    from ..utils.security import DorisSecurityManager
+
 logger = get_logger(__name__)
 
 
 class OAuthHandlers:
     """OAuth HTTP request handlers"""
 
-    def __init__(self, security_manager):
+    def __init__(self, security_manager: "DorisSecurityManager") -> None:
         """Initialize OAuth handlers
 
         Args:

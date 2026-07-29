@@ -26,6 +26,7 @@ from collections.abc import Mapping, Sequence
 
 from .logger import get_logger
 from .security import (
+    AuthContext,
     get_current_auth_context,
     set_current_auth_context,
 )
@@ -35,8 +36,10 @@ from .security import (
 
 logger = get_logger(__name__)
 
+
 class SQLSecurityError(Exception):
     """Exception raised for SQL security validation failures"""
+
     pass
 
 
@@ -54,20 +57,64 @@ class SQLSecurityUtils:
     # Valid SQL identifier pattern: letters, numbers, underscores
     # Must start with letter or underscore, not a number
     # Supports Unicode letters for international database/table names
-    IDENTIFIER_PATTERN = re.compile(r'^[a-zA-Z_\u4e00-\u9fff][a-zA-Z0-9_\u4e00-\u9fff]*$')
+    IDENTIFIER_PATTERN = re.compile(
+        r"^[a-zA-Z_\u4e00-\u9fff][a-zA-Z0-9_\u4e00-\u9fff]*$"
+    )
 
     # Maximum identifier length (MySQL/Doris standard)
     MAX_IDENTIFIER_LENGTH = 64
 
     # SQL reserved keywords that should be quoted
     SQL_KEYWORDS = {
-        'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'DROP',
-        'CREATE', 'ALTER', 'TABLE', 'DATABASE', 'INDEX', 'VIEW', 'AND',
-        'OR', 'NOT', 'NULL', 'TRUE', 'FALSE', 'IN', 'LIKE', 'BETWEEN',
-        'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'AS', 'ORDER',
-        'BY', 'GROUP', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'ALL',
-        'DISTINCT', 'INTO', 'VALUES', 'SET', 'DEFAULT', 'PRIMARY', 'KEY',
-        'FOREIGN', 'REFERENCES', 'CHECK', 'UNIQUE', 'CONSTRAINT'
+        "SELECT",
+        "FROM",
+        "WHERE",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "DROP",
+        "CREATE",
+        "ALTER",
+        "TABLE",
+        "DATABASE",
+        "INDEX",
+        "VIEW",
+        "AND",
+        "OR",
+        "NOT",
+        "NULL",
+        "TRUE",
+        "FALSE",
+        "IN",
+        "LIKE",
+        "BETWEEN",
+        "JOIN",
+        "LEFT",
+        "RIGHT",
+        "INNER",
+        "OUTER",
+        "ON",
+        "AS",
+        "ORDER",
+        "BY",
+        "GROUP",
+        "HAVING",
+        "LIMIT",
+        "OFFSET",
+        "UNION",
+        "ALL",
+        "DISTINCT",
+        "INTO",
+        "VALUES",
+        "SET",
+        "DEFAULT",
+        "PRIMARY",
+        "KEY",
+        "FOREIGN",
+        "REFERENCES",
+        "CHECK",
+        "UNIQUE",
+        "CONSTRAINT",
     }
 
     RULE_OPERATORS = {
@@ -102,7 +149,9 @@ class SQLSecurityUtils:
             raise SQLSecurityError(f"Empty {identifier_type} is not allowed")
 
         if not isinstance(name, str):
-            raise SQLSecurityError(f"Invalid {identifier_type}: must be a string, got {type(name).__name__}")
+            raise SQLSecurityError(
+                f"Invalid {identifier_type}: must be a string, got {type(name).__name__}"
+            )
 
         # Strip whitespace
         name = name.strip()
@@ -117,7 +166,7 @@ class SQLSecurityUtils:
             )
 
         # Check for dangerous characters that could be SQL injection
-        dangerous_chars = ["'", '"', ';', '--', '/*', '*/', '\\', '\x00']
+        dangerous_chars = ["'", '"', ";", "--", "/*", "*/", "\\", "\x00"]
         for char in dangerous_chars:
             if char in name:
                 raise SQLSecurityError(
@@ -153,7 +202,7 @@ class SQLSecurityUtils:
         validated_name = cls.validate_identifier(name, identifier_type)
 
         # Escape any backticks within the name (double them)
-        escaped_name = validated_name.replace('`', '``')
+        escaped_name = validated_name.replace("`", "``")
 
         return f"`{escaped_name}`"
 
@@ -163,7 +212,7 @@ class SQLSecurityUtils:
         table_name: str,
         db_name: str | None = None,
         catalog_name: str | None = None,
-        quote: bool = True
+        quote: bool = True,
     ) -> str:
         """
         Build a safe, fully-qualified table reference.
@@ -199,14 +248,11 @@ class SQLSecurityUtils:
         else:
             parts.append(cls.validate_identifier(table_name, "table name"))
 
-        return '.'.join(parts)
+        return ".".join(parts)
 
     @classmethod
     def build_column_reference(
-        cls,
-        column_name: str,
-        table_name: str | None = None,
-        quote: bool = True
+        cls, column_name: str, table_name: str | None = None, quote: bool = True
     ) -> str:
         """
         Build a safe column reference.
@@ -235,14 +281,11 @@ class SQLSecurityUtils:
         else:
             parts.append(cls.validate_identifier(column_name, "column name"))
 
-        return '.'.join(parts)
+        return ".".join(parts)
 
     @classmethod
     def validate_and_build_where_condition(
-        cls,
-        column_name: str,
-        operator: str = "=",
-        use_param: bool = True
+        cls, column_name: str, operator: str = "=", use_param: bool = True
     ) -> tuple[str, bool]:
         """
         Build a safe WHERE condition for a column.
@@ -263,9 +306,11 @@ class SQLSecurityUtils:
         quoted_column = cls.quote_identifier(column_name, "column name")
 
         # Validate operator
-        allowed_operators = {'=', '!=', '<>', '<', '>', '<=', '>=', 'LIKE', 'IN', 'IS'}
+        allowed_operators = {"=", "!=", "<>", "<", ">", "<=", ">=", "LIKE", "IN", "IS"}
         if operator.upper() not in allowed_operators:
-            raise SQLSecurityError(f"Invalid operator: '{operator}'. Allowed: {allowed_operators}")
+            raise SQLSecurityError(
+                f"Invalid operator: '{operator}'. Allowed: {allowed_operators}"
+            )
 
         if use_param:
             return f"{quoted_column} {operator} %s", True
@@ -328,9 +373,7 @@ class SQLSecurityUtils:
             return f"{column} IN ({placeholders})", tuple(values)
 
         if operator not in cls.RULE_OPERATORS:
-            allowed = sorted(
-                cls.RULE_OPERATORS | cls.NULL_RULE_OPERATORS | {"IN"}
-            )
+            allowed = sorted(cls.RULE_OPERATORS | cls.NULL_RULE_OPERATORS | {"IN"})
             raise SQLSecurityError(
                 f"Invalid business rule operator: {operator!r}; allowed: {allowed}"
             )
@@ -340,7 +383,7 @@ class SQLSecurityUtils:
         return f"{column} {operator} %s", (rule["value"],)
 
     @staticmethod
-    def get_auth_context():
+    def get_auth_context() -> AuthContext | None:
         """
         Get auth_context from the context variable.
 
@@ -360,7 +403,7 @@ class SQLSecurityUtils:
             return None
 
     @staticmethod
-    def set_auth_context(auth_context):
+    def set_auth_context(auth_context: AuthContext) -> None:
         """
         Set auth_context in the context variable.
 

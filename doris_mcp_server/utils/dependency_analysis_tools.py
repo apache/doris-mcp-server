@@ -25,7 +25,7 @@ from collections import defaultdict, deque
 from datetime import datetime
 from typing import Any
 
-from .db import DorisConnectionManager
+from .db import DorisConnection, DorisConnectionManager
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -36,6 +36,8 @@ from .sql_security_utils import (
 )
 
 logger = get_logger(__name__)
+
+DependencyGraph = dict[str, dict[str, Any]]
 
 
 class DependencyAnalysisTools:
@@ -126,12 +128,18 @@ class DependencyAnalysisTools:
 
     # ==================== Private Helper Methods ====================
 
-    async def _get_tables_metadata(self, connection, catalog_name: str | None, db_name: str | None, include_views: bool) -> list[dict]:
+    async def _get_tables_metadata(
+        self,
+        connection: DorisConnection,
+        catalog_name: str | None,
+        db_name: str | None,
+        include_views: bool,
+    ) -> list[dict[str, Any]]:
         """Get metadata for all tables and views"""
         try:
             # Build conditions for query with parameterized values
-            where_conditions = []
-            params = []
+            where_conditions: list[str] = []
+            params: list[Any] = []
 
             if db_name:
                 # SECURITY FIX: Validate identifier and use parameterized query
@@ -182,15 +190,22 @@ class DependencyAnalysisTools:
             logger.warning(f"Failed to get tables metadata: {str(e)}")
             return []
 
-    async def _build_dependency_graph(self, connection, tables_metadata: list[dict], analysis_depth: int) -> dict[str, dict]:
+    async def _build_dependency_graph(
+        self,
+        connection: DorisConnection,
+        tables_metadata: list[dict[str, Any]],
+        analysis_depth: int,
+    ) -> DependencyGraph:
         """Build dependency graph by analyzing SQL statements and DDL"""
-        dependency_graph = defaultdict(lambda: {
-            "upstream_dependencies": set(),
-            "downstream_dependencies": set(),
-            "table_type": "unknown",
-            "dependency_strength": {},
-            "sql_patterns": []
-        })
+        dependency_graph: defaultdict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "upstream_dependencies": set(),
+                "downstream_dependencies": set(),
+                "table_type": "unknown",
+                "dependency_strength": {},
+                "sql_patterns": [],
+            }
+        )
 
         # Initialize graph with table metadata
         for table in tables_metadata:
@@ -211,7 +226,12 @@ class DependencyAnalysisTools:
 
         return dict(dependency_graph)
 
-    async def _analyze_view_dependencies(self, connection, dependency_graph: dict, tables_metadata: list[dict]) -> None:
+    async def _analyze_view_dependencies(
+        self,
+        connection: DorisConnection,
+        dependency_graph: DependencyGraph,
+        tables_metadata: list[dict[str, Any]],
+    ) -> None:
         """Analyze view definitions to extract table dependencies"""
         # Get auth_context once for all operations in this method
         auth_context = get_auth_context()
@@ -274,7 +294,12 @@ class DependencyAnalysisTools:
         except Exception as e:
             logger.warning(f"Failed to analyze view dependencies: {str(e)}")
 
-    async def _analyze_runtime_dependencies(self, connection, dependency_graph: dict, analysis_depth: int) -> None:
+    async def _analyze_runtime_dependencies(
+        self,
+        connection: DorisConnection,
+        dependency_graph: DependencyGraph,
+        analysis_depth: int,
+    ) -> None:
         """Analyze audit logs to discover runtime table dependencies"""
         # Get auth_context for security validation
         auth_context = get_auth_context()
@@ -317,7 +342,12 @@ class DependencyAnalysisTools:
         except Exception as e:
             logger.warning(f"Failed to analyze runtime dependencies: {str(e)}")
 
-    async def _analyze_foreign_key_dependencies(self, connection, dependency_graph: dict, tables_metadata: list[dict]) -> None:
+    async def _analyze_foreign_key_dependencies(
+        self,
+        connection: DorisConnection,
+        dependency_graph: DependencyGraph,
+        tables_metadata: list[dict[str, Any]],
+    ) -> None:
         """Analyze foreign key constraints for explicit dependencies"""
         # Get auth_context for security validation
         auth_context = get_auth_context()
@@ -776,7 +806,7 @@ class DependencyAnalysisTools:
 
     def _generate_risk_matrix(self, table_impacts: dict[str, dict]) -> dict[str, list[str]]:
         """Generate risk matrix categorizing tables by impact level"""
-        risk_matrix = {
+        risk_matrix: dict[str, list[str]] = {
             "critical_risk": [],
             "high_risk": [],
             "medium_risk": [],
@@ -832,9 +862,14 @@ class DependencyAnalysisTools:
             "avg_dependencies_per_table": round(total_dependencies / total_tables, 2) if total_tables > 0 else 0
         }
 
-    async def _generate_dependency_insights(self, dependency_graph: dict, table_analysis: dict, impact_analysis: dict) -> dict[str, Any]:
+    async def _generate_dependency_insights(
+        self,
+        dependency_graph: DependencyGraph,
+        table_analysis: dict[str, Any],
+        impact_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
         """Generate insights from dependency analysis"""
-        insights = {
+        insights: dict[str, Any] = {
             "architectural_patterns": {},
             "risk_assessment": {},
             "optimization_opportunities": {}
@@ -899,8 +934,8 @@ class DependencyAnalysisTools:
 
     def _calculate_resilience_score(self, global_impact: dict) -> float:
         """Calculate system resilience score (0-1, higher is better)"""
-        total_tables = global_impact["total_tables_analyzed"]
-        risk_dist = global_impact["risk_distribution"]
+        total_tables = int(global_impact["total_tables_analyzed"])
+        risk_dist: dict[str, int] = global_impact["risk_distribution"]
 
         if total_tables == 0:
             return 0.0

@@ -20,10 +20,10 @@ OAuth 2.0/OIDC Type Definitions
 Provides data types and models for OAuth authentication flow
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TypedDict
 
 from ..utils.datetime_utils import utc_now
 
@@ -50,12 +50,8 @@ class OAuthState:
     pkce_verifier: str | None = None
     pkce_challenge: str | None = None
     redirect_uri: str = ""
-    created_at: datetime = None
-    expires_at: datetime = None
-
-    def __post_init__(self):
-        if self.created_at is None:
-            self.created_at = utc_now()
+    created_at: datetime = field(default_factory=utc_now)
+    expires_at: datetime | None = None
 
 
 @dataclass
@@ -67,11 +63,7 @@ class OAuthTokens:
     refresh_token: str | None = None
     scope: str | None = None
     id_token: str | None = None  # OIDC ID token
-    created_at: datetime = None
-
-    def __post_init__(self):
-        if self.created_at is None:
-            self.created_at = utc_now()
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass
@@ -85,14 +77,8 @@ class OAuthUserInfo:
     family_name: str | None = None
     picture: str | None = None
     locale: str | None = None
-    roles: list[str] = None
-    raw_claims: dict[str, Any] = None
-
-    def __post_init__(self):
-        if self.roles is None:
-            self.roles = []
-        if self.raw_claims is None:
-            self.raw_claims = {}
+    roles: list[str] = field(default_factory=list)
+    raw_claims: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -104,20 +90,12 @@ class OIDCDiscovery:
     introspection_endpoint: str | None = None
     userinfo_endpoint: str | None = None
     jwks_uri: str | None = None
-    scopes_supported: list[str] = None
-    response_types_supported: list[str] = None
-    subject_types_supported: list[str] = None
-    id_token_signing_alg_values_supported: list[str] = None
-
-    def __post_init__(self):
-        if self.scopes_supported is None:
-            self.scopes_supported = ["openid"]
-        if self.response_types_supported is None:
-            self.response_types_supported = ["code"]
-        if self.subject_types_supported is None:
-            self.subject_types_supported = ["public"]
-        if self.id_token_signing_alg_values_supported is None:
-            self.id_token_signing_alg_values_supported = ["RS256"]
+    scopes_supported: list[str] = field(default_factory=lambda: ["openid"])
+    response_types_supported: list[str] = field(default_factory=lambda: ["code"])
+    subject_types_supported: list[str] = field(default_factory=lambda: ["public"])
+    id_token_signing_alg_values_supported: list[str] = field(
+        default_factory=lambda: ["RS256"]
+    )
 
 
 @dataclass
@@ -163,15 +141,25 @@ class OAuthProviderConfig:
     email_claim: str = "email"
     name_claim: str = "name"
     roles_claim: str = "roles"
-    default_roles: list[str] = None
+    default_roles: list[str] = field(default_factory=lambda: ["oauth_user"])
 
-    def __post_init__(self):
-        if self.default_roles is None:
-            self.default_roles = ["oauth_user"]
+
+class OAuthProviderDefaults(TypedDict, total=False):
+    """Built-in defaults for a known OAuth provider."""
+
+    authorization_endpoint: str
+    token_endpoint: str
+    userinfo_endpoint: str
+    jwks_uri: str
+    discovery_url: str
+    scopes: list[str]
+    user_id_claim: str
+    email_claim: str
+    name_claim: str
 
 
 # Pre-defined provider configurations
-OAUTH_PROVIDERS = {
+OAUTH_PROVIDERS: dict[OAuthProvider, OAuthProviderDefaults] = {
     OAuthProvider.GOOGLE: {
         "authorization_endpoint": "https://accounts.google.com/o/oauth2/auth",
         "token_endpoint": "https://oauth2.googleapis.com/token",

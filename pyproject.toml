@@ -218,6 +218,7 @@ module = [
     "aiomysql.*",
     "pymysql.*",
     "prometheus_client.*",
+    "sqlparse.*",
 ]
 ignore_missing_imports = true
 
@@ -301,5 +302,7 @@ ignore = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.16.0",
+    "pandas-stubs>=2.2.0",
     "ruff>=0.11.13",
 ]

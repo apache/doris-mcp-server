@@ -24,6 +24,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from mcp.server.mcpserver import MCPServer
 from mcp.types import Tool
 
 from ..auth.operation_policy import (
@@ -49,25 +50,28 @@ from ..utils.security_analytics_tools import SecurityAnalyticsTools
 logger = get_logger(__name__)
 
 
-
 class DorisToolsManager:
     """Apache Doris Tools Manager"""
 
-    def __init__(self, connection_manager: DorisConnectionManager):
+    def __init__(self, connection_manager: DorisConnectionManager) -> None:
         self.connection_manager = connection_manager
 
         # Initialize business logic processors
         self.query_executor = DorisQueryExecutor(connection_manager)
         self.table_analyzer = TableAnalyzer(connection_manager)
         self.sql_analyzer = SQLAnalyzer(connection_manager)
-        self.metadata_extractor = MetadataExtractor(connection_manager=connection_manager)
+        self.metadata_extractor = MetadataExtractor(
+            connection_manager=connection_manager
+        )
         self.monitoring_tools = DorisMonitoringTools(connection_manager)
         self.memory_tracker = MemoryTracker(connection_manager)
 
         # Initialize v0.5.0 advanced analytics tools
         self.data_governance_tools = DataGovernanceTools(connection_manager)
         self.data_exploration_tools = DataExplorationTools(connection_manager)
-        self.data_quality_tools = DataQualityTools(connection_manager, connection_manager.config)
+        self.data_quality_tools = DataQualityTools(
+            connection_manager, connection_manager.config
+        )
         self.security_analytics_tools = SecurityAnalyticsTools(connection_manager)
         self.dependency_analysis_tools = DependencyAnalysisTools(connection_manager)
         self.performance_analytics_tools = PerformanceAnalyticsTools(connection_manager)
@@ -75,7 +79,9 @@ class DorisToolsManager:
         # Initialize ADBC query tools
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
 
-        logger.info("DorisToolsManager initialized with business logic processors, v0.5.0 analytics tools, and ADBC query tools")
+        logger.info(
+            "DorisToolsManager initialized with business logic processors, v0.5.0 analytics tools, and ADBC query tools"
+        )
 
     async def start(self) -> None:
         """Start runtime resources owned by the tools manager."""
@@ -85,10 +91,30 @@ class DorisToolsManager:
         """Stop runtime resources owned by the tools manager."""
         await self.query_executor.close()
 
-    async def register_tools_with_mcp(self, mcp):
+    @staticmethod
+    def _required_string(arguments: dict[str, Any], name: str) -> str:
+        value = arguments.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        return value
+
+    @staticmethod
+    def _required_string_list(
+        arguments: dict[str, Any],
+        name: str,
+    ) -> list[str]:
+        value = arguments.get(name)
+        if (
+            not isinstance(value, list)
+            or not value
+            or any(not isinstance(item, str) or not item.strip() for item in value)
+        ):
+            raise ValueError(f"{name} must be a non-empty list of strings")
+        return value
+
+    async def register_tools_with_mcp(self, mcp: MCPServer[Any]) -> None:
         """Register all tools to MCP server"""
         logger.info("Starting to register MCP tools")
-
 
         # SQL query execution tool (supports catalog federation queries)
         @mcp.tool(
@@ -110,19 +136,22 @@ class DorisToolsManager:
         )
         async def exec_query_tool(
             sql: str,
-            db_name: str = None,
-            catalog_name: str = None,
+            db_name: str | None = None,
+            catalog_name: str | None = None,
             max_rows: int = 100,
             timeout: int = 30,
         ) -> str:
             """Execute SQL query (supports federation queries)"""
-            return await self.call_tool("exec_query", {
-                "sql": sql,
-                "db_name": db_name,
-                "catalog_name": catalog_name,
-                "max_rows": max_rows,
-                "timeout": timeout
-            })
+            return await self.call_tool(
+                "exec_query",
+                {
+                    "sql": sql,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                    "max_rows": max_rows,
+                    "timeout": timeout,
+                },
+            )
 
         # Get table schema tool
         @mcp.tool(
@@ -139,14 +168,17 @@ class DorisToolsManager:
 """,
         )
         async def get_table_schema_tool(
-            table_name: str, db_name: str = None, catalog_name: str = None
+            table_name: str, db_name: str | None = None, catalog_name: str | None = None
         ) -> str:
             """Get table schema information"""
-            return await self.call_tool("get_table_schema", {
-                "table_name": table_name,
-                "db_name": db_name,
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool(
+                "get_table_schema",
+                {
+                    "table_name": table_name,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                },
+            )
 
         # Get database table list tool
         @mcp.tool(
@@ -161,13 +193,12 @@ class DorisToolsManager:
 """,
         )
         async def get_db_table_list_tool(
-            db_name: str = None, catalog_name: str = None
+            db_name: str | None = None, catalog_name: str | None = None
         ) -> str:
             """Get database table list"""
-            return await self.call_tool("get_db_table_list", {
-                "db_name": db_name,
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool(
+                "get_db_table_list", {"db_name": db_name, "catalog_name": catalog_name}
+            )
 
         # Get database list tool
         @mcp.tool(
@@ -179,11 +210,9 @@ class DorisToolsManager:
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
         )
-        async def get_db_list_tool(catalog_name: str = None) -> str:
+        async def get_db_list_tool(catalog_name: str | None = None) -> str:
             """Get database list"""
-            return await self.call_tool("get_db_list", {
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool("get_db_list", {"catalog_name": catalog_name})
 
         # Get table comment tool
         @mcp.tool(
@@ -200,14 +229,17 @@ class DorisToolsManager:
 """,
         )
         async def get_table_comment_tool(
-            table_name: str, db_name: str = None, catalog_name: str = None
+            table_name: str, db_name: str | None = None, catalog_name: str | None = None
         ) -> str:
             """Get table comment"""
-            return await self.call_tool("get_table_comment", {
-                "table_name": table_name,
-                "db_name": db_name,
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool(
+                "get_table_comment",
+                {
+                    "table_name": table_name,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                },
+            )
 
         # Get table column comments tool
         @mcp.tool(
@@ -224,14 +256,17 @@ class DorisToolsManager:
 """,
         )
         async def get_table_column_comments_tool(
-            table_name: str, db_name: str = None, catalog_name: str = None
+            table_name: str, db_name: str | None = None, catalog_name: str | None = None
         ) -> str:
             """Get table column comments"""
-            return await self.call_tool("get_table_column_comments", {
-                "table_name": table_name,
-                "db_name": db_name,
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool(
+                "get_table_column_comments",
+                {
+                    "table_name": table_name,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                },
+            )
 
         # Get table indexes tool
         @mcp.tool(
@@ -248,14 +283,17 @@ class DorisToolsManager:
 """,
         )
         async def get_table_indexes_tool(
-            table_name: str, db_name: str = None, catalog_name: str = None
+            table_name: str, db_name: str | None = None, catalog_name: str | None = None
         ) -> str:
             """Get table indexes"""
-            return await self.call_tool("get_table_indexes", {
-                "table_name": table_name,
-                "db_name": db_name,
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool(
+                "get_table_indexes",
+                {
+                    "table_name": table_name,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                },
+            )
 
         # Get audit logs tool
         @mcp.tool(
@@ -269,14 +307,11 @@ class DorisToolsManager:
 - limit (integer) [Optional] - Maximum number of records to return, default is 100
 """,
         )
-        async def get_recent_audit_logs_tool(
-            days: int = 7, limit: int = 100
-        ) -> str:
+        async def get_recent_audit_logs_tool(days: int = 7, limit: int = 100) -> str:
             """Get audit logs"""
-            return await self.call_tool("get_recent_audit_logs", {
-                "days": days,
-                "limit": limit
-            })
+            return await self.call_tool(
+                "get_recent_audit_logs", {"days": days, "limit": limit}
+            )
 
         # Get catalog list tool
         @mcp.tool(
@@ -290,9 +325,9 @@ class DorisToolsManager:
         )
         async def get_catalog_list_tool(random_string: str) -> str:
             """Get catalog list"""
-            return await self.call_tool("get_catalog_list", {
-                "random_string": random_string
-            })
+            return await self.call_tool(
+                "get_catalog_list", {"random_string": random_string}
+            )
 
         # SQL Explain tool
         @mcp.tool(
@@ -313,16 +348,19 @@ class DorisToolsManager:
         async def get_sql_explain_tool(
             sql: str,
             verbose: bool = False,
-            db_name: str = None,
-            catalog_name: str = None
+            db_name: str | None = None,
+            catalog_name: str | None = None,
         ) -> str:
             """Get SQL execution plan"""
-            return await self.call_tool("get_sql_explain", {
-                "sql": sql,
-                "verbose": verbose,
-                "db_name": db_name,
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool(
+                "get_sql_explain",
+                {
+                    "sql": sql,
+                    "verbose": verbose,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                },
+            )
 
         # SQL Profile tool
         @mcp.tool(
@@ -342,17 +380,20 @@ class DorisToolsManager:
         )
         async def get_sql_profile_tool(
             sql: str,
-            db_name: str = None,
-            catalog_name: str = None,
-            timeout: int = 30
+            db_name: str | None = None,
+            catalog_name: str | None = None,
+            timeout: int = 30,
         ) -> str:
             """Get SQL execution profile"""
-            return await self.call_tool("get_sql_profile", {
-                "sql": sql,
-                "db_name": db_name,
-                "catalog_name": catalog_name,
-                "timeout": timeout
-            })
+            return await self.call_tool(
+                "get_sql_profile",
+                {
+                    "sql": sql,
+                    "db_name": db_name,
+                    "catalog_name": catalog_name,
+                    "timeout": timeout,
+                },
+            )
 
         # Table data size tool
         @mcp.tool(
@@ -369,16 +410,19 @@ class DorisToolsManager:
 """,
         )
         async def get_table_data_size_tool(
-            db_name: str = None,
-            table_name: str = None,
-            single_replica: bool = False
+            db_name: str | None = None,
+            table_name: str | None = None,
+            single_replica: bool = False,
         ) -> str:
             """Get table data size information"""
-            return await self.call_tool("get_table_data_size", {
-                "db_name": db_name,
-                "table_name": table_name,
-                "single_replica": single_replica
-            })
+            return await self.call_tool(
+                "get_table_data_size",
+                {
+                    "db_name": db_name,
+                    "table_name": table_name,
+                    "single_replica": single_replica,
+                },
+            )
 
         # Unified Monitoring Metrics Tool (combines definitions and data)
         @mcp.tool(
@@ -416,16 +460,19 @@ class DorisToolsManager:
             role: str = "all",
             monitor_type: str = "all",
             priority: str = "core",
-            include_raw_metrics: bool = False
+            include_raw_metrics: bool = False,
         ) -> str:
             """Get comprehensive monitoring metrics (definitions and/or data)"""
-            return await self.call_tool("get_monitoring_metrics", {
-                "content_type": content_type,
-                "role": role,
-                "monitor_type": monitor_type,
-                "priority": priority,
-                "include_raw_metrics": include_raw_metrics
-            })
+            return await self.call_tool(
+                "get_monitoring_metrics",
+                {
+                    "content_type": content_type,
+                    "role": role,
+                    "monitor_type": monitor_type,
+                    "priority": priority,
+                    "include_raw_metrics": include_raw_metrics,
+                },
+            )
 
         # Unified Memory Statistics Tool (combines real-time and historical)
         @mcp.tool(
@@ -461,18 +508,21 @@ class DorisToolsManager:
         async def get_memory_stats_tool(
             data_type: str = "realtime",
             tracker_type: str = "overview",
-            tracker_names: list[str] = None,
+            tracker_names: list[str] | None = None,
             time_range: str = "1h",
-            include_details: bool = True
+            include_details: bool = True,
         ) -> str:
             """Get comprehensive memory statistics (real-time and/or historical)"""
-            return await self.call_tool("get_memory_stats", {
-                "data_type": data_type,
-                "tracker_type": tracker_type,
-                "tracker_names": tracker_names,
-                "time_range": time_range,
-                "include_details": include_details
-            })
+            return await self.call_tool(
+                "get_memory_stats",
+                {
+                    "data_type": data_type,
+                    "tracker_type": tracker_type,
+                    "tracker_names": tracker_names,
+                    "time_range": time_range,
+                    "include_details": include_details,
+                },
+            )
 
         # ==================== v0.5.0 Advanced Analytics Tools ====================
 
@@ -489,16 +539,17 @@ class DorisToolsManager:
 """,
         )
         async def get_table_basic_info_tool(
-            table_name: str,
-            catalog_name: str = None,
-            db_name: str = None
+            table_name: str, catalog_name: str | None = None, db_name: str | None = None
         ) -> str:
             """Get table basic information"""
-            return await self.call_tool("get_table_basic_info", {
-                "table_name": table_name,
-                "catalog_name": catalog_name,
-                "db_name": db_name
-            })
+            return await self.call_tool(
+                "get_table_basic_info",
+                {
+                    "table_name": table_name,
+                    "catalog_name": catalog_name,
+                    "db_name": db_name,
+                },
+            )
 
         @mcp.tool(
             "analyze_columns",
@@ -521,22 +572,25 @@ class DorisToolsManager:
         async def analyze_columns_tool(
             table_name: str,
             columns: list[str],
-            analysis_types: list[str] = None,
+            analysis_types: list[str] | None = None,
             sample_size: int = 100000,
-            catalog_name: str = None,
-            db_name: str = None,
-            detailed_response: bool = False
+            catalog_name: str | None = None,
+            db_name: str | None = None,
+            detailed_response: bool = False,
         ) -> str:
             """Analyze table columns"""
-            return await self.call_tool("analyze_columns", {
-                "table_name": table_name,
-                "columns": columns,
-                "analysis_types": analysis_types or ["both"],
-                "sample_size": sample_size,
-                "catalog_name": catalog_name,
-                "db_name": db_name,
-                "detailed_response": detailed_response
-            })
+            return await self.call_tool(
+                "analyze_columns",
+                {
+                    "table_name": table_name,
+                    "columns": columns,
+                    "analysis_types": analysis_types or ["both"],
+                    "sample_size": sample_size,
+                    "catalog_name": catalog_name,
+                    "db_name": db_name,
+                    "detailed_response": detailed_response,
+                },
+            )
 
         @mcp.tool(
             "analyze_table_storage",
@@ -552,19 +606,20 @@ class DorisToolsManager:
         )
         async def analyze_table_storage_tool(
             table_name: str,
-            catalog_name: str = None,
-            db_name: str = None,
-            detailed_response: bool = False
+            catalog_name: str | None = None,
+            db_name: str | None = None,
+            detailed_response: bool = False,
         ) -> str:
             """Analyze table storage"""
-            return await self.call_tool("analyze_table_storage", {
-                "table_name": table_name,
-                "catalog_name": catalog_name,
-                "db_name": db_name,
-                "detailed_response": detailed_response
-            })
-
-
+            return await self.call_tool(
+                "analyze_table_storage",
+                {
+                    "table_name": table_name,
+                    "catalog_name": catalog_name,
+                    "db_name": db_name,
+                    "detailed_response": detailed_response,
+                },
+            )
 
         @mcp.tool(
             "trace_column_lineage",
@@ -582,15 +637,18 @@ class DorisToolsManager:
             target_columns: list[str],
             analysis_depth: int = 3,
             include_transformations: bool = True,
-            catalog_name: str = None
+            catalog_name: str | None = None,
         ) -> str:
             """Trace column data lineage"""
-            return await self.call_tool("trace_column_lineage", {
-                "target_columns": target_columns,
-                "analysis_depth": analysis_depth,
-                "include_transformations": include_transformations,
-                "catalog_name": catalog_name
-            })
+            return await self.call_tool(
+                "trace_column_lineage",
+                {
+                    "target_columns": target_columns,
+                    "analysis_depth": analysis_depth,
+                    "include_transformations": include_transformations,
+                    "catalog_name": catalog_name,
+                },
+            )
 
         @mcp.tool(
             "monitor_data_freshness",
@@ -606,22 +664,23 @@ class DorisToolsManager:
 """,
         )
         async def monitor_data_freshness_tool(
-            table_names: list[str] = None,
+            table_names: list[str] | None = None,
             freshness_threshold_hours: int = 24,
             include_update_patterns: bool = True,
-            catalog_name: str = None,
-            db_name: str = None
+            catalog_name: str | None = None,
+            db_name: str | None = None,
         ) -> str:
             """Monitor data freshness and staleness"""
-            return await self.call_tool("monitor_data_freshness", {
-                "table_names": table_names,
-                "freshness_threshold_hours": freshness_threshold_hours,
-                "include_update_patterns": include_update_patterns,
-                "catalog_name": catalog_name,
-                "db_name": db_name
-            })
-
-
+            return await self.call_tool(
+                "monitor_data_freshness",
+                {
+                    "table_names": table_names,
+                    "freshness_threshold_hours": freshness_threshold_hours,
+                    "include_update_patterns": include_update_patterns,
+                    "catalog_name": catalog_name,
+                    "db_name": db_name,
+                },
+            )
 
         # Security Analytics Tools
         @mcp.tool(
@@ -638,14 +697,17 @@ class DorisToolsManager:
         async def analyze_data_access_patterns_tool(
             days: int = 7,
             include_system_users: bool = False,
-            min_query_threshold: int = 5
+            min_query_threshold: int = 5,
         ) -> str:
             """Analyze data access patterns and security insights"""
-            return await self.call_tool("analyze_data_access_patterns", {
-                "days": days,
-                "include_system_users": include_system_users,
-                "min_query_threshold": min_query_threshold
-            })
+            return await self.call_tool(
+                "analyze_data_access_patterns",
+                {
+                    "days": days,
+                    "include_system_users": include_system_users,
+                    "min_query_threshold": min_query_threshold,
+                },
+            )
 
         # Dependency Analysis Tools
         @mcp.tool(
@@ -662,20 +724,23 @@ class DorisToolsManager:
 """,
         )
         async def analyze_data_flow_dependencies_tool(
-            target_table: str = None,
+            target_table: str | None = None,
             analysis_depth: int = 3,
             include_views: bool = True,
-            catalog_name: str = None,
-            db_name: str = None
+            catalog_name: str | None = None,
+            db_name: str | None = None,
         ) -> str:
             """Analyze data flow dependencies and impact"""
-            return await self.call_tool("analyze_data_flow_dependencies", {
-                "target_table": target_table,
-                "analysis_depth": analysis_depth,
-                "include_views": include_views,
-                "catalog_name": catalog_name,
-                "db_name": db_name
-            })
+            return await self.call_tool(
+                "analyze_data_flow_dependencies",
+                {
+                    "target_table": target_table,
+                    "analysis_depth": analysis_depth,
+                    "include_views": include_views,
+                    "catalog_name": catalog_name,
+                    "db_name": db_name,
+                },
+            )
 
         # Performance Analytics Tools
         @mcp.tool(
@@ -694,15 +759,18 @@ class DorisToolsManager:
             days: int = 7,
             top_n: int = 20,
             min_execution_time_ms: int = 1000,
-            include_patterns: bool = True
+            include_patterns: bool = True,
         ) -> str:
             """Analyze top N slow queries and performance patterns"""
-            return await self.call_tool("analyze_slow_queries_topn", {
-                "days": days,
-                "top_n": top_n,
-                "min_execution_time_ms": min_execution_time_ms,
-                "include_patterns": include_patterns
-            })
+            return await self.call_tool(
+                "analyze_slow_queries_topn",
+                {
+                    "days": days,
+                    "top_n": top_n,
+                    "min_execution_time_ms": min_execution_time_ms,
+                    "include_patterns": include_patterns,
+                },
+            )
 
         @mcp.tool(
             "analyze_resource_growth_curves",
@@ -718,17 +786,21 @@ class DorisToolsManager:
         )
         async def analyze_resource_growth_curves_tool(
             days: int = 30,
-            resource_types: list[str] = None,
+            resource_types: list[str] | None = None,
             include_predictions: bool = False,
-            detailed_response: bool = False
+            detailed_response: bool = False,
         ) -> str:
             """Analyze resource growth patterns and capacity planning"""
-            return await self.call_tool("analyze_resource_growth_curves", {
-                "days": days,
-                "resource_types": resource_types or ["storage", "query_volume", "user_activity"],
-                "include_predictions": include_predictions,
-                "detailed_response": detailed_response
-            })
+            return await self.call_tool(
+                "analyze_resource_growth_curves",
+                {
+                    "days": days,
+                    "resource_types": resource_types
+                    or ["storage", "query_volume", "user_activity"],
+                    "include_predictions": include_predictions,
+                    "detailed_response": detailed_response,
+                },
+            )
 
         # ==================== ADBC Query Tools ====================
 
@@ -755,17 +827,20 @@ class DorisToolsManager:
         )
         async def exec_adbc_query_tool(
             sql: str,
-            max_rows: int = None,
-            timeout: int = None,
-            return_format: str = None
+            max_rows: int | None = None,
+            timeout: int | None = None,
+            return_format: str | None = None,
         ) -> str:
             """Execute SQL query using ADBC (Arrow Flight SQL) protocol"""
-            return await self.call_tool("exec_adbc_query", {
-                "sql": sql,
-                "max_rows": max_rows,
-                "timeout": timeout,
-                "return_format": return_format
-            })
+            return await self.call_tool(
+                "exec_adbc_query",
+                {
+                    "sql": sql,
+                    "max_rows": max_rows,
+                    "timeout": timeout,
+                    "return_format": return_format,
+                },
+            )
 
         # ADBC Connection Information Tool
         @mcp.tool(
@@ -781,7 +856,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             """Get ADBC connection information and status"""
             return await self.call_tool("get_adbc_connection_info", {})
 
-        logger.info("Successfully registered 25 tools to MCP server (14 basic + 9 advanced analytics + 2 ADBC tools)")
+        logger.info(
+            "Successfully registered 25 tools to MCP server (14 basic + 9 advanced analytics + 2 ADBC tools)"
+        )
 
     async def list_tools(self) -> list[Tool]:
         """List all available query tools (for stdio mode)"""
@@ -805,14 +882,31 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - timeout (integer) [Optional] - Query timeout in seconds, default 30
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "sql": {"type": "string", "description": "SQL statement to execute, must use three-part naming"},
-                        "db_name": {"type": "string", "description": "Target database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
-                        "max_rows": {"type": "integer", "description": "Maximum number of rows to return", "default": 100},
-                        "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30},
+                        "sql": {
+                            "type": "string",
+                            "description": "SQL statement to execute, must use three-part naming",
+                        },
+                        "db_name": {
+                            "type": "string",
+                            "description": "Target database name",
+                        },
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
+                        "max_rows": {
+                            "type": "integer",
+                            "description": "Maximum number of rows to return",
+                            "default": 100,
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Timeout in seconds",
+                            "default": 30,
+                        },
                     },
                     "required": ["sql"],
                 },
@@ -829,12 +923,15 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "table_name": {"type": "string", "description": "Table name"},
                         "db_name": {"type": "string", "description": "Database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
                     },
                     "required": ["table_name"],
                 },
@@ -849,11 +946,14 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "db_name": {"type": "string", "description": "Database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
                     },
                 },
             ),
@@ -865,10 +965,13 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
                     },
                 },
             ),
@@ -884,12 +987,15 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "table_name": {"type": "string", "description": "Table name"},
                         "db_name": {"type": "string", "description": "Database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
                     },
                     "required": ["table_name"],
                 },
@@ -906,12 +1012,15 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "table_name": {"type": "string", "description": "Table name"},
                         "db_name": {"type": "string", "description": "Database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
                     },
                     "required": ["table_name"],
                 },
@@ -928,12 +1037,15 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "table_name": {"type": "string", "description": "Table name"},
                         "db_name": {"type": "string", "description": "Database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
                     },
                     "required": ["table_name"],
                 },
@@ -948,11 +1060,19 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - limit (integer) [Optional] - Maximum number of records to return, default is 100
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "days": {"type": "integer", "description": "Number of recent days", "default": 7},
-                        "limit": {"type": "integer", "description": "Maximum number of records", "default": 100},
+                        "days": {
+                            "type": "integer",
+                            "description": "Number of recent days",
+                            "default": 7,
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of records",
+                            "default": 100,
+                        },
                     },
                 },
             ),
@@ -964,10 +1084,13 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - random_string (string) [Required] - Unique identifier for the tool call
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "random_string": {"type": "string", "description": "Unique identifier"},
+                        "random_string": {
+                            "type": "string",
+                            "description": "Unique identifier",
+                        },
                     },
                     "required": ["random_string"],
                 },
@@ -986,13 +1109,23 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - catalog_name (string) [Optional] - Target catalog name for federation queries, defaults to current catalog
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "sql": {"type": "string", "description": "SQL statement to explain"},
-                        "verbose": {"type": "boolean", "description": "Whether to show verbose information", "default": False},
+                        "sql": {
+                            "type": "string",
+                            "description": "SQL statement to explain",
+                        },
+                        "verbose": {
+                            "type": "boolean",
+                            "description": "Whether to show verbose information",
+                            "default": False,
+                        },
                         "db_name": {"type": "string", "description": "Database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
                     },
                     "required": ["sql"],
                 },
@@ -1011,13 +1144,23 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - timeout (integer) [Optional] - Query timeout in seconds, default is 30
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "sql": {"type": "string", "description": "SQL statement to profile"},
+                        "sql": {
+                            "type": "string",
+                            "description": "SQL statement to profile",
+                        },
                         "db_name": {"type": "string", "description": "Database name"},
-                        "catalog_name": {"type": "string", "description": "Catalog name"},
-                        "timeout": {"type": "integer", "description": "Query timeout in seconds", "default": 30},
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Catalog name",
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Query timeout in seconds",
+                            "default": 30,
+                        },
                     },
                     "required": ["sql"],
                 },
@@ -1034,12 +1177,16 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - single_replica (boolean) [Optional] - Whether to get single replica data size, default is false
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
                         "db_name": {"type": "string", "description": "Database name"},
                         "table_name": {"type": "string", "description": "Table name"},
-                        "single_replica": {"type": "boolean", "description": "Whether to get single replica data size", "default": False},
+                        "single_replica": {
+                            "type": "boolean",
+                            "description": "Whether to get single replica data size",
+                            "default": False,
+                        },
                     },
                 },
             ),
@@ -1072,14 +1219,38 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - include_raw_metrics (boolean) [Optional] - Whether to include raw detailed metrics data (can be very large), default is false
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "content_type": {"type": "string", "enum": ["definitions", "data", "both"], "description": "Type of monitoring content to retrieve", "default": "data"},
-                        "role": {"type": "string", "enum": ["fe", "be", "all"], "description": "Node role to monitor", "default": "all"},
-                        "monitor_type": {"type": "string", "enum": ["process", "jvm", "machine", "all"], "description": "Type of monitoring metrics", "default": "all"},
-                        "priority": {"type": "string", "enum": ["core", "p0", "all"], "description": "Metric priority level", "default": "core"},
-                        "include_raw_metrics": {"type": "boolean", "description": "Whether to include raw detailed metrics data (can be very large)", "default": False},
+                        "content_type": {
+                            "type": "string",
+                            "enum": ["definitions", "data", "both"],
+                            "description": "Type of monitoring content to retrieve",
+                            "default": "data",
+                        },
+                        "role": {
+                            "type": "string",
+                            "enum": ["fe", "be", "all"],
+                            "description": "Node role to monitor",
+                            "default": "all",
+                        },
+                        "monitor_type": {
+                            "type": "string",
+                            "enum": ["process", "jvm", "machine", "all"],
+                            "description": "Type of monitoring metrics",
+                            "default": "all",
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["core", "p0", "all"],
+                            "description": "Metric priority level",
+                            "default": "core",
+                        },
+                        "include_raw_metrics": {
+                            "type": "boolean",
+                            "description": "Whether to include raw detailed metrics data (can be very large)",
+                            "default": False,
+                        },
                     },
                 },
             ),
@@ -1112,14 +1283,44 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 - include_details (boolean) [Optional] - Whether to include detailed tracker information and definitions, default is true
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "data_type": {"type": "string", "enum": ["realtime", "historical", "both"], "description": "Type of memory data to retrieve", "default": "realtime"},
-                        "tracker_type": {"type": "string", "enum": ["overview", "global", "query", "load", "compaction", "all"], "description": "Type of memory trackers to retrieve (for real-time)", "default": "overview"},
-                        "tracker_names": {"type": "array", "items": {"type": "string"}, "description": "List of specific tracker names for historical data"},
-                        "time_range": {"type": "string", "enum": ["1h", "6h", "24h"], "description": "Time range for historical data", "default": "1h"},
-                        "include_details": {"type": "boolean", "description": "Whether to include detailed tracker information and definitions", "default": True},
+                        "data_type": {
+                            "type": "string",
+                            "enum": ["realtime", "historical", "both"],
+                            "description": "Type of memory data to retrieve",
+                            "default": "realtime",
+                        },
+                        "tracker_type": {
+                            "type": "string",
+                            "enum": [
+                                "overview",
+                                "global",
+                                "query",
+                                "load",
+                                "compaction",
+                                "all",
+                            ],
+                            "description": "Type of memory trackers to retrieve (for real-time)",
+                            "default": "overview",
+                        },
+                        "tracker_names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of specific tracker names for historical data",
+                        },
+                        "time_range": {
+                            "type": "string",
+                            "enum": ["1h", "6h", "24h"],
+                            "description": "Time range for historical data",
+                            "default": "1h",
+                        },
+                        "include_details": {
+                            "type": "boolean",
+                            "description": "Whether to include detailed tracker information and definitions",
+                            "default": True,
+                        },
                     },
                 },
             ),
@@ -1135,12 +1336,21 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - catalog_name (string) [Optional] - Target catalog name
 - db_name (string) [Optional] - Target database name
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "table_name": {"type": "string", "description": "Name of the table to analyze"},
-                        "catalog_name": {"type": "string", "description": "Target catalog name"},
-                        "db_name": {"type": "string", "description": "Target database name"},
+                        "table_name": {
+                            "type": "string",
+                            "description": "Name of the table to analyze",
+                        },
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Target catalog name",
+                        },
+                        "db_name": {
+                            "type": "string",
+                            "description": "Target database name",
+                        },
                     },
                     "required": ["table_name"],
                 },
@@ -1162,16 +1372,45 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - db_name (string) [Optional] - Target database name
 - detailed_response (boolean) [Optional] - Whether to return detailed response including raw data, default is false
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "table_name": {"type": "string", "description": "Name of the table to analyze"},
-                        "columns": {"type": "array", "items": {"type": "string"}, "description": "List of column names to analyze"},
-                        "analysis_types": {"type": "array", "items": {"type": "string", "enum": ["completeness", "distribution", "both"]}, "description": "Types of analysis to perform", "default": ["both"]},
-                        "sample_size": {"type": "integer", "description": "Maximum number of rows to sample", "default": 100000},
-                        "catalog_name": {"type": "string", "description": "Target catalog name"},
-                        "db_name": {"type": "string", "description": "Target database name"},
-                        "detailed_response": {"type": "boolean", "description": "Whether to return detailed response including raw data", "default": False},
+                        "table_name": {
+                            "type": "string",
+                            "description": "Name of the table to analyze",
+                        },
+                        "columns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of column names to analyze",
+                        },
+                        "analysis_types": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": ["completeness", "distribution", "both"],
+                            },
+                            "description": "Types of analysis to perform",
+                            "default": ["both"],
+                        },
+                        "sample_size": {
+                            "type": "integer",
+                            "description": "Maximum number of rows to sample",
+                            "default": 100000,
+                        },
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Target catalog name",
+                        },
+                        "db_name": {
+                            "type": "string",
+                            "description": "Target database name",
+                        },
+                        "detailed_response": {
+                            "type": "boolean",
+                            "description": "Whether to return detailed response including raw data",
+                            "default": False,
+                        },
                     },
                     "required": ["table_name", "columns"],
                 },
@@ -1187,13 +1426,26 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - db_name (string) [Optional] - Target database name
 - detailed_response (boolean) [Optional] - Whether to return detailed response including raw data, default is false
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "table_name": {"type": "string", "description": "Name of the table to analyze"},
-                        "catalog_name": {"type": "string", "description": "Target catalog name"},
-                        "db_name": {"type": "string", "description": "Target database name"},
-                        "detailed_response": {"type": "boolean", "description": "Whether to return detailed response including raw data", "default": False},
+                        "table_name": {
+                            "type": "string",
+                            "description": "Name of the table to analyze",
+                        },
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Target catalog name",
+                        },
+                        "db_name": {
+                            "type": "string",
+                            "description": "Target database name",
+                        },
+                        "detailed_response": {
+                            "type": "boolean",
+                            "description": "Whether to return detailed response including raw data",
+                            "default": False,
+                        },
                     },
                     "required": ["table_name"],
                 },
@@ -1209,13 +1461,28 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - include_transformations (boolean) [Optional] - Whether to include transformation details, default is true
 - catalog_name (string) [Optional] - Target catalog name
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "target_columns": {"type": "array", "items": {"type": "string"}, "description": "List of column specifications"},
-                        "analysis_depth": {"type": "integer", "description": "Maximum depth for lineage tracing", "default": 3},
-                        "include_transformations": {"type": "boolean", "description": "Whether to include transformation details", "default": True},
-                        "catalog_name": {"type": "string", "description": "Target catalog name"},
+                        "target_columns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of column specifications",
+                        },
+                        "analysis_depth": {
+                            "type": "integer",
+                            "description": "Maximum depth for lineage tracing",
+                            "default": 3,
+                        },
+                        "include_transformations": {
+                            "type": "boolean",
+                            "description": "Whether to include transformation details",
+                            "default": True,
+                        },
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Target catalog name",
+                        },
                     },
                     "required": ["target_columns"],
                 },
@@ -1232,18 +1499,35 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - catalog_name (string) [Optional] - Target catalog name
 - db_name (string) [Optional] - Target database name
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "table_names": {"type": "array", "items": {"type": "string"}, "description": "List of table names to monitor"},
-                        "freshness_threshold_hours": {"type": "integer", "description": "Freshness threshold in hours", "default": 24},
-                        "include_update_patterns": {"type": "boolean", "description": "Whether to include update pattern analysis", "default": True},
-                        "catalog_name": {"type": "string", "description": "Target catalog name"},
-                        "db_name": {"type": "string", "description": "Target database name"},
+                        "table_names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of table names to monitor",
+                        },
+                        "freshness_threshold_hours": {
+                            "type": "integer",
+                            "description": "Freshness threshold in hours",
+                            "default": 24,
+                        },
+                        "include_update_patterns": {
+                            "type": "boolean",
+                            "description": "Whether to include update pattern analysis",
+                            "default": True,
+                        },
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Target catalog name",
+                        },
+                        "db_name": {
+                            "type": "string",
+                            "description": "Target database name",
+                        },
                     },
                 },
             ),
-
             Tool(
                 name="analyze_data_access_patterns",
                 description="""[Function Description]: Analyze user data access patterns, security anomalies, and access behavior.
@@ -1254,12 +1538,24 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - include_system_users (boolean) [Optional] - Whether to include system users in analysis, default is false
 - min_query_threshold (integer) [Optional] - Minimum queries for user inclusion, default is 5
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "days": {"type": "integer", "description": "Number of days to analyze", "default": 7},
-                        "include_system_users": {"type": "boolean", "description": "Whether to include system users", "default": False},
-                        "min_query_threshold": {"type": "integer", "description": "Minimum queries for user inclusion", "default": 5},
+                        "days": {
+                            "type": "integer",
+                            "description": "Number of days to analyze",
+                            "default": 7,
+                        },
+                        "include_system_users": {
+                            "type": "boolean",
+                            "description": "Whether to include system users",
+                            "default": False,
+                        },
+                        "min_query_threshold": {
+                            "type": "integer",
+                            "description": "Minimum queries for user inclusion",
+                            "default": 5,
+                        },
                     },
                 },
             ),
@@ -1275,14 +1571,31 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - catalog_name (string) [Optional] - Target catalog name
 - db_name (string) [Optional] - Target database name
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "target_table": {"type": "string", "description": "Specific table to analyze"},
-                        "analysis_depth": {"type": "integer", "description": "Maximum depth for dependency traversal", "default": 3},
-                        "include_views": {"type": "boolean", "description": "Whether to include views in analysis", "default": True},
-                        "catalog_name": {"type": "string", "description": "Target catalog name"},
-                        "db_name": {"type": "string", "description": "Target database name"},
+                        "target_table": {
+                            "type": "string",
+                            "description": "Specific table to analyze",
+                        },
+                        "analysis_depth": {
+                            "type": "integer",
+                            "description": "Maximum depth for dependency traversal",
+                            "default": 3,
+                        },
+                        "include_views": {
+                            "type": "boolean",
+                            "description": "Whether to include views in analysis",
+                            "default": True,
+                        },
+                        "catalog_name": {
+                            "type": "string",
+                            "description": "Target catalog name",
+                        },
+                        "db_name": {
+                            "type": "string",
+                            "description": "Target database name",
+                        },
                     },
                 },
             ),
@@ -1297,13 +1610,29 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - min_execution_time_ms (integer) [Optional] - Minimum execution time threshold in milliseconds, default is 1000
 - include_patterns (boolean) [Optional] - Whether to include query pattern analysis, default is true
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "days": {"type": "integer", "description": "Number of days to analyze", "default": 7},
-                        "top_n": {"type": "integer", "description": "Number of top slow queries to return", "default": 20},
-                        "min_execution_time_ms": {"type": "integer", "description": "Minimum execution time threshold in milliseconds", "default": 1000},
-                        "include_patterns": {"type": "boolean", "description": "Whether to include query pattern analysis", "default": True},
+                        "days": {
+                            "type": "integer",
+                            "description": "Number of days to analyze",
+                            "default": 7,
+                        },
+                        "top_n": {
+                            "type": "integer",
+                            "description": "Number of top slow queries to return",
+                            "default": 20,
+                        },
+                        "min_execution_time_ms": {
+                            "type": "integer",
+                            "description": "Minimum execution time threshold in milliseconds",
+                            "default": 1000,
+                        },
+                        "include_patterns": {
+                            "type": "boolean",
+                            "description": "Whether to include query pattern analysis",
+                            "default": True,
+                        },
                     },
                 },
             ),
@@ -1317,13 +1646,29 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - resource_types (array) [Optional] - Types of resources to analyze, default is ["storage", "query_volume", "user_activity"]
 - include_predictions (boolean) [Optional] - Whether to include growth predictions, default is false
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "days": {"type": "integer", "description": "Number of days to analyze", "default": 30},
-                        "resource_types": {"type": "array", "items": {"type": "string"}, "description": "Types of resources to analyze"},
-                        "include_predictions": {"type": "boolean", "description": "Whether to include growth predictions", "default": False},
-                        "detailed_response": {"type": "boolean", "description": "Whether to return detailed data including daily breakdowns", "default": False},
+                        "days": {
+                            "type": "integer",
+                            "description": "Number of days to analyze",
+                            "default": 30,
+                        },
+                        "resource_types": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Types of resources to analyze",
+                        },
+                        "include_predictions": {
+                            "type": "boolean",
+                            "description": "Whether to include growth predictions",
+                            "default": False,
+                        },
+                        "detailed_response": {
+                            "type": "boolean",
+                            "description": "Whether to return detailed data including daily breakdowns",
+                            "default": False,
+                        },
                     },
                 },
             ),
@@ -1347,13 +1692,29 @@ No parameters required. Returns connection status, configuration, and diagnostic
 - Required Python packages: adbc_driver_manager, adbc_driver_flightsql
 - Arrow Flight SQL services must be running on FE and BE nodes
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {
-                        "sql": {"type": "string", "description": "SQL statement to execute"},
-                        "max_rows": {"type": "integer", "description": "Maximum number of rows to return", "default": adbc_config.default_max_rows},
-                        "timeout": {"type": "integer", "description": "Query timeout in seconds", "default": adbc_config.default_timeout},
-                        "return_format": {"type": "string", "enum": ["arrow", "pandas", "dict"], "description": "Format for returned data", "default": adbc_config.default_return_format},
+                        "sql": {
+                            "type": "string",
+                            "description": "SQL statement to execute",
+                        },
+                        "max_rows": {
+                            "type": "integer",
+                            "description": "Maximum number of rows to return",
+                            "default": adbc_config.default_max_rows,
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Query timeout in seconds",
+                            "default": adbc_config.default_timeout,
+                        },
+                        "return_format": {
+                            "type": "string",
+                            "enum": ["arrow", "pandas", "dict"],
+                            "description": "Format for returned data",
+                            "default": adbc_config.default_return_format,
+                        },
                     },
                     "required": ["sql"],
                 },
@@ -1366,7 +1727,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
 No parameters required. Returns connection status, configuration, and diagnostic information.
 """,
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "properties": {},
                 },
@@ -1478,10 +1839,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             }
             return json.dumps(error_result, ensure_ascii=False, indent=2)
 
-
     async def _exec_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL query execution tool routing (supports federation queries)"""
-        sql = arguments.get("sql")
+        sql = self._required_string(arguments, "sql")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
         max_rows = arguments.get("max_rows", 100)
@@ -1494,7 +1854,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
     async def _get_table_schema_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get table schema tool routing"""
-        table_name = arguments.get("table_name")
+        table_name = self._required_string(arguments, "table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
 
@@ -1503,13 +1863,17 @@ No parameters required. Returns connection status, configuration, and diagnostic
             table_name, db_name, catalog_name
         )
 
-    async def _get_db_table_list_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_db_table_list_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Get database table list tool routing"""
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
 
         # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_db_table_list_for_mcp(db_name, catalog_name)
+        return await self.metadata_extractor.get_db_table_list_for_mcp(
+            db_name, catalog_name
+        )
 
     async def _get_db_list_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get database list tool routing"""
@@ -1518,9 +1882,11 @@ No parameters required. Returns connection status, configuration, and diagnostic
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_db_list_for_mcp(catalog_name)
 
-    async def _get_table_comment_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_table_comment_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Get table comment tool routing"""
-        table_name = arguments.get("table_name")
+        table_name = self._required_string(arguments, "table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
 
@@ -1529,9 +1895,11 @@ No parameters required. Returns connection status, configuration, and diagnostic
             table_name, db_name, catalog_name
         )
 
-    async def _get_table_column_comments_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_table_column_comments_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Get table column comments tool routing"""
-        table_name = arguments.get("table_name")
+        table_name = self._required_string(arguments, "table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
 
@@ -1540,9 +1908,11 @@ No parameters required. Returns connection status, configuration, and diagnostic
             table_name, db_name, catalog_name
         )
 
-    async def _get_table_indexes_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_table_indexes_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Get table indexes tool routing"""
-        table_name = arguments.get("table_name")
+        table_name = self._required_string(arguments, "table_name")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
 
@@ -1551,7 +1921,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             table_name, db_name, catalog_name
         )
 
-    async def _get_recent_audit_logs_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_recent_audit_logs_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Get audit logs tool routing"""
         days = arguments.get("days", 7)
         limit = arguments.get("limit", 100)
@@ -1569,7 +1941,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
     async def _get_sql_explain_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL Explain tool routing"""
-        sql = arguments.get("sql")
+        sql = self._required_string(arguments, "sql")
         verbose = arguments.get("verbose", False)
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
@@ -1581,7 +1953,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
     async def _get_sql_profile_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL Profile tool routing"""
-        sql = arguments.get("sql")
+        sql = self._required_string(arguments, "sql")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
         timeout = arguments.get("timeout", 30)
@@ -1591,7 +1963,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             sql, db_name, catalog_name, timeout
         )
 
-    async def _get_table_data_size_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_table_data_size_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Table data size tool routing"""
         db_name = arguments.get("db_name")
         table_name = arguments.get("table_name")
@@ -1602,7 +1976,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             db_name, table_name, single_replica
         )
 
-    async def _get_monitoring_metrics_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_monitoring_metrics_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Unified monitoring metrics tool routing"""
         content_type = arguments.get("content_type", "data")
         role = arguments.get("role", "all")
@@ -1618,7 +1994,12 @@ No parameters required. Returns connection status, configuration, and diagnostic
         elif content_type == "data":
             # Only get data
             return await self.monitoring_tools.get_monitoring_metrics(
-                role, monitor_type, priority, info_only=False, format_type="prometheus", include_raw_metrics=include_raw_metrics
+                role,
+                monitor_type,
+                priority,
+                info_only=False,
+                format_type="prometheus",
+                include_raw_metrics=include_raw_metrics,
             )
         elif content_type == "both":
             # Get both definitions and data
@@ -1626,7 +2007,12 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 role, monitor_type, priority, info_only=True, format_type="prometheus"
             )
             data = await self.monitoring_tools.get_monitoring_metrics(
-                role, monitor_type, priority, info_only=False, format_type="prometheus", include_raw_metrics=include_raw_metrics
+                role,
+                monitor_type,
+                priority,
+                info_only=False,
+                format_type="prometheus",
+                include_raw_metrics=include_raw_metrics,
             )
             return {
                 "content_type": "both",
@@ -1636,11 +2022,13 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 "_execution_info": {
                     "combined_response": True,
                     "definitions_available": definitions.get("success", False),
-                    "data_available": data.get("success", False)
-                }
+                    "data_available": data.get("success", False),
+                },
             }
         else:
-            return {"error": f"Invalid content_type: {content_type}. Must be 'definitions', 'data', or 'both'"}
+            return {
+                "error": f"Invalid content_type: {content_type}. Must be 'definitions', 'data', or 'both'"
+            }
 
     async def _get_memory_stats_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Unified memory statistics tool routing"""
@@ -1676,47 +2064,57 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 "_execution_info": {
                     "combined_response": True,
                     "realtime_available": realtime.get("success", False),
-                    "historical_available": historical.get("success", False)
-                }
+                    "historical_available": historical.get("success", False),
+                },
             }
         else:
-            return {"error": f"Invalid data_type: {data_type}. Must be 'realtime', 'historical', or 'both'"}
+            return {
+                "error": f"Invalid data_type: {data_type}. Must be 'realtime', 'historical', or 'both'"
+            }
 
     # Legacy tool methods (for backward compatibility)
-    async def _get_monitoring_metrics_info_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_monitoring_metrics_info_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """[DEPRECATED] Use get_monitoring_metrics with content_type='definitions'"""
         arguments["content_type"] = "definitions"
         return await self._get_monitoring_metrics_tool(arguments)
 
-    async def _get_monitoring_metrics_data_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_monitoring_metrics_data_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """[DEPRECATED] Use get_monitoring_metrics with content_type='data'"""
         arguments["content_type"] = "data"
         return await self._get_monitoring_metrics_tool(arguments)
 
-    async def _get_realtime_memory_stats_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_realtime_memory_stats_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """[DEPRECATED] Use get_memory_stats with data_type='realtime'"""
         arguments["data_type"] = "realtime"
         return await self._get_memory_stats_tool(arguments)
 
-    async def _get_historical_memory_stats_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_historical_memory_stats_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """[DEPRECATED] Use get_memory_stats with data_type='historical'"""
         arguments["data_type"] = "historical"
         return await self._get_memory_stats_tool(arguments)
 
     # ==================== v0.5.0 Advanced Analytics Tools Private Methods ====================
 
-    async def _get_table_basic_info_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_table_basic_info_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Get table basic information tool routing"""
         try:
-            table_name = arguments.get("table_name")
+            table_name = self._required_string(arguments, "table_name")
             catalog_name = arguments.get("catalog_name")
             db_name = arguments.get("db_name")
 
             # Delegate to atomic data quality tools
             result = await self.data_quality_tools.get_table_basic_info(
-                table_name=table_name,
-                catalog_name=catalog_name,
-                db_name=db_name
+                table_name=table_name, catalog_name=catalog_name, db_name=db_name
             )
 
             return result
@@ -1725,14 +2123,14 @@ No parameters required. Returns connection status, configuration, and diagnostic
             return {
                 "error": str(e),
                 "analysis_type": "table_basic_info",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
     async def _analyze_columns_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Analyze columns tool routing"""
         try:
-            table_name = arguments.get("table_name")
-            columns = arguments.get("columns")
+            table_name = self._required_string(arguments, "table_name")
+            columns = self._required_string_list(arguments, "columns")
             analysis_types = arguments.get("analysis_types", ["both"])
             sample_size = arguments.get("sample_size", 100000)
             catalog_name = arguments.get("catalog_name")
@@ -1747,7 +2145,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 sample_size=sample_size,
                 catalog_name=catalog_name,
                 db_name=db_name,
-                detailed_response=detailed_response
+                detailed_response=detailed_response,
             )
 
             return result
@@ -1756,13 +2154,15 @@ No parameters required. Returns connection status, configuration, and diagnostic
             return {
                 "error": str(e),
                 "analysis_type": "columns_analysis",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
-    async def _analyze_table_storage_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_table_storage_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Analyze table storage tool routing"""
         try:
-            table_name = arguments.get("table_name")
+            table_name = self._required_string(arguments, "table_name")
             catalog_name = arguments.get("catalog_name")
             db_name = arguments.get("db_name")
             detailed_response = arguments.get("detailed_response", False)
@@ -1772,7 +2172,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
                 table_name=table_name,
                 catalog_name=catalog_name,
                 db_name=db_name,
-                detailed_response=detailed_response
+                detailed_response=detailed_response,
             )
 
             return result
@@ -1781,12 +2181,12 @@ No parameters required. Returns connection status, configuration, and diagnostic
             return {
                 "error": str(e),
                 "analysis_type": "table_storage_analysis",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
-
-
-    async def _trace_column_lineage_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _trace_column_lineage_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Column lineage tracing tool routing"""
         target_columns = arguments.get("target_columns")
         analysis_depth = arguments.get("analysis_depth", 3)
@@ -1808,7 +2208,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
                     elif len(parts) == 3:
                         db_name, table_name, column_name = parts
                     else:
-                        results[column_spec] = {"error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"}
+                        results[column_spec] = {
+                            "error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"
+                        }
                         continue
 
                     result = await self.data_governance_tools.trace_column_lineage(
@@ -1816,18 +2218,24 @@ No parameters required. Returns connection status, configuration, and diagnostic
                         column_name=column_name,
                         depth=analysis_depth,
                         catalog_name=catalog_name,
-                        db_name=db_name
+                        db_name=db_name,
                     )
                     results[column_spec] = result
 
                 except Exception as e:
-                    results[column_spec] = {"error": f"Failed to trace lineage for {column_spec}: {str(e)}"}
+                    results[column_spec] = {
+                        "error": f"Failed to trace lineage for {column_spec}: {str(e)}"
+                    }
 
             return {
                 "multi_column_lineage": True,
                 "column_count": len(target_columns),
-                "analysis_timestamp": list(results.values())[0].get("analysis_timestamp") if results else None,
-                "results": results
+                "analysis_timestamp": list(results.values())[0].get(
+                    "analysis_timestamp"
+                )
+                if results
+                else None,
+                "results": results,
             }
         else:
             # Single column analysis
@@ -1839,17 +2247,21 @@ No parameters required. Returns connection status, configuration, and diagnostic
             elif len(parts) == 3:
                 db_name, table_name, column_name = parts
             else:
-                return {"error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"}
+                return {
+                    "error": f"Invalid column specification format: {column_spec}. Expected 'table.column' or 'db.table.column'"
+                }
 
             return await self.data_governance_tools.trace_column_lineage(
                 table_name=table_name,
                 column_name=column_name,
                 depth=analysis_depth,
                 catalog_name=catalog_name,
-                db_name=db_name
+                db_name=db_name,
             )
 
-    async def _monitor_data_freshness_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _monitor_data_freshness_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Data freshness monitoring tool routing"""
         table_names = arguments.get("table_names")
         freshness_threshold_hours = arguments.get("freshness_threshold_hours", 24)
@@ -1863,12 +2275,12 @@ No parameters required. Returns connection status, configuration, and diagnostic
             tables=table_names,
             time_threshold_hours=freshness_threshold_hours,
             catalog_name=catalog_name,
-            db_name=db_name
+            db_name=db_name,
         )
 
-
-
-    async def _analyze_data_access_patterns_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_data_access_patterns_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Data access patterns analysis tool routing"""
         days = arguments.get("days", 7)
         include_system_users = arguments.get("include_system_users", False)
@@ -1879,7 +2291,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             days, include_system_users, min_query_threshold
         )
 
-    async def _analyze_data_flow_dependencies_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_data_flow_dependencies_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Data flow dependencies analysis tool routing"""
         target_table = arguments.get("target_table")
         analysis_depth = arguments.get("analysis_depth", 3)
@@ -1892,7 +2306,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             target_table, analysis_depth, include_views, catalog_name, db_name
         )
 
-    async def _analyze_slow_queries_topn_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_slow_queries_topn_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Slow queries Top-N analysis tool routing"""
         days = arguments.get("days", 7)
         top_n = arguments.get("top_n", 20)
@@ -1904,10 +2320,14 @@ No parameters required. Returns connection status, configuration, and diagnostic
             days, top_n, min_execution_time_ms, include_patterns
         )
 
-    async def _analyze_resource_growth_curves_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_resource_growth_curves_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """Resource growth curves analysis tool routing"""
         days = arguments.get("days", 30)
-        resource_types = arguments.get("resource_types", ["storage", "query_volume", "user_activity"])
+        resource_types = arguments.get(
+            "resource_types", ["storage", "query_volume", "user_activity"]
+        )
         include_predictions = arguments.get("include_predictions", False)
         detailed_response = arguments.get("detailed_response", False)
 
@@ -1920,7 +2340,7 @@ No parameters required. Returns connection status, configuration, and diagnostic
 
     async def _exec_adbc_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """ADBC query execution tool routing"""
-        sql = arguments.get("sql")
+        sql = self._required_string(arguments, "sql")
         max_rows = arguments.get("max_rows", 100000)
         timeout = arguments.get("timeout", 60)
         return_format = arguments.get("return_format", "arrow")
@@ -1930,7 +2350,9 @@ No parameters required. Returns connection status, configuration, and diagnostic
             sql, max_rows, timeout, return_format
         )
 
-    async def _get_adbc_connection_info_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    async def _get_adbc_connection_info_tool(
+        self, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         """ADBC connection information tool routing"""
         # Delegate to ADBC query tools for processing
         return await self.adbc_query_tools.get_adbc_connection_info()

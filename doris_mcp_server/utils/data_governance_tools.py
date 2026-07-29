@@ -24,7 +24,7 @@ import time
 from datetime import datetime
 from typing import Any
 
-from .db import DorisConnectionManager
+from .db import DorisConnection, DorisConnectionManager
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -65,6 +65,7 @@ class DataGovernanceTools:
             catalog_name: Catalog name
             db_name: Database name
         """
+        connection = None
         try:
             start_time = time.time()
 
@@ -144,6 +145,14 @@ class DataGovernanceTools:
                 "target_column": f"{table_name}.{column_name}",
                 "analysis_timestamp": datetime.now().isoformat()
             }
+        finally:
+            release_connection = getattr(
+                self.connection_manager,
+                "release_connection",
+                None,
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
 
     async def monitor_data_freshness(
         self,
@@ -164,8 +173,6 @@ class DataGovernanceTools:
         connection = None
         try:
             start_time = time.time()
-            if time_threshold_hours is None:
-                time_threshold_hours = 24
             connection = await self.connection_manager.get_connection("query")
 
             # 1. Get list of tables to monitor
@@ -246,7 +253,11 @@ class DataGovernanceTools:
             # If db_name is not provided, need to determine current database
             return build_table_reference(table_name, catalog_name=effective_catalog)
 
-    async def _get_table_basic_info(self, connection, table_name: str) -> dict | None:
+    async def _get_table_basic_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> dict[str, Any] | None:
         """Get table basic information"""
         try:
             # SECURITY FIX: Get auth_context for security validation
@@ -269,7 +280,13 @@ class DataGovernanceTools:
             logger.warning(f"Failed to get basic info for table {table_name}: {str(e)}")
             return {"row_count": 0}
 
-    async def _get_table_columns_info(self, connection, table_name: str, catalog_name: str | None, db_name: str | None) -> list[dict]:
+    async def _get_table_columns_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        catalog_name: str | None,
+        db_name: str | None,
+    ) -> list[dict[str, Any]]:
         """Get table column information"""
         try:
             # SECURITY FIX: Validate identifiers and use parameterized query
@@ -284,7 +301,7 @@ class DataGovernanceTools:
                 return []
 
             # Build parameterized query conditions
-            params = [table_name]
+            params: list[str] = [table_name]
             where_conditions = ["table_name = %s"]
 
             if db_name:
@@ -317,7 +334,12 @@ class DataGovernanceTools:
             logger.warning(f"Failed to get columns info for table {table_name}: {str(e)}")
             return []
 
-    async def _analyze_column_completeness(self, connection, table_name: str, columns_info: list[dict]) -> dict[str, Any]:
+    async def _analyze_column_completeness(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns_info: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Analyze column completeness"""
         # SECURITY FIX: Get auth_context for security validation
         auth_context = get_auth_context()
@@ -384,7 +406,13 @@ class DataGovernanceTools:
 
         return column_completeness
 
-    async def _check_business_rule_compliance(self, connection, table_name: str, business_rules: list[dict], total_rows: int) -> dict[str, Any]:
+    async def _check_business_rule_compliance(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        business_rules: list[dict[str, Any]],
+        total_rows: int,
+    ) -> dict[str, Any]:
         """Check business rule compliance"""
         compliance_results = {}
 
@@ -394,7 +422,8 @@ class DataGovernanceTools:
                 predicate, predicate_params = build_rule_predicate(rule)
                 # Check number of records meeting conditions
                 # SQL sink audit: structured rule -> allowlisted operator,
-                # quoted identifier and bound values; table -> safe reference.
+                # quoted identifier and bound values; table -> safe reference;
+                # final sink -> DorisConnection.execute.
                 compliance_sql = f"""
                 SELECT
                     COUNT(*) as total_count,
@@ -441,7 +470,12 @@ class DataGovernanceTools:
 
         return compliance_results
 
-    async def _detect_data_integrity_issues(self, connection, table_name: str, columns_info: list[dict]) -> list[dict]:
+    async def _detect_data_integrity_issues(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        columns_info: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         """Detect data integrity issues"""
         issues = []
 
@@ -540,7 +574,12 @@ class DataGovernanceTools:
 
         return recommendations
 
-    async def _verify_column_exists(self, connection, table_name: str, column_name: str) -> bool:
+    async def _verify_column_exists(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        column_name: str,
+    ) -> bool:
         """Verify if column exists"""
         try:
             # SECURITY FIX: Validate and quote column name
@@ -565,7 +604,13 @@ class DataGovernanceTools:
         except Exception:
             return False
 
-    async def _analyze_sql_logs_for_lineage(self, connection, table_name: str, column_name: str, depth: int) -> list[dict]:
+    async def _analyze_sql_logs_for_lineage(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        column_name: str,
+        depth: int,
+    ) -> list[dict[str, Any]]:
         """Analyze SQL logs to get lineage relationships (simplified implementation)"""
         # Note: This is a simplified implementation, actual environment needs to analyze audit logs
         source_chain = []
@@ -666,7 +711,12 @@ class DataGovernanceTools:
 
         return "direct_copy"
 
-    async def _analyze_downstream_column_usage(self, connection, table_name: str, column_name: str) -> list[dict]:
+    async def _analyze_downstream_column_usage(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        column_name: str,
+    ) -> list[dict[str, Any]]:
         """Analyze downstream usage of field (simplified implementation)"""
         downstream_usage = []
 
@@ -734,7 +784,12 @@ class DataGovernanceTools:
 
         return list(set(tables))
 
-    async def _extract_transformation_rules(self, connection, table_name: str, column_name: str) -> list[dict]:
+    async def _extract_transformation_rules(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        column_name: str,
+    ) -> list[dict[str, Any]]:
         """Extract field transformation rules"""
         # Simplified implementation: return basic transformation information
         return [{
@@ -748,7 +803,10 @@ class DataGovernanceTools:
         if not source_chain:
             return 0.0
 
-        confidences = [item.get("confidence", 0.0) for item in source_chain]
+        confidences = [
+            float(item.get("confidence", 0.0) or 0.0)
+            for item in source_chain
+        ]
         return round(sum(confidences) / len(confidences), 3)
 
     def _assess_lineage_risk(self, source_chain: list[dict], downstream_usage: list[dict]) -> str:
@@ -760,11 +818,16 @@ class DataGovernanceTools:
         else:
             return "low"
 
-    async def _get_all_tables(self, connection, catalog_name: str | None, db_name: str | None) -> list[str]:
+    async def _get_all_tables(
+        self,
+        connection: DorisConnection,
+        catalog_name: str | None,
+        db_name: str | None,
+    ) -> list[str]:
         """Get list of all tables"""
         try:
             auth_context = get_auth_context()
-            params = []
+            params: list[str] = []
 
             # SECURITY FIX: Use parameterized query
             if db_name:
@@ -795,7 +858,12 @@ class DataGovernanceTools:
             logger.warning(f"Failed to get table list: {str(e)}")
             return []
 
-    async def _analyze_table_freshness(self, connection, table_name: str, threshold_hours: int) -> dict[str, Any]:
+    async def _analyze_table_freshness(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+        threshold_hours: int,
+    ) -> dict[str, Any]:
         """Analyze freshness of single table"""
         try:
             # Try multiple methods to get table's last update time
@@ -862,7 +930,11 @@ class DataGovernanceTools:
                 "error": str(e)
             }
 
-    async def _get_freshness_from_partition_info(self, connection, table_name: str) -> dict | None:
+    async def _get_freshness_from_partition_info(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> dict[str, Any] | None:
         """Get freshness from partition information"""
         try:
             # SECURITY FIX: Validate and use parameterized query
@@ -892,7 +964,11 @@ class DataGovernanceTools:
         except Exception:
             return None
 
-    async def _get_freshness_from_max_timestamp(self, connection, table_name: str) -> dict | None:
+    async def _get_freshness_from_max_timestamp(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> dict[str, Any] | None:
         """Get freshness from timestamp fields"""
         try:
             # Find possible timestamp fields
@@ -922,7 +998,11 @@ class DataGovernanceTools:
         except Exception:
             return None
 
-    async def _get_freshness_from_table_metadata(self, connection, table_name: str) -> dict | None:
+    async def _get_freshness_from_table_metadata(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> dict[str, Any] | None:
         """Get freshness from table metadata"""
         try:
             # SECURITY FIX: Validate and use parameterized query
@@ -952,7 +1032,11 @@ class DataGovernanceTools:
         except Exception:
             return None
 
-    async def _find_timestamp_columns(self, connection, table_name: str) -> list[str]:
+    async def _find_timestamp_columns(
+        self,
+        connection: DorisConnection,
+        table_name: str,
+    ) -> list[str]:
         """Find possible timestamp fields"""
         try:
             # SECURITY FIX: Validate and use parameterized query
