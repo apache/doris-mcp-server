@@ -60,6 +60,9 @@ under **Unreleased** until a new version is selected and published.
 - Required external OAuth access tokens to pass trusted RFC 7662
   issuer/resource/audience, lifetime, and scope validation before userinfo is
   used.
+- Preserved external OAuth token failures through the authentication boundary
+  and returned RFC 6750/RFC 9728 Bearer challenges, protected-resource
+  metadata, and operation-specific insufficient-scope responses.
 - Released Doris connections on SQL profile, data freshness, and access
   analysis paths.
 - Improved Doris 4 role metadata compatibility and query recovery behavior.

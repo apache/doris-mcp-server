@@ -35,6 +35,10 @@ from .doris_oauth_handlers import (
     insufficient_scope_response,
     protected_resource_error_response,
 )
+from .oauth_resource import (
+    external_oauth_error_response,
+    external_oauth_insufficient_scope_response,
+)
 from .operation_policy import OperationAuthorizationError
 
 ASGIApp = Callable[[dict[str, Any], Callable[..., Awaitable[Any]], Callable[..., Awaitable[Any]]], Awaitable[Any]]
@@ -66,6 +70,7 @@ class MCPAuthASGIMiddleware:
         self.effective_auth = effective_auth
 
     async def __call__(self, scope, receive, send):
+        credentials = None
         try:
             credentials = await extract_bearer_credentials_from_scope(scope)
             auth_context = await self.security_manager.authenticate_request(credentials)
@@ -74,6 +79,14 @@ class MCPAuthASGIMiddleware:
                 response = protected_resource_error_response(
                     exc,
                     self.effective_auth.doris_oauth_base_url,
+                )
+            elif self.effective_auth.oauth_discovery_mode == "external_oauth":
+                response = external_oauth_error_response(
+                    exc,
+                    self.effective_auth,
+                    credentials_present=bool(
+                        credentials and credentials.is_bearer
+                    ),
                 )
             else:
                 response = JSONResponse(
@@ -116,6 +129,16 @@ class MCPAuthASGIMiddleware:
             ):
                 response = insufficient_scope_response(
                     self.effective_auth.doris_oauth_base_url,
+                    exc.required_scope,
+                    body,
+                )
+            elif (
+                self.effective_auth.oauth_discovery_mode == "external_oauth"
+                and exc.required_scope
+                and exc.error_code == "PERMISSION_DENIED"
+            ):
+                response = external_oauth_insufficient_scope_response(
+                    self.effective_auth,
                     exc.required_scope,
                     body,
                 )

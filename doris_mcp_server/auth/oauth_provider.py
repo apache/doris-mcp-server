@@ -24,7 +24,10 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from .oauth_client import OAuthClient
-from .oauth_token_validation import OAuthAccessTokenContext
+from .oauth_token_validation import (
+    OAuthAccessTokenContext,
+    OAuthAccessTokenValidationError,
+)
 from .oauth_types import OAuthTokens, OAuthUserInfo, OAuthState
 from ..utils.security import AuthContext, SecurityLevel
 from ..utils.logger import get_logger
@@ -119,9 +122,12 @@ class OAuthAuthenticationProvider:
             logger.info(f"OAuth authentication successful for user: {auth_context.user_id}")
             return auth_context
             
+        except OAuthAccessTokenValidationError:
+            logger.warning("OAuth callback access token was rejected")
+            raise
         except Exception as e:
             logger.error(f"OAuth callback handling failed: {e}")
-            raise ValueError(f"OAuth authentication failed: {str(e)}")
+            raise ValueError(f"OAuth authentication failed: {str(e)}") from e
     
     async def authenticate_with_token(self, access_token: str) -> AuthContext:
         """Authenticate using OAuth access token
@@ -157,9 +163,12 @@ class OAuthAuthenticationProvider:
             logger.info(f"OAuth token authentication successful for user: {auth_context.user_id}")
             return auth_context
             
+        except OAuthAccessTokenValidationError:
+            logger.warning("OAuth bearer access token was rejected")
+            raise
         except Exception as e:
             logger.error(f"OAuth token authentication failed: {e}")
-            raise ValueError(f"OAuth token authentication failed: {str(e)}")
+            raise ValueError(f"OAuth token authentication failed: {str(e)}") from e
     
     async def refresh_authentication(self, refresh_token: str) -> Tuple[AuthContext, str]:
         """Refresh OAuth authentication
@@ -195,9 +204,12 @@ class OAuthAuthenticationProvider:
             logger.info(f"OAuth refresh successful for user: {auth_context.user_id}")
             return auth_context, tokens.access_token
             
+        except OAuthAccessTokenValidationError:
+            logger.warning("OAuth refreshed access token was rejected")
+            raise
         except Exception as e:
             logger.error(f"OAuth refresh failed: {e}")
-            raise ValueError(f"OAuth refresh failed: {str(e)}")
+            raise ValueError(f"OAuth refresh failed: {str(e)}") from e
     
     async def _create_auth_context(
         self,
@@ -216,8 +228,9 @@ class OAuthAuthenticationProvider:
             AuthContext for the user
         """
         if user_info.sub != token_context.subject:
-            raise ValueError(
-                "OAuth userinfo subject does not match the access token"
+            raise OAuthAccessTokenValidationError(
+                "invalid_token",
+                "OAuth userinfo subject does not match the access token",
             )
 
         # Determine security level based on roles or email domain

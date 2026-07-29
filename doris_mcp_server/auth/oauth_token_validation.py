@@ -27,10 +27,18 @@ from typing import Any
 class OAuthAccessTokenValidationError(ValueError):
     """An external access token failed resource-server validation."""
 
-    def __init__(self, error: str, description: str):
+    def __init__(
+        self,
+        error: str,
+        description: str,
+        *,
+        required_scopes: Sequence[str] = (),
+    ):
         super().__init__(description)
         self.error = error
         self.description = description
+        self.required_scopes = tuple(dict.fromkeys(required_scopes))
+        self.status_code = 403 if error == "insufficient_scope" else 401
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,12 +161,16 @@ class ExternalOAuthTokenValidator:
             raise OAuthAccessTokenValidationError(
                 "insufficient_scope",
                 "OAuth access token is missing a required scope",
+                required_scopes=tuple(sorted(self.required_scopes)),
             )
         granted_scopes = tuple(sorted(token_scopes & self.allowed_scopes))
         if not granted_scopes:
             raise OAuthAccessTokenValidationError(
                 "insufficient_scope",
                 "OAuth access token has no allowed scope",
+                required_scopes=tuple(
+                    sorted(self.required_scopes or self.allowed_scopes)
+                ),
             )
 
         subject = str(claims.get("sub") or "")

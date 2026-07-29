@@ -244,6 +244,11 @@ class DorisServer:
             
             async def oauth_provider_info(request):
                 return await oauth_handlers.handle_provider_info(request)
+
+            async def oauth_protected_resource_metadata(request):
+                return await oauth_handlers.handle_protected_resource_metadata(
+                    request
+                )
                 
             async def oauth_demo(request):
                 return await oauth_handlers.handle_demo_page(request)
@@ -291,6 +296,11 @@ class DorisServer:
             routes = [Route("/health", health_check, methods=["GET"])]
             if effective_auth.enable_external_oauth_auth:
                 routes.extend([
+                    Route(
+                        "/.well-known/oauth-protected-resource",
+                        oauth_protected_resource_metadata,
+                        methods=["GET"],
+                    ),
                     Route("/auth/login", oauth_login, methods=["GET"]),
                     Route("/auth/callback", oauth_callback, methods=["GET"]),
                     Route("/auth/provider", oauth_provider_info, methods=["GET"]),

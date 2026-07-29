@@ -27,7 +27,9 @@ import json
 from starlette.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.requests import Request
 
+from ..utils.config import get_effective_auth_config
 from ..utils.logger import get_logger
+from .oauth_resource import external_oauth_protected_resource_metadata
 
 logger = get_logger(__name__)
 
@@ -143,6 +145,23 @@ class OAuthHandlers:
                 {"error": f"Failed to get provider info: {str(e)}"},
                 status_code=500
             )
+
+    async def handle_protected_resource_metadata(
+        self,
+        request: Request,
+    ) -> JSONResponse:
+        """Return RFC 9728 metadata for external OAuth deployments."""
+        effective_auth = get_effective_auth_config(
+            self.security_manager.config
+        )
+        if not effective_auth.enable_external_oauth_auth:
+            return JSONResponse(
+                {"error": "external_oauth_disabled"},
+                status_code=404,
+            )
+        return JSONResponse(
+            external_oauth_protected_resource_metadata(effective_auth)
+        )
     
     async def handle_demo_page(self, request: Request) -> HTMLResponse:
         """Handle OAuth demo page

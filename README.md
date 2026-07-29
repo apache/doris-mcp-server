@@ -663,6 +663,16 @@ Dedicated `OAUTH_INTROSPECTION_CLIENT_ID` and
 regular OAuth client credentials are used. Remote issuer, discovery,
 introspection, and userinfo URLs must use HTTPS.
 
+For HTTP deployments, the server publishes RFC 9728 metadata at
+`/.well-known/oauth-protected-resource`. Missing or invalid credentials receive
+an HTTP 401 Bearer challenge containing `resource_metadata` and the minimum
+configured scopes. A valid token that lacks an operation scope receives HTTP
+403 with `error="insufficient_scope"` and the exact scope required for
+step-up authorization. Access tokens and provider-internal error details are
+not copied into these responses. These HTTP OAuth challenges do not apply to
+stdio transport, where credentials are supplied through the local process
+environment.
+
 ### Doris-Backed OAuth Authentication
 
 Doris-backed OAuth is a separate OAuth mode where Doris itself is the authorization backend. The MCP client discovers this server's OAuth metadata, the user signs in with a Doris username and password, the server validates those credentials by creating a per-user Doris connection pool, and issued `doa_` access tokens route tool calls through that Doris user's pool. MCP scopes control which MCP operations can be called; Doris RBAC controls which catalogs, databases, tables, and metadata the user can see.
