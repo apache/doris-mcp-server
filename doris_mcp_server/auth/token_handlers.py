@@ -108,9 +108,9 @@ class TokenHandlers:
                             database=db_data.get("database", "information_schema"),
                             fe_http_port=int(db_data.get("fe_http_port", 8030))
                         )
-                    except (ValueError, TypeError) as e:
+                    except (ValueError, TypeError):
                         return JSONResponse({
-                            "error": f"Invalid database configuration: {str(e)}"
+                            "error": "Invalid database configuration"
                         }, status_code=400)
             
             # Validate required fields
@@ -149,15 +149,21 @@ class TokenHandlers:
                 })
                 
             except Exception as e:
-                self.logger.error(f"Token creation failed: {e}")
+                self.logger.error(
+                    "Token creation failed (%s)",
+                    type(e).__name__,
+                )
                 return JSONResponse({
-                    "error": f"Token creation failed: {str(e)}"
+                    "error": "Token creation failed"
                 }, status_code=400)
             
         except Exception as e:
-            self.logger.error(f"Error in handle_create_token: {e}")
+            self.logger.error(
+                "Error in handle_create_token (%s)",
+                type(e).__name__,
+            )
             return JSONResponse({
-                "error": f"Internal server error: {str(e)}"
+                "error": "Internal server error"
             }, status_code=500)
     
     async def handle_revoke_token(self, request: Request) -> JSONResponse:
@@ -205,9 +211,12 @@ class TokenHandlers:
                 }, status_code=404)
             
         except Exception as e:
-            self.logger.error(f"Error in handle_revoke_token: {e}")
+            self.logger.error(
+                "Error in handle_revoke_token (%s)",
+                type(e).__name__,
+            )
             return JSONResponse({
-                "error": f"Internal server error: {str(e)}"
+                "error": "Internal server error"
             }, status_code=500)
     
     async def handle_list_tokens(self, request: Request) -> JSONResponse:
@@ -235,9 +244,12 @@ class TokenHandlers:
             })
             
         except Exception as e:
-            self.logger.error(f"Error in handle_list_tokens: {e}")
+            self.logger.error(
+                "Error in handle_list_tokens (%s)",
+                type(e).__name__,
+            )
             return JSONResponse({
-                "error": f"Internal server error: {str(e)}"
+                "error": "Internal server error"
             }, status_code=500)
     
     async def handle_token_stats(self, request: Request) -> JSONResponse:
@@ -264,9 +276,12 @@ class TokenHandlers:
             })
             
         except Exception as e:
-            self.logger.error(f"Error in handle_token_stats: {e}")
+            self.logger.error(
+                "Error in handle_token_stats (%s)",
+                type(e).__name__,
+            )
             return JSONResponse({
-                "error": f"Internal server error: {str(e)}"
+                "error": "Internal server error"
             }, status_code=500)
     
     async def handle_cleanup_tokens(self, request: Request) -> JSONResponse:
@@ -294,9 +309,12 @@ class TokenHandlers:
             })
             
         except Exception as e:
-            self.logger.error(f"Error in handle_cleanup_tokens: {e}")
+            self.logger.error(
+                "Error in handle_cleanup_tokens (%s)",
+                type(e).__name__,
+            )
             return JSONResponse({
-                "error": f"Internal server error: {str(e)}"
+                "error": "Internal server error"
             }, status_code=500)
     
     async def handle_management_page(self, request: Request) -> HTMLResponse:
@@ -655,7 +673,10 @@ class TokenHandlers:
             return HTMLResponse(html_content)
             
         except Exception as e:
-            self.logger.error(f"Error in handle_demo_page: {e}")
+            self.logger.error(
+                "Error in handle_demo_page (%s)",
+                type(e).__name__,
+            )
             error_html = f"""
             <!DOCTYPE html>
             <html>
@@ -665,7 +686,7 @@ class TokenHandlers:
             </head>
             <body>
                 <h1>Token Management Error</h1>
-                <p>Error loading token management page: {str(e)}</p>
+                <p>Error loading token management page.</p>
             </body>
             </html>
             """

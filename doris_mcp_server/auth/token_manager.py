@@ -556,10 +556,13 @@ class TokenManager:
             )
             
         except Exception as e:
-            self.logger.error(f"Token validation error: {e}")
+            self.logger.error(
+                "Token validation error (%s)",
+                type(e).__name__,
+            )
             return TokenValidationResult(
                 is_valid=False,
-                error_message=f"Token validation failed: {str(e)}"
+                error_message="Token validation failed"
             )
     
     def generate_token(self, length: int = 32) -> str:

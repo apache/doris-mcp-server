@@ -1459,11 +1459,13 @@ No parameters required. Returns connection status, configuration, and diagnostic
         except OperationAuthorizationError:
             raise
         except Exception as e:
-            logger.error(f"Tool call failed {name}: {str(e)}")
+            logger.error(
+                "Tool call failed (%s)",
+                type(e).__name__,
+            )
             error_result = {
-                "error": str(e),
-                "tool_name": name,
-                "arguments": arguments,
+                "error": "Tool execution failed",
+                "error_code": "TOOL_EXECUTION_FAILED",
                 "timestamp": datetime.now().isoformat(),
             }
             return json.dumps(error_result, ensure_ascii=False, indent=2)

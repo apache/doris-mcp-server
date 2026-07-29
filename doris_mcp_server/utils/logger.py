@@ -35,6 +35,11 @@ from typing import Any, Optional
 from datetime import datetime, timedelta
 import threading
 
+from .redaction import SensitiveDataFilter
+
+
+_sensitive_data_filter = SensitiveDataFilter()
+
 
 class TimestampedFormatter(logging.Formatter):
     """Custom formatter with enhanced timestamp and structured format"""
@@ -348,6 +353,7 @@ class DorisLoggerManager:
         if enable_console:
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(getattr(logging, level.upper()))
+            console_handler.addFilter(_sensitive_data_filter)
             console_formatter = TimestampedFormatter(
                 fmt="%(asctime)s.%(msecs)03d %(level_aligned)s %(name)s - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S"
@@ -364,6 +370,7 @@ class DorisLoggerManager:
                 backup_count=backup_count
             )
             level_handler.setLevel(logging.DEBUG)  # Accept all levels
+            level_handler.addFilter(_sensitive_data_filter)
             handlers.append(level_handler)
         
         # Combined application log (all levels in one file)
@@ -376,6 +383,7 @@ class DorisLoggerManager:
                 encoding='utf-8'
             )
             app_handler.setLevel(getattr(logging, level.upper()))
+            app_handler.addFilter(_sensitive_data_filter)
             app_formatter = TimestampedFormatter()
             app_handler.setFormatter(app_formatter)
             handlers.append(app_handler)
@@ -396,12 +404,14 @@ class DorisLoggerManager:
                 backupCount=backup_count,
                 encoding='utf-8'
             )
+            audit_handler.addFilter(_sensitive_data_filter)
             audit_formatter = TimestampedFormatter(
                 fmt="%(asctime)s.%(msecs)03d [AUDIT] %(name)s - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S"
             )
             audit_handler.setFormatter(audit_formatter)
             audit_logger.addHandler(audit_handler)
+            audit_logger.addFilter(_sensitive_data_filter)
             audit_logger.propagate = False  # Don't propagate to root logger
         
         # Add all handlers to root logger
@@ -455,6 +465,8 @@ class DorisLoggerManager:
         for logger_name in package_loggers:
             logger = logging.getLogger(logger_name)
             logger.setLevel(getattr(logging, level.upper()))
+            if _sensitive_data_filter not in logger.filters:
+                logger.addFilter(_sensitive_data_filter)
             # Don't add handlers here - they inherit from root logger
     
     def get_logger(self, name: str) -> logging.Logger:
@@ -469,6 +481,8 @@ class DorisLoggerManager:
         """
         if name not in self.loggers:
             logger = logging.getLogger(name)
+            if _sensitive_data_filter not in logger.filters:
+                logger.addFilter(_sensitive_data_filter)
             self.loggers[name] = logger
         
         return self.loggers[name]

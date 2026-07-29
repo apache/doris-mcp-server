@@ -60,7 +60,7 @@ def protected_resource_error_response(error: Exception, base_url: str) -> JSONRe
         scope = "tool:list"
         body = {
             "error": "authentication_required",
-            "error_description": str(error) or "Authentication required",
+            "error_description": "Authentication required",
         }
         status_code = 401
     return JSONResponse(

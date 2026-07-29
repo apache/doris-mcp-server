@@ -386,7 +386,11 @@ class MetadataExtractor:
             """
             
             result = self._execute_query_with_catalog(query, db_name, effective_catalog)
-            logger.info(f"{effective_catalog or 'default'}.{db_name}.information_schema.tables query result: {result}")
+            logger.info(
+                "%s.%s.information_schema.tables query completed",
+                effective_catalog or "default",
+                db_name,
+            )
             
             if not result:
                 tables = []
@@ -815,7 +819,7 @@ class MetadataExtractor:
             if effective_catalog:
                 safe_catalog = quote_identifier(effective_catalog, "catalog name")
                 query = f"SHOW INDEX FROM {safe_catalog}.{safe_db}.{safe_table}"
-                logger.info(f"Using three-part naming for index query: {query}")
+                logger.info("Using three-part naming for index query")
             else:
                 query = f"SHOW INDEX FROM {safe_db}.{safe_table}"
             
@@ -1288,7 +1292,10 @@ class MetadataExtractor:
         try:
             if catalog_name and 'information_schema' in query.lower():
                 modified_query = query.replace('information_schema', f'{catalog_name}.information_schema')
-                logger.info(f"Modified query for catalog {catalog_name}: {modified_query}")
+                logger.info(
+                    "Prepared catalog-qualified query for %s",
+                    catalog_name,
+                )
                 return await self._execute_query_async(modified_query, db_name)
             else:
                 return await self._execute_query_async(query, db_name)
@@ -1633,7 +1640,7 @@ class MetadataExtractor:
             if effective_catalog:
                 safe_catalog = quote_identifier(effective_catalog, "catalog name")
                 query = f"SHOW INDEX FROM {safe_catalog}.{safe_db}.{safe_table}"
-                logger.info(f"Using three-part naming for async index query: {query}")
+                logger.info("Using three-part naming for async index query")
             else:
                 query = f"SHOW INDEX FROM {safe_db}.{safe_table}"
 
@@ -1753,7 +1760,13 @@ class MetadataExtractor:
         FIX for Issue #62 Bug 1: Now retrieves auth_context from context variable to support token-bound database configuration
         FIX for Issue #62 Bug 3: Now uses db_name and catalog_name parameters to switch database context
         """
-        logger.info(f"Executing SQL query: {sql}, DB: {db_name}, Catalog: {catalog_name}, MaxRows: {max_rows}, Timeout: {timeout}")
+        logger.info(
+            "Executing SQL query for DB=%s, catalog=%s, max_rows=%s, timeout=%s",
+            db_name,
+            catalog_name,
+            max_rows,
+            timeout,
+        )
 
         try:
             if not sql:

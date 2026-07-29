@@ -423,7 +423,7 @@ class OAuthClient:
         # Build URL
         authorization_url = f"{self.provider_config.authorization_endpoint}?{urlencode(params)}"
         
-        logger.info(f"Built OAuth authorization URL for state: {oauth_state.state}")
+        logger.info("Built OAuth authorization URL")
         return authorization_url, oauth_state
     
     async def exchange_code_for_tokens(self, code: str, state: str) -> Tuple[OAuthTokens, OAuthState]:

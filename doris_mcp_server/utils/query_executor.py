@@ -417,7 +417,7 @@ class DorisQueryExecutor:
                 )
                 if cached_result:
                     self.metrics.cache_hits += 1
-                    self.logger.debug(f"Cache hit for query: {query_request.sql[:50]}...")
+                    self.logger.debug("Query cache hit")
                     return cached_result.result
 
             self.metrics.cache_misses += 1
@@ -802,7 +802,9 @@ class DorisQueryExecutor:
                             validation_result = await security_manager.validate_sql_security(sql, auth_context)
 
                             if not validation_result.is_valid:
-                                self.logger.warning(f"SQL security validation failed for query: {sql[:100]}...")
+                                self.logger.warning(
+                                    "SQL security validation rejected a query"
+                                )
                                 return {
                                     "success": False,
                                     "error": f"SQL security validation failed: {validation_result.error_message}",
@@ -819,7 +821,9 @@ class DorisQueryExecutor:
                                     }
                                 }
                             else:
-                                self.logger.debug(f"SQL security validation passed for query: {sql[:100]}...")
+                                self.logger.debug(
+                                    "SQL security validation passed"
+                                )
                         except Exception as security_error:
                             self.logger.error(f"Security validation error: {str(security_error)}")
                             # In case of security validation error, fail safe

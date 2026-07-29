@@ -360,7 +360,7 @@ class JWTManager:
             # Add to blacklist
             await self.validator.revoke_token(jti, exp)
             
-            logger.info(f"Token {jti} revoked successfully")
+            logger.info("Token revoked successfully")
             return True
             
         except Exception as e:

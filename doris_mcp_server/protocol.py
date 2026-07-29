@@ -52,7 +52,12 @@ from mcp.types import (
     Tool,
 )
 
-from .auth.operation_policy import authorize_operation
+from .auth.operation_policy import OperationAuthorizationError, authorize_operation
+from .utils.redaction import (
+    redact_error_payload,
+    redact_sensitive_text,
+    redact_uri,
+)
 from .utils.security import get_current_auth_context
 
 
@@ -107,6 +112,20 @@ def _decode_structured_tool_result(payload: str) -> tuple[Any | None, bool]:
     if not isinstance(decoded, dict):
         return None, False
     return decoded, "error" in decoded
+
+
+def _sanitize_manager_error_payload(
+    payload: str,
+) -> tuple[str, Any | None, bool]:
+    decoded, is_error = _decode_structured_tool_result(payload)
+    if not is_error:
+        return payload, decoded, False
+    decoded = redact_error_payload(decoded)
+    return (
+        json.dumps(decoded, ensure_ascii=False, indent=2),
+        decoded,
+        True,
+    )
 
 
 _RESOURCE_INVALID_PARAMS_MESSAGES = {
@@ -168,6 +187,7 @@ def create_doris_mcp_server(
     ) -> ReadResourceResult:
         authorize_operation(get_current_auth_context(), "read_resource")
         content = await resources_manager.read_resource(params.uri)
+        content, _, _ = _sanitize_manager_error_payload(content)
         if ctx.protocol_version == LATEST_PROTOCOL_VERSION:
             request_error = _decode_resource_request_error(content)
             if request_error is not None:
@@ -176,7 +196,7 @@ def create_doris_mcp_server(
                     code=INVALID_PARAMS,
                     message=message,
                     data={
-                        "uri": str(params.uri),
+                        "uri": redact_uri(str(params.uri)),
                         "resourceErrorCode": error_code,
                     },
                 )
@@ -206,8 +226,21 @@ def create_doris_mcp_server(
     ) -> CallToolResult:
         del ctx
         arguments = params.arguments or {}
-        payload = await tools_manager.call_tool(params.name, arguments)
-        structured_content, is_error = _decode_structured_tool_result(payload)
+        try:
+            payload = await tools_manager.call_tool(params.name, arguments)
+        except OperationAuthorizationError:
+            raise
+        except Exception:
+            logger.exception("Tool execution failed")
+            payload = json.dumps(
+                {
+                    "error": "Tool execution failed",
+                    "error_code": "TOOL_EXECUTION_FAILED",
+                }
+            )
+        payload, structured_content, is_error = _sanitize_manager_error_payload(
+            payload
+        )
         return CallToolResult(
             content=[TextContent(type="text", text=payload)],
             structured_content=structured_content,
@@ -240,7 +273,7 @@ def create_doris_mcp_server(
             message = _PROMPT_INVALID_PARAMS_MESSAGES.get(prompt_error_code)
             if message is not None:
                 data = {
-                    "name": params.name,
+                    "name": redact_sensitive_text(params.name),
                     "promptErrorCode": prompt_error_code,
                 }
                 argument = getattr(exc, "argument", None)
@@ -285,6 +318,23 @@ def create_doris_mcp_server(
         on_list_prompts=list_prompts,
         on_get_prompt=get_prompt,
     )
+
+    async def hide_unhandled_errors(
+        ctx: ServerRequestContext,
+        call_next: CallNext,
+    ) -> Any:
+        try:
+            return await call_next(ctx)
+        except (MCPError, OperationAuthorizationError):
+            raise
+        except Exception as exc:
+            logger.exception("Unhandled MCP request failure for %s", ctx.method)
+            raise MCPError(
+                code=INTERNAL_ERROR,
+                message="Internal server error",
+            ) from exc
+
+    server.middleware.append(hide_unhandled_errors)
 
     if required_client_capabilities or required_tool_capabilities:
         requirements = dict(required_client_capabilities or {})

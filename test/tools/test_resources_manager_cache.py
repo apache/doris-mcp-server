@@ -320,14 +320,15 @@ def test_parse_stats_resource_distinguishes_legacy_current_database_from_literal
 
 
 @pytest.mark.asyncio
-async def test_legacy_read_resource_keeps_json_error_body_compatibility():
+async def test_legacy_read_resource_hides_backend_error_details():
     manager = DorisResourcesManager(RaisingConnectionManager())
 
     result = await manager.read_resource("doris://table/orders")
 
     payload = json.loads(result)
     assert payload["uri"] == "doris://table/orders"
-    assert "metadata backend failed" in payload["error"]
+    assert payload["error"] == "Resource read failed"
+    assert "metadata backend failed" not in payload["error"]
     assert "error_code" not in payload
 
 
@@ -339,7 +340,7 @@ async def test_read_resource_marks_invalid_uri_for_protocol_boundary():
 
     payload = json.loads(result)
     assert payload == {
-        "error": "Failed to read resource: Invalid resource URI format",
+        "error": "Invalid resource URI",
         "error_code": "INVALID_RESOURCE_URI",
         "uri": "https://example.com/orders",
     }
@@ -362,7 +363,7 @@ async def test_read_resource_marks_missing_table_for_protocol_boundary():
 
     payload = json.loads(result)
     assert payload == {
-        "error": "Failed to read resource: Table missing does not exist",
+        "error": "Resource not found",
         "error_code": "RESOURCE_NOT_FOUND",
         "uri": "doris://table/missing",
     }

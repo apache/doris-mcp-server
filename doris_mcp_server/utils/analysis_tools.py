@@ -428,7 +428,7 @@ class SQLAnalyzer:
             explain_type = "EXPLAIN VERBOSE" if verbose else "EXPLAIN"
             explain_sql = f"{explain_type} {sql.strip().rstrip(';')}"
             
-            logger.info(f"Executing explain query: {explain_sql}")
+            logger.info("Executing explain query")
             
             # Execute context switching and explain query on one routed connection
             # whenever a database/catalog context is requested.
@@ -618,7 +618,7 @@ class SQLAnalyzer:
                 logger.info(f"Enabled profile")
                 
                 # Execute the SQL statement
-                logger.info(f"Executing SQL with trace ID: {sql}")
+                logger.info("Executing SQL with trace ID %s", trace_id)
                 start_time = time.time()
                 sql_result = await connection.execute(sql, auth_context=auth_context)
                 execution_time = time.time() - start_time
@@ -871,14 +871,17 @@ class SQLAnalyzer:
                         content_type = response.headers.get('content-type', '')
                         response_text = await response.text()
                         logger.info(f"Response content type: {content_type}")
-                        logger.info(f"Response body: {response_text}")
+                        logger.info(
+                            "Query ID response body length: %s",
+                            len(response_text),
+                        )
                         
                         # Parse JSON response (regardless of content-type)
                         if response_text.strip():
                             try:
                                 import json
                                 result = json.loads(response_text)
-                                logger.info(f"Query ID API response: {result}")
+                                logger.info("Query ID API returned JSON")
                                 
                                 # Parse response according to Doris API format
                                 if result.get("code") == 0 and result.get("data"):
@@ -911,7 +914,10 @@ class SQLAnalyzer:
                     else:
                         logger.error(f"HTTP request failed with status {response.status}")
                         response_text = await response.text()
-                        logger.error(f"Response body: {response_text}")
+                        logger.error(
+                            "Query ID response body omitted (length=%s)",
+                            len(response_text),
+                        )
             
             return None
             
@@ -957,7 +963,7 @@ class SQLAnalyzer:
                             if 'application/json' in content_type:
                                 try:
                                     result = await response.json()
-                                    logger.info(f"Profile JSON response: {result}")
+                                    logger.info("Profile API returned JSON")
                                     
                                     if result.get("code") == 0 and result.get("data"):
                                         profile_text = result["data"].get("profile", "")
@@ -987,7 +993,9 @@ class SQLAnalyzer:
                                         "api_endpoint": url
                                     }
                                 else:
-                                    logger.warning(f"Profile not found or empty: {response_text}")
+                                    logger.warning(
+                                        "Profile not found or empty"
+                                    )
                                     continue  # Try next URL
                         
                         elif response.status == 404:
@@ -996,7 +1004,10 @@ class SQLAnalyzer:
                         else:
                             logger.error(f"Profile HTTP request failed with status {response.status} at {url}")
                             response_text = await response.text()
-                            logger.error(f"Response body: {response_text}")
+                            logger.error(
+                                "Profile response body omitted (length=%s)",
+                                len(response_text),
+                            )
                             continue  # Try next URL
             
             return None
@@ -1093,7 +1104,10 @@ class SQLAnalyzer:
                     else:
                         logger.error(f"HTTP request failed with status {response.status}")
                         response_text = await response.text()
-                        logger.error(f"Response body: {response_text}")
+                        logger.error(
+                            "Table size response body omitted (length=%s)",
+                            len(response_text),
+                        )
                         return {
                             "success": False,
                             "error": f"HTTP request failed with status {response.status}",
