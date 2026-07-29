@@ -3,6 +3,7 @@ import json
 import pytest
 
 import doris_mcp_server.auth.mcp_auth_middleware as middleware_module
+from doris_mcp_server.auth.doris_oauth_types import ProtectedResourceAuthError
 from doris_mcp_server.auth.mcp_auth_middleware import MCPAuthASGIMiddleware
 from doris_mcp_server.auth.oauth_token_validation import (
     OAuthAccessTokenValidationError,
@@ -149,6 +150,53 @@ async def test_mcp_auth_middleware_returns_doris_oauth_challenge_on_401():
     assert b"https://mcp.example.test/.well-known/oauth-protected-resource" in headers[b"www-authenticate"]
     body = json.loads(messages[1]["body"])
     assert body["error"] == "authentication_required"
+
+
+@pytest.mark.asyncio
+async def test_doris_oauth_resource_mismatch_returns_invalid_token_challenge():
+    class SecurityManager:
+        async def authenticate_request(self, credentials):
+            assert credentials.token == "wrong-resource-token"
+            raise ProtectedResourceAuthError(
+                "authentication_required",
+                "Doris OAuth access token is not valid for this MCP resource",
+                error_code="DORIS_OAUTH_RESOURCE_MISMATCH",
+            )
+
+    async def downstream(scope, receive, send):
+        raise AssertionError("downstream must not be called")
+
+    messages = []
+    middleware = MCPAuthASGIMiddleware(
+        SecurityManager(),
+        downstream,
+        _effective(
+            auth_methods=("doris_oauth",),
+            discovery_mode="doris_oauth",
+            base_url="https://mcp.example.test",
+        ),
+    )
+    await middleware(
+        {
+            "type": "http",
+            "path": "/mcp",
+            "headers": [
+                (b"authorization", b"Bearer wrong-resource-token")
+            ],
+            "client": ("127.0.0.1", 1),
+        },
+        _receive,
+        _send_collector(messages),
+    )
+
+    assert messages[0]["status"] == 401
+    challenge = dict(messages[0]["headers"])[b"www-authenticate"]
+    assert b'error="invalid_token"' in challenge
+    assert b"oauth-protected-resource" in challenge
+    assert b'scope="tool:list"' in challenge
+    body = json.loads(messages[1]["body"])
+    assert body["error"] == "authentication_required"
+    assert body["error_code"] == "DORIS_OAUTH_RESOURCE_MISMATCH"
 
 
 @pytest.mark.asyncio

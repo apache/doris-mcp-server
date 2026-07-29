@@ -47,6 +47,7 @@ class FakeConnectionManager:
         self.pools = {}
         self.create_calls = []
         self.cleanup_calls = []
+        self.has_pool_calls = []
         self.global_acquire_calls = 0
 
     async def create_or_replace_doris_user_pool(self, username, password):
@@ -56,6 +57,7 @@ class FakeConnectionManager:
         self.pools[username] = True
 
     def has_doris_user_pool(self, username):
+        self.has_pool_calls.append(username)
         return self.pools.get(username, False)
 
     async def cleanup_idle_doris_user_pools(self, active_users):
@@ -541,6 +543,9 @@ async def test_full_login_code_exchange_auth_context_and_pool_missing_revocation
     assert auth_context.doris_user == "alice"
     assert auth_context.oauth_client_id == client_id
     assert auth_context.oauth_scopes == ["resource:list", "resource:read", "tool:list"]
+    assert auth_context.oauth_issuer == provider.issuer
+    assert auth_context.oauth_resource == provider.resource
+    assert auth_context.oauth_audiences == [provider.resource]
     assert auth_context.pool_key == "doris_user:alice"
     assert auth_context.token == ""
 
@@ -554,6 +559,34 @@ async def test_full_login_code_exchange_auth_context_and_pool_missing_revocation
     cm.pools["alice"] = True
     with pytest.raises(ProtectedResourceAuthError):
         await provider.authenticate_access_token(credentials)
+
+
+@pytest.mark.asyncio
+async def test_access_token_for_other_resource_is_rejected_before_pool_access():
+    provider, cm, _app = _provider_app()
+    pair = provider.store.issue_token_pair(
+        client_id="resource-bound-client",
+        doris_user="alice",
+        scopes=("tool:list",),
+        resource=provider.issuer,
+        access_ttl_seconds=900,
+        refresh_ttl_seconds=86400,
+    )
+    cm.pools["alice"] = True
+    credentials = BearerCredentials(
+        scheme="bearer",
+        token=pair.access_token,
+    )
+
+    with pytest.raises(ProtectedResourceAuthError) as exc_info:
+        await provider.authenticate_access_token(credentials)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.challenge_error == "invalid_token"
+    assert exc_info.value.error_code == "DORIS_OAUTH_RESOURCE_MISMATCH"
+    assert cm.has_pool_calls == []
+    assert provider.store.get_access_token(pair.access_token).revoked_at is None
+    assert provider.store.get_access_token(pair.access_token).last_used_at is None
 
 
 @pytest.mark.asyncio
