@@ -738,6 +738,12 @@ redirect URI or loopback HTTP URI; web clients must register a non-loopback
 HTTPS URI. The server persists the application type with the client and uses
 exact redirect URI matching during authorization.
 
+Authorization success and redirectable error responses include the exact
+authorization-server issuer in the RFC 9207 `iss` parameter. Discovery
+advertises `authorization_response_iss_parameter_supported=true`; clients must
+compare the returned value with the discovered issuer without URI
+normalization before accepting the response.
+
 #### Current Operational Limits
 
 Doris-backed OAuth is currently single-process and single-worker:

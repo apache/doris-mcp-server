@@ -67,6 +67,8 @@ under **Unreleased** until a new version is selected and published.
   tokens issued for any other resource before per-user pool access.
 - Required Doris OAuth DCR clients to declare a persisted `application_type`
   and enforced type-matched redirect URI rules for native and web clients.
+- Added RFC 9207 `iss` identification to Doris OAuth authorization success and
+  redirectable error responses, with matching discovery metadata.
 - Released Doris connections on SQL profile, data freshness, and access
   analysis paths.
 - Improved Doris 4 role metadata compatibility and query recovery behavior.

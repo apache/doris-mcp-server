@@ -94,6 +94,7 @@ class DorisOAuthProvider:
             "grant_types_supported": ["authorization_code", "refresh_token"],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+            "authorization_response_iss_parameter_supported": True,
         }
         if self.dcr_enabled():
             metadata["registration_endpoint"] = f"{self.issuer}/oauth/register"
@@ -267,7 +268,14 @@ class DorisOAuthProvider:
             ttl_seconds=getattr(self.security_config, "doris_oauth_auth_code_expire_seconds", 300),
         )
         self.store.delete_auth_transaction(txn_id)
-        return self._redirect_with_params(record.redirect_uri, {"code": code, "state": record.state})
+        return self._redirect_with_params(
+            record.redirect_uri,
+            {
+                "code": code,
+                "state": record.state,
+                "iss": self.issuer,
+            },
+        )
 
     async def exchange_code(self, payload: dict) -> dict:
         client = self._authenticate_token_client(payload)

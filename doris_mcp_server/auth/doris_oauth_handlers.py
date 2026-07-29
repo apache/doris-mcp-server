@@ -89,9 +89,13 @@ def insufficient_scope_response(base_url: str, required_scope: str | None, body:
     )
 
 
-def authorize_error_response(error: AuthorizeError) -> Response:
+def authorize_error_response(error: AuthorizeError, issuer: str) -> Response:
     if error.redirect_allowed and error.redirect_uri:
-        params = {"error": error.error, "error_description": error.description}
+        params = {
+            "error": error.error,
+            "error_description": error.description,
+            "iss": issuer,
+        }
         if error.state:
             params["state"] = error.state
         separator = "&" if "?" in error.redirect_uri else "?"
@@ -166,7 +170,7 @@ class DorisOAuthHandlers:
             )
             return RedirectResponse(redirect_path, status_code=302)
         except AuthorizeError as exc:
-            return authorize_error_response(exc)
+            return authorize_error_response(exc, self.provider.issuer)
 
     async def login(self, request: Request) -> Response:
         if request.method == "GET":

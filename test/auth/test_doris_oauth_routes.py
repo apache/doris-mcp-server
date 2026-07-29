@@ -105,12 +105,31 @@ async def _client(app):
     return httpx.AsyncClient(transport=transport, base_url="http://localhost:3000", follow_redirects=False)
 
 
+def _authorization_response_query(response, expected_issuer):
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query["iss"] == [expected_issuer]
+    return query
+
+
 def _native_registration(redirect_uri="http://localhost:7777/callback", **metadata):
     return {
         "application_type": "native",
         "redirect_uris": [redirect_uri],
         **metadata,
     }
+
+
+@pytest.mark.asyncio
+async def test_authorization_server_metadata_advertises_response_issuer():
+    provider, _cm, app = _provider_app()
+
+    async with await _client(app) as client:
+        response = await client.get("/.well-known/oauth-authorization-server")
+
+    assert response.status_code == 200
+    metadata = response.json()
+    assert metadata["issuer"] == provider.issuer
+    assert metadata["authorization_response_iss_parameter_supported"] is True
 
 
 @pytest.mark.parametrize(
@@ -662,9 +681,70 @@ async def test_authorize_invalid_redirect_is_direct_400_and_invalid_scope_redire
     assert response.status_code == 302
     location = response.headers["location"]
     assert location.startswith("http://localhost:7777/callback")
-    query = parse_qs(urlparse(location).query)
+    query = _authorization_response_query(response, provider.issuer)
     assert query["error"] == ["invalid_scope"]
     assert query["state"] == ["state-2"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_error"),
+    [
+        pytest.param(
+            {"response_type": "token"},
+            "unsupported_response_type",
+            id="unsupported-response-type",
+        ),
+        pytest.param(
+            {"code_challenge_method": "plain"},
+            "invalid_request",
+            id="invalid-pkce",
+        ),
+        pytest.param(
+            {"resource": "http://localhost:3000/not-the-mcp-resource"},
+            "invalid_target",
+            id="invalid-resource",
+        ),
+        pytest.param(
+            {"scope": "unknown"},
+            "invalid_scope",
+            id="invalid-scope",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_redirected_authorization_errors_identify_exact_issuer(
+    overrides,
+    expected_error,
+):
+    provider, _cm, app = _provider_app()
+    client_record = provider.store.add_client(
+        client_id="client-issuer-errors",
+        client_secret=None,
+        token_endpoint_auth_method="none",
+        application_type="native",
+        redirect_uris=("http://localhost:7777/callback",),
+        client_allowed_scopes=("tool:list",),
+        source="dcr",
+        expires_at=None,
+    )
+    challenge, _verifier = _pkce()
+    params = {
+        "response_type": "code",
+        "client_id": client_record.client_id,
+        "redirect_uri": "http://localhost:7777/callback",
+        "state": "state-issuer",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        **overrides,
+    }
+
+    async with await _client(app) as client:
+        response = await client.get("/oauth/authorize", params=params)
+
+    assert response.status_code == 302
+    query = _authorization_response_query(response, provider.issuer)
+    assert query["error"] == [expected_error]
+    assert query["state"] == ["state-issuer"]
 
 
 @pytest.mark.asyncio
@@ -712,7 +792,12 @@ async def test_full_login_code_exchange_auth_context_and_pool_missing_revocation
             },
         )
         assert cm.create_calls == [("alice", "correct")]
-        code = parse_qs(urlparse(login_post.headers["location"]).query)["code"][0]
+        authorization_response = _authorization_response_query(
+            login_post,
+            provider.issuer,
+        )
+        assert authorization_response["state"] == ["state-1"]
+        code = authorization_response["code"][0]
 
         token_response = await client.post(
             "/oauth/token",
