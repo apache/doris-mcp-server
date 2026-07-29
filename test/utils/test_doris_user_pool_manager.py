@@ -90,6 +90,18 @@ def manager():
     return DorisConnectionManager(manager_config())
 
 
+@pytest.mark.asyncio
+async def test_pool_warmup_does_not_exceed_configured_capacity(manager):
+    pool = FakePool("global")
+    manager.pool = pool
+    manager.maxsize = 1
+
+    await manager._warmup_pool()
+
+    assert pool.acquire_calls == 1
+    assert len(pool.release_calls) == 1
+
+
 def doris_context(user="alice", token=""):
     return AuthContext(
         user_id=user,

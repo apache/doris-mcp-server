@@ -1619,16 +1619,17 @@ class DorisConnectionManager:
 
     async def _warmup_pool(self):
         """Warm up connection pool by creating initial connections"""
-        self.logger.info(f"🔥 Warming up connection pool with {self.pool_warmup_size} connections")
+        warmup_size = min(self.pool_warmup_size, self.maxsize)
+        self.logger.info(f"🔥 Warming up connection pool with {warmup_size} connections")
         
         warmup_connections = []
         try:
             # Acquire connections to force pool to create them
-            for i in range(self.pool_warmup_size):
+            for i in range(warmup_size):
                 try:
                     conn = await self.pool.acquire()
                     warmup_connections.append(conn)
-                    self.logger.debug(f"Warmed up connection {i+1}/{self.pool_warmup_size}")
+                    self.logger.debug(f"Warmed up connection {i+1}/{warmup_size}")
                 except Exception as e:
                     self.logger.warning(f"Failed to warm up connection {i+1}: {e}")
                     break

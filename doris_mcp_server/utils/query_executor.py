@@ -996,7 +996,11 @@ class DorisQueryExecutor:
                 "error_type": "syntax_error",
                 "user_message": "SQL syntax error. Please check your query syntax."
             }
-        elif "access denied" in error_msg_lower or "permission" in error_msg_lower:
+        elif (
+            "access denied" in error_msg_lower
+            or "command denied" in error_msg_lower
+            or "permission" in error_msg_lower
+        ):
             return {
                 "error_type": "permission_denied",
                 "user_message": "Access denied. You don't have permission to execute this query."
