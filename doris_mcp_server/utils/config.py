@@ -285,10 +285,17 @@ class DatabaseConfig:
     # FE HTTP API port for profile and other HTTP APIs
     fe_http_port: int = 8030
     
-    # BE nodes configuration for external access
-    # If be_hosts is empty, will use "show backends" to get BE nodes
+    # BE HTTP nodes must be configured explicitly. SQL metadata is not trusted
+    # as an outbound HTTP allowlist.
     be_hosts: list[str] = field(default_factory=list)
     be_webserver_port: int = 8040
+
+    # Shared FE/BE HTTP safety limits. Runtime enforcement also applies hard
+    # caps so unsafe config values cannot remove the boundary.
+    http_connect_timeout_seconds: float = 3.0
+    http_read_timeout_seconds: float = 15.0
+    http_total_timeout_seconds: float = 30.0
+    http_max_response_bytes: int = 4 * 1024 * 1024
 
     # Arrow Flight SQL Configuration (Required for ADBC tools)
     fe_arrow_flight_sql_port: int | None = None
@@ -696,6 +703,31 @@ class DorisConfig:
         be_webserver_port = os.getenv("DORIS_BE_WEBSERVER_PORT", "").strip()
         if be_webserver_port and be_webserver_port.isdigit():
             config.database.be_webserver_port = int(be_webserver_port)
+
+        config.database.http_connect_timeout_seconds = float(
+            os.getenv(
+                "DORIS_HTTP_CONNECT_TIMEOUT_SECONDS",
+                str(config.database.http_connect_timeout_seconds),
+            )
+        )
+        config.database.http_read_timeout_seconds = float(
+            os.getenv(
+                "DORIS_HTTP_READ_TIMEOUT_SECONDS",
+                str(config.database.http_read_timeout_seconds),
+            )
+        )
+        config.database.http_total_timeout_seconds = float(
+            os.getenv(
+                "DORIS_HTTP_TOTAL_TIMEOUT_SECONDS",
+                str(config.database.http_total_timeout_seconds),
+            )
+        )
+        config.database.http_max_response_bytes = int(
+            os.getenv(
+                "DORIS_HTTP_MAX_RESPONSE_BYTES",
+                str(config.database.http_max_response_bytes),
+            )
+        )
         
         # Arrow Flight SQL Configuration
         fe_arrow_port_env = os.getenv("FE_ARROW_FLIGHT_SQL_PORT")
@@ -1181,6 +1213,10 @@ class DorisConfig:
                 "fe_http_port": self.database.fe_http_port,
                 "be_hosts": self.database.be_hosts,
                 "be_webserver_port": self.database.be_webserver_port,
+                "http_connect_timeout_seconds": self.database.http_connect_timeout_seconds,
+                "http_read_timeout_seconds": self.database.http_read_timeout_seconds,
+                "http_total_timeout_seconds": self.database.http_total_timeout_seconds,
+                "http_max_response_bytes": self.database.http_max_response_bytes,
                 "fe_arrow_flight_sql_port": self.database.fe_arrow_flight_sql_port,
                 "be_arrow_flight_sql_port": self.database.be_arrow_flight_sql_port,
                 "min_connections": self.database.min_connections,  # Always 0, shown for reference
@@ -1327,6 +1363,24 @@ class DorisConfig:
 
         if self.database.max_connections <= 0:
             errors.append("Maximum connections must be greater than 0")
+
+        if not (1 <= self.database.fe_http_port <= 65535):
+            errors.append("Doris FE HTTP port must be in the range 1-65535")
+
+        if not (1 <= self.database.be_webserver_port <= 65535):
+            errors.append("Doris BE HTTP port must be in the range 1-65535")
+
+        if self.database.http_connect_timeout_seconds <= 0:
+            errors.append("Doris HTTP connect timeout must be greater than 0")
+
+        if self.database.http_read_timeout_seconds <= 0:
+            errors.append("Doris HTTP read timeout must be greater than 0")
+
+        if self.database.http_total_timeout_seconds <= 0:
+            errors.append("Doris HTTP total timeout must be greater than 0")
+
+        if self.database.http_max_response_bytes <= 0:
+            errors.append("Doris HTTP response byte limit must be greater than 0")
 
         # Validate security configuration
         if self.security.auth_type not in ["token", "basic", "oauth", "jwt"]:

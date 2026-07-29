@@ -20,15 +20,18 @@ Provides monitoring and metrics collection functions for FE and BE nodes
 """
 
 import re
-import aiohttp
-import asyncio
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 from datetime import datetime
 
 from .db import DorisConnectionManager
+from .doris_http_client import (
+    DorisHTTPClient,
+    DorisHTTPPolicyError,
+    DorisHTTPRequestError,
+    DorisHTTPResponseTooLarge,
+)
 from .logger import get_logger
-from .sql_security_utils import get_auth_context
 
 logger = get_logger(__name__)
 
@@ -683,16 +686,14 @@ class DorisMonitoringTools:
         self.connection_manager = connection_manager
     
     async def get_be_nodes(self) -> List[Dict[str, Any]]:
-        """Get BE node information, prioritize configured be_hosts, fallback to SHOW BACKENDS"""
+        """Return only BE HTTP nodes from the explicit configuration allowlist."""
         try:
-            # Get database configuration
             db_config = self.connection_manager.config.database
-            
-            # Check if BE hosts are configured
-            if db_config.be_hosts:
-                logger.info(f"Using configured BE hosts: {db_config.be_hosts}")
+            be_hosts = getattr(db_config, "be_hosts", []) or []
+            if be_hosts:
+                logger.info(f"Using configured BE hosts: {be_hosts}")
                 be_nodes = []
-                for i, host in enumerate(db_config.be_hosts):
+                for i, host in enumerate(be_hosts):
                     be_info = {
                         "backend_id": f"configured_{i}",
                         "host": host,
@@ -710,80 +711,91 @@ class DorisMonitoringTools:
                 
                 logger.info(f"Found {len(be_nodes)} configured BE nodes")
                 return be_nodes
-            
-            # Fallback to SHOW BACKENDS if no BE hosts configured
-            logger.info("No BE hosts configured, using SHOW BACKENDS to discover BE nodes")
-            connection = await self.connection_manager.get_connection("query")
-            auth_context = get_auth_context()
-            result = await connection.execute("SHOW BACKENDS", auth_context=auth_context)
-            
-            be_nodes = []
-            for row in result.data:
-                # SHOW BACKENDS returns columns including: BackendId, Host, HeartbeatPort, BePort, HttpPort, BrpcPort, etc.
-                be_info = {
-                    "backend_id": row.get("BackendId"),
-                    "host": row.get("Host"),
-                    "heartbeat_port": row.get("HeartbeatPort"),
-                    "be_port": row.get("BePort"),
-                    "http_port": row.get("HttpPort"),  # This is webserver_port
-                    "brpc_port": row.get("BrpcPort"),
-                    "alive": row.get("Alive"),
-                    "system_decommissioned": row.get("SystemDecommissioned"),
-                    "cluster_id": row.get("ClusterId"),
-                    "version": row.get("Version"),
-                    "source": "show_backends"
-                }
-                be_nodes.append(be_info)
-            
-            logger.info(f"Found {len(be_nodes)} BE nodes from SHOW BACKENDS")
-            return be_nodes
+            logger.warning(
+                "BE HTTP metrics disabled because DORIS_BE_HOSTS is empty"
+            )
+            return []
             
         except Exception as e:
             logger.error(f"Failed to get BE nodes: {str(e)}")
             return []
     
-    async def fetch_metrics_from_url(self, url: str, node_type: str, node_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Fetch monitoring metrics from specified URL"""
+    async def fetch_metrics_from_node(
+        self,
+        node_type: Literal["fe", "be"],
+        node_info: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Fetch metrics from an explicitly configured FE or BE node."""
+        endpoint = f"{node_info.get('host')}:{node_info.get('port') or node_info.get('http_port')}"
         try:
-            # Get database configuration for authentication
             db_config = self.connection_manager.config.database
-            auth = aiohttp.BasicAuth(db_config.user, db_config.password)
-            
-            logger.info(f"Fetching metrics from {node_type} node: {url}")
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, auth=auth, timeout=30) as response:
-                    if response.status == 200:
-                        # Parse Prometheus format
-                        metrics_text = await response.text()
-                        metrics_data = self._parse_prometheus_metrics(metrics_text)
-                        
-                        return {
-                            "success": True,
-                            "node_type": node_type,
-                            "node_info": node_info,
-                            "metrics": metrics_data,
-                            "url": url,
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    else:
-                        logger.error(f"HTTP request failed with status {response.status} for {url}")
-                        return {
-                            "success": False,
-                            "error": f"HTTP {response.status}",
-                            "node_type": node_type,
-                            "node_info": node_info,
-                            "url": url
-                        }
-                        
-        except Exception as e:
-            logger.error(f"Failed to fetch metrics from {url}: {str(e)}")
+            port_key = "port" if node_type == "fe" else "http_port"
+            http_client = DorisHTTPClient.from_database_config(db_config)
+            response = await http_client.get(
+                role=node_type,
+                host=node_info["host"],
+                port=int(node_info[port_key]),
+                path="/metrics",
+                headers={"Accept": "text/plain"},
+            )
+            if response.status == 200:
+                metrics_data = self._parse_prometheus_metrics(response.text())
+                return {
+                    "success": True,
+                    "node_type": node_type,
+                    "node_info": node_info,
+                    "metrics": metrics_data,
+                    "url": response.url,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            logger.error(
+                "HTTP metrics request failed with status %s for %s",
+                response.status,
+                endpoint,
+            )
+            return {
+                "success": False,
+                "error": f"HTTP {response.status}",
+                "error_type": "http_status",
+                "node_type": node_type,
+                "node_info": node_info,
+                "url": response.url,
+            }
+        except DorisHTTPPolicyError as e:
+            logger.error("Blocked Doris metrics endpoint %s: %s", endpoint, e)
             return {
                 "success": False,
                 "error": str(e),
+                "error_type": "prohibited_endpoint",
                 "node_type": node_type,
                 "node_info": node_info,
-                "url": url
+            }
+        except DorisHTTPResponseTooLarge as e:
+            logger.error("Doris metrics response too large for %s", endpoint)
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": "response_too_large",
+                "node_type": node_type,
+                "node_info": node_info,
+            }
+        except DorisHTTPRequestError as e:
+            logger.error("Doris metrics request failed for %s: %s", endpoint, e)
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": "request_failed",
+                "node_type": node_type,
+                "node_info": node_info,
+            }
+        except Exception as e:
+            logger.error("Failed to fetch metrics from %s: %s", endpoint, e)
+            return {
+                "success": False,
+                "error": str(e),
+                "error_type": "internal_error",
+                "node_type": node_type,
+                "node_info": node_info,
             }
     
     def _parse_prometheus_metrics(self, metrics_text: str) -> Dict[str, Any]:
@@ -955,13 +967,12 @@ class DorisMonitoringTools:
         """Get FE monitoring metrics"""
         try:
             db_config = self.connection_manager.config.database
-            fe_url = f"http://{db_config.host}:{db_config.fe_http_port}/metrics"
-            
-            fe_result = await self.fetch_metrics_from_url(
-                fe_url, 
-                "fe", 
+            fe_result = await self.fetch_metrics_from_node(
+                "fe",
                 {"host": db_config.host, "port": db_config.fe_http_port}
             )
+            if not fe_result.get("success"):
+                return fe_result
             
             if fe_result.get("success") and priority == "p0":
                 fe_p0_metrics = self._get_metrics_by_type("fe", monitor_type)
@@ -999,13 +1010,25 @@ class DorisMonitoringTools:
         """Get BE monitoring metrics from all BE nodes"""
         try:
             be_nodes = await self.get_be_nodes()
+            if not be_nodes:
+                return [
+                    {
+                        "success": False,
+                        "error": (
+                            "BE HTTP metrics require explicit DORIS_BE_HOSTS "
+                            "configuration"
+                        ),
+                        "error_type": "unconfigured_endpoint",
+                    }
+                ]
             be_results = []
             
             for be_node in be_nodes:
                 if be_node.get("alive") == "true":  # Only get alive BE nodes
-                    be_url = f"http://{be_node['host']}:{be_node['http_port']}/metrics"
-                    
-                    be_result = await self.fetch_metrics_from_url(be_url, "be", be_node)
+                    be_result = await self.fetch_metrics_from_node("be", be_node)
+                    if not be_result.get("success"):
+                        be_results.append(be_result)
+                        continue
                     
                     if be_result.get("success") and priority == "p0":
                         be_p0_metrics = self._get_metrics_by_type("be", monitor_type)

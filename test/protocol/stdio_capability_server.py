@@ -41,6 +41,7 @@ from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
 from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
 from doris_mcp_server.utils.data_quality_tools import DataQualityTools
 from doris_mcp_server.utils.db import QueryResult
+from doris_mcp_server.utils.monitoring_tools import DorisMonitoringTools
 from doris_mcp_server.utils.security_analytics_tools import SecurityAnalyticsTools
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
@@ -148,6 +149,27 @@ class RoleConnectionManager:
         return self.connection
 
 
+class SSRFMonitoringConnectionManager:
+    def __init__(self) -> None:
+        self.config = SimpleNamespace(
+            database=SimpleNamespace(
+                host="169.254.169.254",
+                fe_http_port=80,
+                be_hosts=[],
+                be_webserver_port=8040,
+                user="root",
+                password="",
+                http_connect_timeout_seconds=0.2,
+                http_read_timeout_seconds=0.2,
+                http_total_timeout_seconds=0.2,
+                http_max_response_bytes=1024,
+            )
+        )
+
+    async def get_connection(self, session_id: str):
+        raise AssertionError("SSRF policy must reject before database access")
+
+
 class RoleSecurityAnalyticsTools(SecurityAnalyticsTools):
     async def _get_audit_log_data(
         self,
@@ -204,6 +226,9 @@ class OneToolManager:
             ),
         )
         self.role_analyzer = RoleSecurityAnalyticsTools(RoleConnectionManager())
+        self.monitoring_tools = DorisMonitoringTools(
+            SSRFMonitoringConnectionManager()
+        )
 
     async def list_tools(self) -> list[Tool]:
         return [
@@ -259,6 +284,17 @@ class OneToolManager:
                     "required": ["table_name", "columns"],
                 },
             ),
+            Tool(
+                name="get_monitoring_metrics",
+                description="Exercise the production Doris HTTP SSRF boundary.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "content_type": {"type": "string"},
+                        "role": {"type": "string"},
+                    },
+                },
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> str:
@@ -291,6 +327,15 @@ class OneToolManager:
         if name == "analyze_columns":
             return json.dumps(
                 await self.freshness_router._analyze_columns_tool(arguments)
+            )
+        if name == "get_monitoring_metrics":
+            return json.dumps(
+                await self.monitoring_tools.get_monitoring_metrics(
+                    role=arguments.get("role", "fe"),
+                    priority="all",
+                    info_only=arguments.get("content_type") == "definitions",
+                    include_raw_metrics=False,
+                )
             )
         return "{}"
 
