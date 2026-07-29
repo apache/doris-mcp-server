@@ -21,18 +21,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
-        with:
-          version: "0.9.0"
-          enable-cache: true
+      - name: Install uv
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          uv==0.9.0
       - name: Verify lock file
         run: uv lock --check
       - name: Sync development environment
@@ -52,18 +51,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
-        with:
-          version: "0.9.0"
-          enable-cache: true
+      - name: Install uv
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          uv==0.9.0
       - name: Sync development environment
         run: uv sync --frozen --group dev
       - name: Run full test suite
@@ -75,18 +73,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
-        with:
-          version: "0.9.0"
-          enable-cache: true
+      - name: Install uv
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          uv==0.9.0
       - name: Sync development environment
         run: uv sync --frozen --group dev
       - name: Build distributions
@@ -112,11 +109,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - name: Check out official MCP Conformance
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           repository: modelcontextprotocol/conformance
           ref: 49103de6ed70804e940637bf3e9e29e4a3f54e64
@@ -126,11 +123,10 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
-      - name: Set up uv
-        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
-        with:
-          version: "0.9.0"
-          enable-cache: true
+      - name: Install uv
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          uv==0.9.0
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:

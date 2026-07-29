@@ -23,6 +23,7 @@ import yaml
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 FULL_COMMIT_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
+CHECKOUT_ACTION = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 CONFORMANCE_COMMIT = "49103de6ed70804e940637bf3e9e29e4a3f54e64"
 
 
@@ -55,6 +56,13 @@ def test_ci_jobs_are_bounded_and_external_actions_are_commit_pinned():
             assert "continue-on-error" not in step
             if action := step.get("uses"):
                 assert FULL_COMMIT_ACTION.fullmatch(action), action
+                assert action.startswith("actions/"), action
+                if action.startswith("actions/checkout@"):
+                    assert action == CHECKOUT_ACTION
+        assert (
+            "python -m pip install --disable-pip-version-check --no-deps uv==0.9.0"
+            in " ".join(_commands(job).split())
+        )
 
 
 def test_quality_test_and_package_gates_cover_the_release_contract():
