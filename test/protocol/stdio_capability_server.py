@@ -21,7 +21,15 @@ import json
 import logging
 
 from mcp.server.stdio import stdio_server
-from mcp.types import ClientCapabilities, GetPromptResult, Prompt, Resource, Tool
+from mcp.types import (
+    ClientCapabilities,
+    GetPromptResult,
+    Prompt,
+    PromptMessage,
+    Resource,
+    TextContent,
+    Tool,
+)
 
 from doris_mcp_server.protocol import create_doris_mcp_server
 
@@ -58,6 +66,19 @@ class OneToolManager:
         return "{}"
 
 
+class PromptFixtureError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str,
+        argument: str | None = None,
+    ):
+        super().__init__(message)
+        self.error_code = error_code
+        self.argument = argument
+
+
 class EmptyPromptsManager:
     async def list_prompts(self) -> list[Prompt]:
         return []
@@ -67,7 +88,34 @@ class EmptyPromptsManager:
         name: str,
         arguments: dict,
     ) -> GetPromptResult:
-        raise ValueError(f"Unknown prompt: {name}")
+        if name == "missing":
+            raise PromptFixtureError(
+                "Prompt not found",
+                error_code="UNKNOWN_PROMPT",
+            )
+        if name == "needs_argument" and "required" not in arguments:
+            raise PromptFixtureError(
+                "Missing required argument",
+                error_code="MISSING_REQUIRED_ARGUMENT",
+                argument="required",
+            )
+        if name == "database_failure":
+            raise PromptFixtureError(
+                "Database context failed",
+                error_code="DATABASE_CONTEXT_UNAVAILABLE",
+            )
+        return GetPromptResult(
+            description=name,
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content=TextContent(
+                        type="text",
+                        text=f"Explain {arguments.get('sql', '')}",
+                    ),
+                )
+            ],
+        )
 
 
 async def main() -> None:

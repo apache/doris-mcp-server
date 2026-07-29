@@ -132,7 +132,7 @@
 | `CORE-001` | P1 | list 异常不再返回空列表 | PROTO-002 | DB/权限/内部错误与真实空列表可区分 | `BACKLOG` |
 | `CORE-002` | P1 | Tool 错误使用 `isError=true` | PROTO-002 | 可恢复业务错误对模型可见；内部异常为稳定协议错误 | `DONE` |
 | `CORE-003` | P1 | Resource not found 使用 `-32602` | PROTO-002 | 不存在 URI 返回 Invalid Params，不返回错误正文成功 | `DONE` |
-| `CORE-004` | P1 | Prompt 错误类型化 | PROTO-002 | 缺参数、未知 prompt、DB 上下文失败语义不同 | `READY` |
+| `CORE-004` | P1 | Prompt 错误类型化 | PROTO-002 | 缺参数、未知 prompt、DB 上下文失败语义不同 | `DONE` |
 | `CORE-005` | P1 | 单一 Tool Definition Registry | PROTO-002 | schema、policy、handler、审计和文档同源 | `BACKLOG` |
 | `CORE-006` | P1 | `/live` 与 `/ready` 分离 | 无 | Doris 不可用时 live 可真、ready 必假；探针有短超时 | `BACKLOG` |
 | `CORE-007` | P1 | 显式跨调用 handle | PROTO-003, SEC-015 | 状态不依赖协议 session；handle 绑定 principal/expiry | `BACKLOG` |
@@ -409,17 +409,53 @@ missing resource: doris://table/__core_003_missing__
 
 连接通过 SSH key 和临时本地隧道完成；凭据未写入仓库或台账，探针完成后服务与隧道均已关闭。
 
+提交与评审回执：
+
+- commit：`5e57a2c fix: return invalid params for missing resources`
+- Draft PR：[apache/doris-mcp-server#95](https://github.com/apache/doris-mcp-server/pull/95)
+
+### CORE-004
+
+Prompt 的三类失败现在拥有独立、稳定的协议语义：
+
+| 场景 | JSON-RPC code | `promptErrorCode` |
+|---|---:|---|
+| 未知 Prompt | `-32602` | `UNKNOWN_PROMPT` |
+| 缺少必填参数 | `-32602` | `MISSING_REQUIRED_ARGUMENT` |
+| 数据库上下文不可用 | `-32603` | `DATABASE_CONTEXT_UNAVAILABLE` |
+
+缺少必填参数时 `data.argument` 指明参数名。数据库异常详情只写服务端日志，协议正文不回传连接或堆栈细节。该语义同时适用于现代和 legacy 协议，旧客户端不再把 Prompt 故障误当成成功内容。
+
+数据库上下文查询增加独立 10 秒预算，避免底层连接池恢复时间超过客户端请求预算；连接管理器的 context API 与旧式 get/release API 都保证在成功、异常和取消时归还连接。
+
+自动化验证：
+
+- Streamable HTTP：三类错误契约、错误后成功恢复；
+- 真实子进程 STDIO：三类错误契约、错误后成功恢复；
+- STDIO legacy：未知 Prompt 返回 `-32602`；
+- manager：未知 Prompt、缺参数、DB 异常、超时和两类连接归还路径；
+- 完整 pytest：`343 passed / 57 skipped / 0 failed / 247 warnings`；
+- `uv lock --check`、作用域 Ruff、`compileall`、`uv build` 全部通过。
+
+真实 Doris 与故障注入验证：
+
+- HTTP modern/legacy：未知 Prompt、缺参数后均可继续从 `hhm_dt_sim` 生成真实数据库上下文；
+- STDIO modern/legacy：未知 Prompt、缺参数后均可继续从 `hhm_dt_sim` 生成真实数据库上下文；
+- HTTP 不可达端口故障注入：10 秒内返回 `-32603`，随后 `prompts/list` 成功；
+- STDIO 子进程 manager 故障注入：返回 `-32603`，随后有效 Prompt 成功。
+
+完全不可达 Doris 的真实 STDIO 进程会在协议协商前退出，无法进入 Prompt handler；这是启动/就绪与故障恢复边界，继续由 `CORE-006` / `TEST-005` 跟踪，未计作本项通过证据。
+
 ## 11. 下一开发批次
 
 批次：`BATCH-02-CONFORMANCE-AND-ERROR-SEMANTICS`
 
 按以下顺序推进：
 
-1. `CORE-004`：Prompt 错误类型化；
-2. `CORE-010` / `CORE-011` / `COMPAT-001`：修复真实 Doris 已复现缺陷；
-3. `TEST-003`：运行官方 `server-stateless` Conformance；
-4. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
-5. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；
-6. `SEC-003`～`SEC-005`：进入下一安全批，完成非 loopback fail-closed。
+1. `CORE-010` / `CORE-011` / `COMPAT-001`：修复真实 Doris 已复现缺陷；
+2. `TEST-003`：运行官方 `server-stateless` Conformance；
+3. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
+4. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；
+5. `SEC-003`～`SEC-005`：进入下一安全批，完成非 loopback fail-closed。
 
 `REL-001` 已达成。`REL-002` 仍由官方 Conformance、完整真实 Doris 矩阵、P0/P1 安全项、Compose 和发布门阻塞。
