@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 class TestConfigLoader:
     """Test configuration loader and client factory"""
+
+    __test__ = False
     
     def __init__(self, config_path: Optional[str] = None):
         """Initialize with config file path"""

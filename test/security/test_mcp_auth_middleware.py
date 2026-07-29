@@ -69,19 +69,15 @@ async def test_mcp_auth_middleware_sets_scope_and_resets_context():
 
 
 @pytest.mark.asyncio
-async def test_mcp_auth_middleware_accepts_legacy_query_string_token():
-    auth_context = AuthContext(token_id="t1", user_id="u1", auth_method="token")
-
+async def test_mcp_auth_middleware_rejects_query_string_token():
     class SecurityManager:
         async def authenticate_request(self, auth_info):
-            assert auth_info["token"] == "legacy-query-token"
             assert auth_info["authorization"] == ""
-            return auth_context
+            assert "token" not in auth_info
+            raise ValueError("missing bearer token")
 
     async def downstream(scope, receive, send):
-        assert scope["auth_context"] is auth_context
-        await send({"type": "http.response.start", "status": 200, "headers": []})
-        await send({"type": "http.response.body", "body": b"ok"})
+        raise AssertionError("query-string credentials must not reach downstream")
 
     messages = []
     middleware = MCPAuthASGIMiddleware(SecurityManager(), downstream, _effective())
@@ -97,7 +93,7 @@ async def test_mcp_auth_middleware_accepts_legacy_query_string_token():
         _send_collector(messages),
     )
 
-    assert messages[0]["status"] == 200
+    assert messages[0]["status"] == 401
     assert get_current_auth_context() is None
 
 

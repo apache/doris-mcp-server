@@ -369,12 +369,14 @@ class DorisQueryExecutor:
     def _start_background_tasks(self):
         """Start background tasks"""
         try:
-            # Cache cleanup task
-            cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
-            self._background_tasks.append(cleanup_task)
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             # No event loop running (e.g., in tests), skip background tasks
             self.logger.debug("No event loop running, skipping background tasks")
+            return
+
+        cleanup_task = loop.create_task(self._cache_cleanup_loop())
+        self._background_tasks.append(cleanup_task)
 
     async def _cache_cleanup_loop(self):
         """Background cache cleanup loop"""

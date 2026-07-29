@@ -24,6 +24,6 @@ This package provides:
 - Enterprise-grade security and monitoring
 """
 
-__version__ = "1.0.0"
+__version__ = "0.6.1"
 __author__ = "Doris MCP Team"
 __description__ = "Apache Doris MCP Server Implementation"

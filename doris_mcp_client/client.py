@@ -22,16 +22,17 @@ Combines the correct HTTP implementation from http_client.py and the complete ar
 Provides complete support for the three major primitives: Resources, Tools, and Prompts
 """
 
+import argparse
 import asyncio
 import json
 import logging
-from typing import Any, Callable
-from datetime import timedelta
+from collections.abc import Callable
+from typing import Any
 
+from mcp import Client as MCPClient
+from mcp import StdioServerParameters
 from mcp.client.session import ClientSession
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
-from mcp import StdioServerParameters
 from mcp.types import (
     Prompt,
     Resource,
@@ -299,17 +300,17 @@ class DorisUnifiedClient:
                 args=self.config.server_args,
             )
 
-            async with stdio_client(server_params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    self.session = session
-                    self._init_sub_clients()
-
-                    # Initialize server
-                    await session.initialize()
-                    self.logger.info("Server initialized successfully")
-
-                    # Execute callback function
-                    await callback_func(self)
+            async with MCPClient(
+                stdio_client(server_params),
+                read_timeout_seconds=self.config.timeout,
+            ) as client:
+                self.session = client.session
+                self._init_sub_clients()
+                self.logger.info(
+                    "Server connected successfully using MCP %s",
+                    client.protocol_version,
+                )
+                await callback_func(self)
 
         except Exception as e:
             self.logger.error(f"stdio mode execution failed: {e}")
@@ -320,20 +321,17 @@ class DorisUnifiedClient:
         try:
             self.logger.info(f"Starting HTTP client: {self.config.server_url}")
 
-            async with streamablehttp_client(
+            async with MCPClient(
                 self.config.server_url,
-                timeout=timedelta(seconds=self.config.timeout)
-            ) as (read, write, _):
-                async with ClientSession(read, write) as session:
-                    self.session = session
-                    self._init_sub_clients()
-
-                    # Initialize server
-                    await session.initialize()
-                    self.logger.info("Server initialized successfully")
-
-                    # Execute callback function
-                    await callback_func(self)
+                read_timeout_seconds=self.config.timeout,
+            ) as client:
+                self.session = client.session
+                self._init_sub_clients()
+                self.logger.info(
+                    "Server connected successfully using MCP %s",
+                    client.protocol_version,
+                )
+                await callback_func(self)
 
         except Exception as e:
             self.logger.error(f"HTTP mode execution failed: {e}")
@@ -460,6 +458,74 @@ async def create_http_client(server_url: str, timeout: int = 60) -> DorisUnified
     return DorisUnifiedClient(config)
 
 
+def create_arg_parser() -> argparse.ArgumentParser:
+    """Create the command line parser for the packaged MCP client."""
+    parser = argparse.ArgumentParser(
+        description="Connect to an Apache Doris MCP server using SDK 2.0.",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["http", "stdio"],
+        default="http",
+        help="MCP transport to use (default: http)",
+    )
+    parser.add_argument(
+        "--url",
+        default="http://127.0.0.1:3000/mcp",
+        help="Streamable HTTP MCP endpoint",
+    )
+    parser.add_argument(
+        "--command",
+        default="doris-mcp-server",
+        help="Server command used in stdio mode",
+    )
+    parser.add_argument(
+        "--server-arg",
+        action="append",
+        default=[],
+        help="Argument passed to the stdio server command; may be repeated",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="Request timeout in seconds (default: 60)",
+    )
+    parser.add_argument(
+        "--query",
+        help="Execute one SQL query; otherwise list available tools",
+    )
+    return parser
+
+
+async def _run_cli(args: argparse.Namespace) -> None:
+    if args.transport == "stdio":
+        config = DorisClientConfig.stdio(args.command, args.server_arg)
+        config.timeout = args.timeout
+    else:
+        config = DorisClientConfig.http(args.url, args.timeout)
+
+    client = DorisUnifiedClient(config)
+
+    async def output(connected: DorisUnifiedClient) -> None:
+        if args.query:
+            payload = await connected.execute_sql(args.query)
+        else:
+            tools = await connected.list_all_tools()
+            payload = {
+                "tool_count": len(tools),
+                "tools": [tool.name for tool in tools],
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+    await client.connect_and_run(output)
+
+
+def main() -> None:
+    """Run the packaged Doris MCP client."""
+    asyncio.run(_run_cli(create_arg_parser().parse_args()))
+
+
 # Example usage
 async def example_stdio():
     """stdio mode example"""
@@ -502,8 +568,4 @@ async def example_http():
 
 
 if __name__ == "__main__":
-    # Run stdio example
-    asyncio.run(example_stdio())
-
-    # Run HTTP example
-    # asyncio.run(example_http()) 
+    main()
