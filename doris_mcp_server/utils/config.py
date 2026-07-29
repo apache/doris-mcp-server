@@ -40,6 +40,8 @@ except ImportError:
 from .logger import get_logger
 from .secret_policy import (
     is_static_token_environment_variable,
+    normalize_token_digest,
+    normalize_token_hash_algorithm,
     validate_high_entropy_secret,
 )
 
@@ -1464,12 +1466,12 @@ def build_auth_config_inputs(config: DorisConfig, requested_workers: int | None 
 
 def _configured_static_tokens(
     security_config: SecurityConfig,
-) -> list[tuple[str, Any, bool]]:
-    """Load source labels, raw values, and active flags for configured static tokens."""
-    configured: list[tuple[str, Any, bool]] = []
+) -> list[tuple[str, Any, bool, bool]]:
+    """Load source labels, credentials, active flags, and digest markers."""
+    configured: list[tuple[str, Any, bool, bool]] = []
     for name, value in os.environ.items():
         if is_static_token_environment_variable(name):
-            configured.append((name, value, True))
+            configured.append((name, value, True, False))
 
     token_file = Path(security_config.token_file_path)
     if not token_file.exists():
@@ -1503,12 +1505,24 @@ def _configured_static_tokens(
             raise AuthConfigError(
                 f"Static token file {token_file} entry {index} requires token_id"
             )
-        raw_token = token_entry.get("token")
+        has_raw_token = "token" in token_entry
+        has_token_digest = "token_digest" in token_entry
+        if has_raw_token == has_token_digest:
+            raise AuthConfigError(
+                f"Static token file {token_file} entry {token_id} must contain "
+                "exactly one of token or token_digest"
+            )
+        credential = (
+            token_entry.get("token_digest")
+            if has_token_digest
+            else token_entry.get("token")
+        )
         configured.append(
             (
                 f"{token_file}:{token_id}",
-                raw_token,
+                credential,
                 _str_to_bool(token_entry.get("is_active", True)),
+                has_token_digest,
             )
         )
     return configured
@@ -1517,12 +1531,18 @@ def _configured_static_tokens(
 def _validate_static_token_bootstrap(config: DorisConfig) -> None:
     """Require at least one active high-entropy token when static auth is enabled."""
     configured = _configured_static_tokens(config.security)
-    for setting, raw_token, _active in configured:
+    for setting, credential, _active, is_digest in configured:
         try:
-            validate_high_entropy_secret(raw_token, setting=setting)
+            if is_digest:
+                normalize_token_digest(
+                    credential,
+                    setting=f"{setting} token_digest",
+                )
+            else:
+                validate_high_entropy_secret(credential, setting=setting)
         except ValueError as exc:
             raise AuthConfigError(str(exc)) from exc
-    if not any(active for _setting, _raw_token, active in configured):
+    if not any(active for _setting, _credential, active, _is_digest in configured):
         raise AuthConfigError(
             "Token authentication requires at least one active high-entropy credential. "
             "Set TOKEN_<ID> or populate TOKEN_FILE_PATH before enabling it."
@@ -1540,6 +1560,12 @@ def normalize_effective_auth_config(
     auth_type = str(inputs.legacy_auth_type.value or "").strip().lower()
     if auth_type and auth_type not in {"token", "basic", "oauth", "jwt"}:
         raise AuthConfigError(f"Unsupported AUTH_TYPE: {auth_type}")
+    try:
+        config.security.token_hash_algorithm = normalize_token_hash_algorithm(
+            config.security.token_hash_algorithm
+        )
+    except ValueError as exc:
+        raise AuthConfigError(str(exc)) from exc
 
     modern_auth_explicit = any(
         [
