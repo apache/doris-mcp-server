@@ -367,6 +367,15 @@ class DorisOAuthProvider:
         record = self.store.get_access_token(token)
         if not record or record.revoked_at is not None:
             raise ProtectedResourceAuthError("authentication_required", "Invalid Doris OAuth access token")
+        if record.resource != self.resource:
+            raise ProtectedResourceAuthError(
+                "authentication_required",
+                "Doris OAuth access token is not valid for this MCP resource",
+                status_code=401,
+                required_scope="tool:list",
+                challenge_error="invalid_token",
+                error_code="DORIS_OAUTH_RESOURCE_MISMATCH",
+            )
         if not self.connection_manager or not self.connection_manager.has_doris_user_pool(record.doris_user):
             async with self._lock:
                 self.store.revoke_family_by_access_token_id(record.token_id)
@@ -397,6 +406,9 @@ class DorisOAuthProvider:
             oauth_client_id=updated.client_id,
             oauth_scopes=list(updated.scopes),
             oauth_token_id=updated.token_id,
+            oauth_issuer=self.issuer,
+            oauth_resource=updated.resource,
+            oauth_audiences=[updated.resource],
             pool_key=f"doris_user:{updated.doris_user}",
         )
         auth_context.doris_oauth_db_tools_enabled = bool(

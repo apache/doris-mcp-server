@@ -679,6 +679,12 @@ Doris-backed OAuth is a separate OAuth mode where Doris itself is the authorizat
 
 This mode is not the same as external OAuth/OIDC. `ENABLE_DORIS_OAUTH_AUTH=true` conflicts with `ENABLE_OAUTH_AUTH=true`, `OAUTH_ENABLED=true`, and legacy `AUTH_TYPE=oauth`; startup fails fast if both modes are configured. A standard MCP agent enters one MCP URL and should discover exactly one OAuth behavior for that URL, so the existing `/auth/*` external OAuth login flow is not used in Doris-backed OAuth mode.
 
+Each Doris OAuth token record is bound to the resource selected during
+authorization. The protected MCP endpoint accepts only the exact canonical
+resource `${DORIS_OAUTH_BASE_URL}/mcp`; a token issued for the authorization
+server or any other resource is rejected with an `invalid_token` challenge
+before a per-user Doris pool is used.
+
 #### Minimal Local Configuration
 
 The following example is for local development on a single worker:
