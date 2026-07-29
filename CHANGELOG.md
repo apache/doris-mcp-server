@@ -65,6 +65,8 @@ under **Unreleased** until a new version is selected and published.
   metadata, and operation-specific insufficient-scope responses.
 - Bound Doris OAuth access tokens to the canonical MCP resource and rejected
   tokens issued for any other resource before per-user pool access.
+- Rejected Doris OAuth authorization-code exchanges whose required RFC 8707
+  `resource` is missing or differs from the authorization grant.
 - Required Doris OAuth DCR clients to declare a persisted `application_type`
   and enforced type-matched redirect URI rules for native and web clients.
 - Added RFC 9207 `iss` identification to Doris OAuth authorization success and

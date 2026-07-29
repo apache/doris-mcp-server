@@ -291,6 +291,12 @@ class DorisOAuthProvider:
             raise TokenEndpointError("invalid_grant", "Authorization code is invalid or expired", status_code=400)
         if not self._verify_pkce(record.code_challenge, payload.get("code_verifier") or ""):
             raise TokenEndpointError("invalid_grant", "Authorization code is invalid or expired", status_code=400)
+        if payload.get("resource") != record.resource:
+            raise TokenEndpointError(
+                "invalid_target",
+                "resource is required and must match the authorization grant",
+                status_code=400,
+            )
         if payload.get("scope"):
             requested = set(self.scope_policy.parse_scope(payload.get("scope")))
             if not requested <= set(record.scopes):

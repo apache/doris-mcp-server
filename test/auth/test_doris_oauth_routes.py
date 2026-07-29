@@ -660,6 +660,7 @@ async def test_authorize_invalid_redirect_is_direct_400_and_invalid_scope_redire
                 "state": "state-1",
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
+                "resource": provider.resource,
             },
         )
         assert response.status_code == 400
@@ -807,6 +808,7 @@ async def test_full_login_code_exchange_auth_context_and_pool_missing_revocation
                 "code": code,
                 "redirect_uri": "http://localhost:7777/callback",
                 "code_verifier": verifier,
+                "resource": provider.resource,
             },
         )
         assert token_response.status_code == 200
@@ -869,6 +871,59 @@ async def test_access_token_for_other_resource_is_rejected_before_pool_access():
     assert provider.store.get_access_token(pair.access_token).last_used_at is None
 
 
+@pytest.mark.parametrize(
+    "token_resource",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param("http://localhost:3000", id="different-resource"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_authorization_code_exchange_rejects_unbound_resource(
+    token_resource,
+):
+    provider, _cm, app = _provider_app()
+    client_record = provider.store.add_client(
+        client_id="resource-exchange-client",
+        client_secret=None,
+        token_endpoint_auth_method="none",
+        application_type="native",
+        redirect_uris=("http://localhost:7777/callback",),
+        client_allowed_scopes=("tool:list",),
+        source="dcr",
+        expires_at=None,
+    )
+    challenge, verifier = _pkce()
+    code, _record = provider.store.create_authorization_code(
+        client_id=client_record.client_id,
+        doris_user="alice",
+        redirect_uri="http://localhost:7777/callback",
+        scopes=("tool:list",),
+        resource=provider.resource,
+        code_challenge=challenge,
+        code_challenge_method="S256",
+        ttl_seconds=300,
+    )
+    payload = {
+        "grant_type": "authorization_code",
+        "client_id": client_record.client_id,
+        "code": code,
+        "redirect_uri": "http://localhost:7777/callback",
+        "code_verifier": verifier,
+    }
+    if token_resource is not None:
+        payload["resource"] = token_resource
+
+    async with await _client(app) as client:
+        response = await client.post("/oauth/token", data=payload)
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_target"
+    assert provider.store.access_by_hash == {}
+    assert provider.store.refresh_by_hash == {}
+    assert provider.store.pop_authorization_code(code) is None
+
+
 @pytest.mark.asyncio
 async def test_full_login_without_scope_grants_configured_rbac_capability_envelope():
     provider, cm, app = _provider_app(
@@ -894,6 +949,7 @@ async def test_full_login_without_scope_grants_configured_rbac_capability_envelo
                 "state": "state-full-default",
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
+                "resource": provider.resource,
             },
         )
         assert authorize.status_code == 302
@@ -921,6 +977,7 @@ async def test_full_login_without_scope_grants_configured_rbac_capability_envelo
                 "code": code,
                 "redirect_uri": "http://localhost:7777/callback",
                 "code_verifier": verifier,
+                "resource": provider.resource,
             },
         )
 
