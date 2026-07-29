@@ -282,7 +282,9 @@ class DatabaseConfig:
     database: str = "information_schema"
     charset: str = "UTF8"
 
-    # FE HTTP API port for profile and other HTTP APIs
+    # FE HTTP API endpoint for profile and other HTTP APIs. An empty host keeps
+    # backward compatibility by falling back to the SQL host.
+    fe_http_host: str = ""
     fe_http_port: int = 8030
     
     # BE HTTP nodes must be configured explicitly. SQL metadata is not trusted
@@ -692,6 +694,9 @@ class DorisConfig:
         doris_database = os.getenv("DORIS_DATABASE", "").strip()
         config.database.database = doris_database if doris_database else config.database.database
         
+        doris_fe_http_host = os.getenv("DORIS_FE_HTTP_HOST", "").strip()
+        config.database.fe_http_host = doris_fe_http_host
+
         doris_fe_http_port = os.getenv("DORIS_FE_HTTP_PORT", "").strip()
         if doris_fe_http_port and doris_fe_http_port.isdigit():
             config.database.fe_http_port = int(doris_fe_http_port)
@@ -1210,6 +1215,7 @@ class DorisConfig:
                 "password": "***",  # Hide password
                 "database": self.database.database,
                 "charset": self.database.charset,
+                "fe_http_host": self.database.fe_http_host,
                 "fe_http_port": self.database.fe_http_port,
                 "be_hosts": self.database.be_hosts,
                 "be_webserver_port": self.database.be_webserver_port,
@@ -1363,6 +1369,19 @@ class DorisConfig:
 
         if self.database.max_connections <= 0:
             errors.append("Maximum connections must be greater than 0")
+
+        if (
+            self.database.fe_http_host
+            and (
+                self.database.fe_http_host != self.database.fe_http_host.strip()
+                or "://" in self.database.fe_http_host
+                or any(
+                    character in self.database.fe_http_host
+                    for character in "/\\?#@%"
+                )
+            )
+        ):
+            errors.append("Doris FE HTTP host must be a hostname or IP address")
 
         if not (1 <= self.database.fe_http_port <= 65535):
             errors.append("Doris FE HTTP port must be in the range 1-65535")

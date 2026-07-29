@@ -915,6 +915,7 @@ async def test_http_monitoring_rejects_metadata_endpoint_and_recovers():
         fe_result = rejected.json()["result"]["structuredContent"]["data"]["fe"]
         assert fe_result["success"] is False
         assert fe_result["error_type"] == "prohibited_endpoint"
+        assert fe_result["node_info"]["host"] == "169.254.169.254"
 
         recovered = await client.post(
             "/mcp",
@@ -1188,6 +1189,7 @@ async def test_stdio_monitoring_rejects_metadata_endpoint_and_recovers():
         fe_result = rejected.structured_content["data"]["fe"]
         assert fe_result["success"] is False
         assert fe_result["error_type"] == "prohibited_endpoint"
+        assert fe_result["node_info"]["host"] == "169.254.169.254"
 
         recovered = await modern.call_tool("echo", {})
         assert recovered.is_error is False

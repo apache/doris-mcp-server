@@ -20,9 +20,10 @@
 Set ``DORIS_REAL_INTEGRATION=1`` and provide ``DORIS_REAL_HOST``,
 ``DORIS_REAL_USER``, and ``DORIS_REAL_DATABASE``. ``DORIS_REAL_PORT`` defaults
 to 9030 and ``DORIS_REAL_PASSWORD`` may be empty. Set
-``DORIS_REAL_HTTP_INTEGRATION=1`` with ``DORIS_REAL_FE_HTTP_PORT``,
-``DORIS_REAL_BE_HOSTS``, and ``DORIS_REAL_BE_WEBSERVER_PORT`` to exercise the
-configured FE/BE HTTP monitoring boundary through both transports.
+``DORIS_REAL_HTTP_INTEGRATION=1`` with ``DORIS_REAL_FE_HTTP_HOST``,
+``DORIS_REAL_FE_HTTP_PORT``, ``DORIS_REAL_BE_HOSTS``, and
+``DORIS_REAL_BE_WEBSERVER_PORT`` to exercise independent SQL/FE/BE endpoints
+through both transports.
 """
 
 from __future__ import annotations
@@ -193,6 +194,9 @@ def _server_environment(
         "LOG_LEVEL": "ERROR",
         "PYTHONUNBUFFERED": "1",
     }
+    fe_http_host = os.getenv("DORIS_REAL_FE_HTTP_HOST", "").strip()
+    if fe_http_host:
+        environment["DORIS_FE_HTTP_HOST"] = fe_http_host
     fe_http_port = os.getenv("DORIS_REAL_FE_HTTP_PORT", "").strip()
     if fe_http_port:
         environment["DORIS_FE_HTTP_PORT"] = fe_http_port
@@ -499,8 +503,7 @@ async def test_real_doris_tool_regression_paths(
             "analyze_columns",
             {
                 "table_name": (
-                    f"{doris_sandbox.table}; "
-                    f"DROP TABLE {doris_sandbox.table}"
+                    f"{doris_sandbox.table}; DROP TABLE {doris_sandbox.table}"
                 ),
                 "columns": ["id"],
                 "analysis_types": ["completeness"],
@@ -510,8 +513,9 @@ async def test_real_doris_tool_regression_paths(
         )
         assert injected_identifier_result.is_error is True
         assert isinstance(injected_identifier_result.structured_content, dict)
-        assert "Invalid table name" in (
-            injected_identifier_result.structured_content["error"]
+        assert (
+            "Invalid table name"
+            in (injected_identifier_result.structured_content["error"])
         )
 
         intact_result, intact_payload = await _exec_query(
@@ -589,7 +593,7 @@ async def test_real_doris_tool_regression_paths(
 
 @pytest.mark.skipif(
     os.getenv("DORIS_REAL_HTTP_INTEGRATION") != "1",
-    reason="set DORIS_REAL_HTTP_INTEGRATION=1 with FE/BE HTTP endpoints",
+    reason="set DORIS_REAL_HTTP_INTEGRATION=1 with independent FE/BE HTTP endpoints",
 )
 @pytest.mark.parametrize("transport", ["http", "stdio"])
 async def test_real_doris_configured_monitoring_http_endpoints_and_recovery(
@@ -601,6 +605,7 @@ async def test_real_doris_configured_monitoring_http_endpoints_and_recovery(
         user=doris_sandbox.settings.user,
         password=doris_sandbox.settings.password,
     )
+    assert environment.get("DORIS_FE_HTTP_HOST")
     assert environment.get("DORIS_FE_HTTP_PORT")
     assert environment.get("DORIS_BE_HOSTS")
     assert environment.get("DORIS_BE_WEBSERVER_PORT")
@@ -621,7 +626,8 @@ async def test_real_doris_configured_monitoring_http_endpoints_and_recovery(
         fe_payload = fe_result.structured_content["data"]["fe"]
         assert fe_payload["success"] is True
         assert fe_payload["node_type"] == "fe"
-        assert fe_payload["node_info"]["host"] == doris_sandbox.settings.host
+        assert fe_payload["node_info"]["host"] == environment["DORIS_FE_HTTP_HOST"]
+        assert fe_payload["node_info"]["host"] != doris_sandbox.settings.host
 
         be_result = await client.call_tool(
             "get_monitoring_metrics",
