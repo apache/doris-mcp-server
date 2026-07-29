@@ -28,7 +28,7 @@ services:
       - DORIS_HOST=doris-fe
       - DORIS_PORT=9030
       - DORIS_USER=root
-      - DORIS_PASSWORD=doris123
+      - DORIS_PASSWORD_FILE=/run/secrets/doris_password
       - DORIS_DATABASE=test_db
       
       # Connection pool configuration
@@ -40,7 +40,7 @@ services:
       - SERVER_PORT=3000
       - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       - ENABLE_TOKEN_AUTH=true
-      - TOKEN_ADMIN=${MCP_STATIC_TOKEN:?Set MCP_STATIC_TOKEN to a securely generated value of at least 32 characters}
+      - TOKEN_ADMIN_FILE=/run/secrets/mcp_static_token
       - MAX_RESULT_ROWS=10000
       
       # Performance configuration
@@ -57,6 +57,9 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./config:/app/config
+    secrets:
+      - doris_password
+      - mcp_static_token
     depends_on:
       doris-fe:
         condition: service_healthy
@@ -74,7 +77,7 @@ services:
 
   # Apache Doris Frontend
   doris-fe:
-    image: apache/doris:2.0.3-fe-x86_64
+    image: apache/doris:fe-3.0.8@sha256:749afa2be75cd58d54a0bdb3edaa805d5974646f67500f094912f8dbc4a96b8f
     container_name: doris-fe
     ports:
       - "8030:8030"  # FE HTTP port
@@ -85,7 +88,11 @@ services:
     volumes:
       - doris-fe-data:/opt/apache-doris/fe/doris-meta
       - doris-fe-log:/opt/apache-doris/fe/log
-      - ./doris-config/fe.conf:/opt/apache-doris/fe/conf/fe.conf
+    secrets:
+      - source: doris_password
+        target: /etc/basic_auth/password
+      - source: doris_fe_custom_config
+        target: /opt/apache-doris/fe/conf/fe_custom.conf
     networks:
       - doris-network
     restart: unless-stopped
@@ -98,7 +105,7 @@ services:
 
   # Apache Doris Backend
   doris-be:
-    image: apache/doris:2.0.3-be-x86_64
+    image: apache/doris:be-3.0.8@sha256:a337e2b17a65c86c22a1205467a825d46dc3380c94ba8024e53eea033641f12e
     container_name: doris-be
     ports:
       - "8040:8040"  # BE HTTP port
@@ -109,7 +116,9 @@ services:
     volumes:
       - doris-be-data:/opt/apache-doris/be/storage
       - doris-be-log:/opt/apache-doris/be/log
-      - ./doris-config/be.conf:/opt/apache-doris/be/conf/be.conf
+    secrets:
+      - source: doris_password
+        target: /etc/basic_auth/password
     depends_on:
       - doris-fe
     networks:
@@ -124,25 +133,30 @@ services:
 
   # Redis cache (optional)
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.10-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     container_name: doris-redis
     ports:
       - "6379:6379"
-    command: redis-server --appendonly yes --requirepass redis123
+    command:
+      - /bin/sh
+      - -ec
+      - exec redis-server --appendonly yes --requirepass "$$(cat /run/secrets/redis_password)"
     volumes:
       - redis-data:/data
+    secrets:
+      - redis_password
     networks:
       - doris-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli --no-auth-warning ping | grep -qx PONG"]
       interval: 30s
       timeout: 10s
       retries: 3
 
   # Prometheus monitoring
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.13.0@sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7
     container_name: doris-prometheus
     ports:
       - "9090:9090"
@@ -162,16 +176,18 @@ services:
 
   # Grafana visualization
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
     container_name: doris-grafana
     ports:
       - "${GRAFANA_HTTP_PORT:-3003}:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
       - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    secrets:
+      - grafana_admin_password
     depends_on:
       - prometheus
     networks:
@@ -180,7 +196,7 @@ services:
 
   # Nginx load balancer
   nginx:
-    image: nginx:alpine
+    image: nginx:1.30.4-alpine@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
     container_name: doris-nginx
     ports:
       - "80:80"
@@ -215,6 +231,15 @@ volumes:
 networks:
   doris-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
+
+secrets:
+  doris_password:
+    file: ${COMPOSE_DORIS_PASSWORD_FILE:-./.secrets/doris_password}
+  doris_fe_custom_config:
+    file: ${COMPOSE_DORIS_FE_CUSTOM_CONFIG_FILE:-./.secrets/doris_fe_custom.conf}
+  mcp_static_token:
+    file: ${COMPOSE_MCP_STATIC_TOKEN_FILE:-./.secrets/mcp_static_token}
+  redis_password:
+    file: ${COMPOSE_REDIS_PASSWORD_FILE:-./.secrets/redis_password}
+  grafana_admin_password:
+    file: ${COMPOSE_GRAFANA_ADMIN_PASSWORD_FILE:-./.secrets/grafana_admin_password}

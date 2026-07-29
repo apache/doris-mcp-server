@@ -40,7 +40,7 @@ import tempfile
 import time
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +69,7 @@ class RealDorisSettings:
     host: str
     port: int
     user: str
-    password: str
+    password: str = field(repr=False)
     database: str
 
 
@@ -79,7 +79,7 @@ class DorisSandbox:
     admin_connection: pymysql.Connection
     table: str
     readonly_user: str
-    readonly_password: str
+    readonly_password: str = field(repr=False)
     marker: str
 
     @property

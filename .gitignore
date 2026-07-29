@@ -23,3 +23,5 @@ venv.bak/
 .coverage.*
 coverage.xml
 tokens.json.lock
+/.secrets/
+/tmp/

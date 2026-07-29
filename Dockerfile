@@ -14,8 +14,9 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# Use Python 3.12 as base image
-FROM python:3.12-slim
+# Keep the runtime base reproducible across rebuilds. Upgrade the explicit
+# Python patch release and OCI digest together.
+FROM python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7
 
 # Set working directory
 WORKDIR /app

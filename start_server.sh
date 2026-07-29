@@ -63,6 +63,43 @@ else
     echo -e "${YELLOW}Warning: .env file not found${NC}"
 fi
 
+# Load sensitive values from Docker/Compose secret files without placing them
+# in the Compose model or a tracked environment file. Direct values and *_FILE
+# values are mutually exclusive so deployment configuration cannot be
+# ambiguous.
+load_secret_file() {
+    local variable_name="$1"
+    local file_variable_name="${variable_name}_FILE"
+    local secret_file="${!file_variable_name:-}"
+    local direct_value="${!variable_name:-}"
+    local secret_value
+
+    if [ -z "${secret_file}" ]; then
+        return
+    fi
+    if [ -n "${direct_value}" ]; then
+        echo -e "${RED}Both ${variable_name} and ${file_variable_name} are set${NC}" >&2
+        exit 1
+    fi
+    if [ ! -f "${secret_file}" ] || [ ! -r "${secret_file}" ]; then
+        echo -e "${RED}${file_variable_name} is not a readable file${NC}" >&2
+        exit 1
+    fi
+
+    secret_value="$(<"${secret_file}")"
+    if [ -z "${secret_value}" ] || [[ "${secret_value}" == *$'\n'* ]] || [[ "${secret_value}" == *$'\r'* ]]; then
+        echo -e "${RED}${file_variable_name} must contain one non-empty line${NC}" >&2
+        exit 1
+    fi
+
+    printf -v "${variable_name}" '%s' "${secret_value}"
+    export "${variable_name}"
+    unset "${file_variable_name}"
+}
+
+load_secret_file DORIS_PASSWORD
+load_secret_file TOKEN_ADMIN
+
 # Set HTTP-specific environment variables
 # FIX for Issue #62 Bug 4: Use SERVER_PORT instead of MCP_PORT for consistency with code
 export MCP_TRANSPORT_TYPE="http"

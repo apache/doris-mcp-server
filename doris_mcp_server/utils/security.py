@@ -20,7 +20,6 @@ Doris Security Management Module
 Implements enterprise-level authentication, authorization, SQL security validation and data masking functionality
 """
 
-import logging
 import re
 from collections.abc import Mapping
 from contextvars import ContextVar
@@ -641,11 +640,16 @@ class AuthenticationProvider:
         auth_type = str(auth_info.get("type") or "").strip().lower()
         credentials = normalize_bearer_credentials(auth_info)
         if auth_type == "token":
-            if self.effective_auth.enable_token_auth and self.token_manager:
-                return await self.authenticate_token(credentials)
-            return await self._authenticate_legacy_token(credentials)
+            if not self.effective_auth.enable_token_auth:
+                raise ValueError("Token authentication is not enabled")
+            if not self.token_manager:
+                raise ValueError("Token manager is not initialized")
+            return await self.authenticate_token(credentials)
         if auth_type == "basic":
-            return await self._authenticate_basic(auth_info)
+            raise ValueError(
+                "Basic authentication is not supported; use a configured "
+                "Bearer or OAuth authentication provider"
+            )
         if auth_type == "jwt":
             return await self.authenticate_jwt(credentials)
         if auth_type == "oauth":
@@ -790,105 +794,6 @@ class AuthenticationProvider:
         except Exception as e:
             self.logger.error(f"Token authentication failed: {e}")
             raise ValueError(f"Token authentication failed: {str(e)}")
-
-    async def _authenticate_legacy_token(
-        self,
-        credentials: BearerCredentials,
-    ) -> AuthContext:
-        """Token authentication for legacy direct callers without TokenManager."""
-        if not credentials.is_static_token:
-            raise ValueError("Missing authentication token")
-        token = credentials.token
-
-        user_info = await self._validate_token(token)
-        return AuthContext(
-            token_id=token,
-            user_id=user_info["user_id"],
-            roles=user_info["roles"],
-            permissions=user_info["permissions"],
-            security_level=user_info["security_level"],
-            client_ip=credentials.client_ip,
-            session_id=credentials.session_id or f"session_{user_info['user_id']}",
-            login_time=datetime.utcnow(),
-            auth_method="token",
-            token=token,
-            pool_key=f"static_token:{token}",
-        )
-
-    async def _authenticate_basic(self, auth_info: dict[str, Any]) -> AuthContext:
-        """Basic authentication (username password)"""
-        username = auth_info.get("username")
-        password = auth_info.get("password")
-
-        if not username or not password:
-            raise ValueError("Missing username or password")
-
-        # Validate username password (simplified implementation)
-        user_info = await self._validate_credentials(username, password)
-
-        return AuthContext(
-            user_id=user_info["user_id"],
-            roles=user_info["roles"],
-            permissions=user_info["permissions"],
-            session_id=auth_info.get("session_id", "default"),
-            login_time=datetime.utcnow(),
-            security_level=SecurityLevel(user_info.get("security_level", "internal")),
-            auth_method="basic",
-            pool_key="global",
-        )
-
-    async def _validate_token(self, token: str) -> dict[str, Any]:
-        """Validate token validity"""
-        # Simplified implementation for testing, should parse JWT or query authentication service in practice
-        valid_tokens = {
-            "valid_token_123": {
-                "user_id": "test_user",
-                "roles": ["data_analyst"],
-                "permissions": ["read_data"],
-                "security_level": SecurityLevel.INTERNAL,
-            },
-            "admin_token_456": {
-                "user_id": "admin_user",
-                "roles": ["data_admin"],
-                "permissions": ["admin"],
-                "security_level": SecurityLevel.SECRET,
-            }
-        }
-        
-        if token in valid_tokens:
-            return valid_tokens[token]
-        else:
-            raise ValueError("Invalid token")
-
-    async def _validate_credentials(
-        self, username: str, password: str
-    ) -> dict[str, Any]:
-        """Validate user credentials"""
-        # Simplified implementation for testing, should query user database in practice
-        valid_users = {
-            "admin": {
-                "password": "admin123",
-                "user_id": "admin_user",
-                "roles": ["data_admin"],
-                "permissions": ["admin", "read_data", "write_data"],
-                "security_level": SecurityLevel.SECRET,
-            },
-            "analyst": {
-                "password": "analyst123",
-                "user_id": "analyst_user",
-                "roles": ["data_analyst"],
-                "permissions": ["read_data"],
-                "security_level": SecurityLevel.INTERNAL,
-            }
-        }
-
-        if username in valid_users and valid_users[username]["password"] == password:
-            user_info = valid_users[username].copy()
-            del user_info["password"]  # Remove password from returned info
-            return user_info
-        else:
-            raise ValueError("Incorrect username or password")
-
 
 class AuthorizationProvider:
     """Authorization provider"""

@@ -391,6 +391,35 @@ defaults with `MCP_HTTP_PORT` and `GRAFANA_HTTP_PORT`:
 MCP_HTTP_PORT=3100 GRAFANA_HTTP_PORT=3103 docker compose up -d
 ```
 
+Before starting the bundled stack, create the five ignored secret files used
+by Compose. No database, MCP, Redis, or Grafana credential is stored in
+`docker-compose.yml`, `.env.example`, or the rendered service environment:
+
+```bash
+mkdir -p .secrets
+chmod 700 .secrets
+python -c 'import secrets; print(secrets.token_urlsafe(32))' > .secrets/doris_password
+python -c 'import secrets; print(secrets.token_urlsafe(32))' > .secrets/mcp_static_token
+python -c 'import secrets; print(secrets.token_urlsafe(32))' > .secrets/redis_password
+python -c 'import secrets; print(secrets.token_urlsafe(32))' > .secrets/grafana_admin_password
+python -c 'import hashlib, pathlib; p=pathlib.Path(".secrets/doris_password").read_text().rstrip("\n").encode(); print("initial_root_password = *" + hashlib.sha1(hashlib.sha1(p).digest()).hexdigest().upper())' > .secrets/doris_fe_custom.conf
+chmod 0444 .secrets/*
+docker compose up -d
+```
+
+`doris_fe_custom.conf` contains Doris's two-stage SHA-1 password verifier, not
+the plaintext password, and is mounted as the FE initial-root configuration.
+The matching plaintext file is mounted only into the services that must
+authenticate to Doris. Treat both files as credentials. The parent directory
+remains mode `0700`, while the files are host-read-only and container-readable
+for the non-root MCP process. To keep secret files elsewhere, copy
+`.env.example` to `.env` and change only the `COMPOSE_*_FILE` host paths.
+
+All third-party images in the Compose model use an explicit upstream version
+and an immutable OCI digest. Upgrade them deliberately by changing both the
+version tag and digest, then rerun the deployment contract and transport tests;
+do not replace them with `latest` or another floating tag.
+
 The image-level Docker health check uses `/live`, so a temporary Doris outage
 does not cause the MCP process to be treated as dead. Compose overrides that
 probe with `/ready` and only marks the service ready after the bounded Doris
