@@ -143,10 +143,19 @@ Access the **Web-Based Token Management Dashboard** for enterprise-grade token a
   ```
 
 #### **Interface Access**
+
+Management requests accept the admin token only in an HTTP header. Query-string
+tokens are rejected and must not be placed in URLs, browser history, or access
+logs.
+
 ```bash
-# Access the token management interface
-http://localhost:3000/token/management?admin_token=your_secure_admin_token
+curl -H "Authorization: Bearer your_secure_admin_token" \
+  http://127.0.0.1:3000/token/stats
 ```
+
+The optional `/token/management` page must be opened through a client or local
+proxy that supplies the same header. Its API requests use an in-page password
+field and do not persist or propagate the token in URLs.
 
 #### **Available Operations**
 - **📊 Token Statistics**: Real-time overview of active, expired, and total tokens

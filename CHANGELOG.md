@@ -48,6 +48,8 @@ under **Unreleased** until a new version is selected and published.
 - Preserved service availability after malformed requests, unknown methods,
   header mismatches, unsupported versions, and missing capabilities.
 - Corrected resource and prompt error semantics and tool `isError` results.
+- Removed admin-token query authentication and dashboard URL propagation;
+  management endpoints now accept admin credentials only in headers.
 - Released Doris connections on SQL profile, data freshness, and access
   analysis paths.
 - Improved Doris 4 role metadata compatibility and query recovery behavior.
