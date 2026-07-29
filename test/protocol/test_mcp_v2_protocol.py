@@ -17,11 +17,16 @@
 
 import json
 import logging
+import sys
+from pathlib import Path
 
 import httpx2
 import pytest
-from mcp import Client
+from mcp import Client, ClientSession, MCPError, StdioServerParameters
+from mcp.client import advertise
+from mcp.client.stdio import stdio_client
 from mcp.types import (
+    ClientCapabilities,
     GetPromptResult,
     Prompt,
     PromptMessage,
@@ -34,6 +39,8 @@ from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
 )
+
+REQUIRED_EXTENSION = "io.apache.doris/read"
 
 
 class StubResourcesManager:
@@ -94,7 +101,9 @@ class StubPromptsManager:
         )
 
 
-def create_test_server():
+def create_test_server(
+    required_client_capabilities: dict[str, ClientCapabilities] | None = None,
+):
     return create_doris_mcp_server(
         resources_manager=StubResourcesManager(),
         tools_manager=StubToolsManager(),
@@ -102,6 +111,7 @@ def create_test_server():
         name="doris-mcp-server",
         version="0.6.1",
         logger=logging.getLogger(__name__),
+        required_client_capabilities=required_client_capabilities,
     )
 
 
@@ -326,3 +336,113 @@ async def test_http_rejects_untrusted_origin_and_legacy_is_stateless():
         assert initialized.status_code == 200
         assert "mcp-session-id" not in initialized.headers
         assert initialized.json()["result"]["protocolVersion"] == "2025-11-25"
+
+
+@pytest.mark.asyncio
+async def test_http_validates_request_meta_and_required_client_capabilities():
+    server = create_test_server(
+        {
+            "tools/list": ClientCapabilities(
+                extensions={REQUIRED_EXTENSION: {}},
+            )
+        }
+    )
+    app = server.streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        missing_meta = modern_request(1, "tools/list")
+        del missing_meta["params"]["_meta"][
+            "io.modelcontextprotocol/clientCapabilities"
+        ]
+        invalid = await client.post(
+            "/mcp",
+            json=missing_meta,
+            headers=modern_headers("tools/list"),
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["error"]["code"] == -32602
+
+        missing_capability = await client.post(
+            "/mcp",
+            json=modern_request(2, "tools/list"),
+            headers=modern_headers("tools/list"),
+        )
+        assert missing_capability.status_code == 400
+        assert missing_capability.json()["error"]["code"] == -32021
+        assert missing_capability.json()["error"]["data"] == {
+            "requiredCapabilities": {
+                "extensions": {
+                    REQUIRED_EXTENSION: {},
+                }
+            }
+        }
+
+        capable_request = modern_request(3, "tools/list")
+        capable_request["params"]["_meta"][
+            "io.modelcontextprotocol/clientCapabilities"
+        ] = {
+            "extensions": {
+                REQUIRED_EXTENSION: {},
+            }
+        }
+        capable = await client.post(
+            "/mcp",
+            json=capable_request,
+            headers=modern_headers("tools/list"),
+        )
+        assert capable.status_code == 200
+        assert [tool["name"] for tool in capable.json()["result"]["tools"]] == [
+            "echo",
+            "fail",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_stdio_validates_capabilities_versions_and_process_survival():
+    server_script = Path(__file__).with_name("stdio_capability_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with stdio_client(server_params) as streams:
+        async with ClientSession(*streams) as raw_session:
+            with pytest.raises(MCPError) as unsupported:
+                await raw_session.send_discover("2099-01-01")
+            assert unsupported.value.code == -32022
+            assert unsupported.value.data == {
+                "supported": ["2026-07-28"],
+                "requested": "2099-01-01",
+            }
+
+            recovered = await raw_session.send_discover("2026-07-28")
+            assert recovered["resultType"] == "complete"
+
+    async with Client(stdio_client(server_params)) as missing:
+        with pytest.raises(MCPError) as missing_capability:
+            await missing.list_tools(cache_mode="bypass")
+        assert missing_capability.value.code == -32021
+        assert (await missing.list_resources(cache_mode="bypass")).resources == []
+
+    async with Client(
+        stdio_client(server_params),
+        extensions=[advertise(REQUIRED_EXTENSION)],
+    ) as capable:
+        assert [tool.name for tool in (await capable.list_tools()).tools] == [
+            "echo"
+        ]
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        assert [tool.name for tool in (await legacy.list_tools()).tools] == ["echo"]
