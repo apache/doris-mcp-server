@@ -21,16 +21,18 @@ def _assert_raw_absent(store, raw_values):
 def test_store_keeps_tokens_codes_and_client_secret_hash_only():
     store = DorisOAuthStore()
     client_secret = "dos_RAW_CLIENT_SECRET_123"
-    store.add_client(
+    client_record = store.add_client(
         client_id="client-1",
         client_secret=client_secret,
         token_endpoint_auth_method="client_secret_post",
+        application_type="native",
         redirect_uris=("http://localhost:7777/callback",),
         client_allowed_scopes=("tool:list",),
         source="dcr",
         expires_at=None,
         registration_ip="127.0.0.1",
     )
+    assert client_record.application_type == "native"
     txn_id, _txn = store.create_auth_transaction(
         client_id="client-1",
         redirect_uri="http://localhost:7777/callback",

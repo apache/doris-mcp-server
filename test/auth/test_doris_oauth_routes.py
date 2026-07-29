@@ -105,20 +105,207 @@ async def _client(app):
     return httpx.AsyncClient(transport=transport, base_url="http://localhost:3000", follow_redirects=False)
 
 
+def _native_registration(redirect_uri="http://localhost:7777/callback", **metadata):
+    return {
+        "application_type": "native",
+        "redirect_uris": [redirect_uri],
+        **metadata,
+    }
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        pytest.param({}, id="missing"),
+        pytest.param({"application_type": None}, id="null"),
+        pytest.param({"application_type": ""}, id="blank"),
+        pytest.param({"application_type": "desktop"}, id="unsupported"),
+        pytest.param({"application_type": 1}, id="non-string"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_register_requires_supported_application_type(metadata):
+    _provider, _cm, app = _provider_app()
+    payload = {
+        "redirect_uris": ["http://localhost:7777/callback"],
+        **metadata,
+    }
+
+    async with await _client(app) as client:
+        response = await client.post("/oauth/register", json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_client_metadata"
+
+
+@pytest.mark.parametrize(
+    ("application_type", "redirect_uri"),
+    [
+        pytest.param(
+            "native",
+            "http://localhost:7777/callback",
+            id="native-localhost",
+        ),
+        pytest.param(
+            "native",
+            "http://127.0.0.2:7777/callback",
+            id="native-loopback-ip",
+        ),
+        pytest.param(
+            "native",
+            "org.apache.doris.mcp:/oauth/callback",
+            id="native-custom-scheme",
+        ),
+        pytest.param("web", "https://client.example.com/callback", id="web-https"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_register_persists_application_type(application_type, redirect_uri):
+    provider, _cm, app = _provider_app()
+    async with await _client(app) as client:
+        response = await client.post(
+            "/oauth/register",
+            json={
+                "application_type": application_type,
+                "redirect_uris": [redirect_uri],
+            },
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["application_type"] == application_type
+    assert body["redirect_uris"] == [redirect_uri]
+    record = provider.store.get_client(body["client_id"])
+    assert record is not None
+    assert record.application_type == application_type
+
+
+@pytest.mark.parametrize(
+    ("application_type", "redirect_uri"),
+    [
+        pytest.param(
+            "native",
+            "https://client.example.com/callback",
+            id="native-https",
+        ),
+        pytest.param(
+            "native",
+            "http://client.example.com/callback",
+            id="native-remote-http",
+        ),
+        pytest.param(
+            "native",
+            "myapp:/oauth/callback",
+            id="native-non-domain-custom-scheme",
+        ),
+        pytest.param(
+            "native",
+            "javascript:alert(1)",
+            id="native-unsafe-scheme",
+        ),
+        pytest.param(
+            "web",
+            "http://localhost:7777/callback",
+            id="web-loopback-http",
+        ),
+        pytest.param(
+            "web",
+            "https://localhost:7777/callback",
+            id="web-loopback-https",
+        ),
+        pytest.param(
+            "web",
+            "org.apache.doris.mcp:/oauth/callback",
+            id="web-custom-scheme",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_register_rejects_redirect_uri_for_other_application_type(
+    application_type,
+    redirect_uri,
+):
+    _provider, _cm, app = _provider_app()
+    async with await _client(app) as client:
+        response = await client.post(
+            "/oauth/register",
+            json={
+                "application_type": application_type,
+                "redirect_uris": [redirect_uri],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_redirect_uri"
+
+
+@pytest.mark.parametrize(
+    "redirect_uris",
+    [
+        pytest.param([], id="empty"),
+        pytest.param("https://client.example.com/callback", id="not-an-array"),
+        pytest.param([123], id="non-string-entry"),
+        pytest.param(
+            ["https://client.example.com:invalid/callback"],
+            id="malformed-port",
+        ),
+        pytest.param(
+            ["https://client.example.com/callback#fragment"],
+            id="fragment",
+        ),
+        pytest.param(
+            ["https://user:secret@client.example.com/callback"],
+            id="credentials",
+        ),
+        pytest.param(
+            ["https://*.example.com/callback"],
+            id="wildcard",
+        ),
+        pytest.param(
+            [
+                "https://client.example.com/callback",
+                "https://localhost:7777/callback",
+            ],
+            id="mixed-web-and-loopback",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_register_rejects_malformed_redirect_metadata_without_persisting(
+    redirect_uris,
+):
+    provider, _cm, app = _provider_app()
+    async with await _client(app) as client:
+        response = await client.post(
+            "/oauth/register",
+            json={
+                "application_type": "web",
+                "redirect_uris": redirect_uris,
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_redirect_uri"
+    assert provider.store.clients_by_id == {}
+
+
 @pytest.mark.asyncio
 async def test_register_omitted_and_blank_scope_allow_safe_client_scope_set():
     _provider, _cm, app = _provider_app()
     async with await _client(app) as client:
         response = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
         assert response.status_code == 201
         assert response.json()["scope"] == "resource:list resource:read tool:list"
 
         response = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7778/callback"], "scope": ""},
+            json=_native_registration(
+                "http://localhost:7778/callback",
+                scope="",
+            ),
         )
         assert response.status_code == 201
         assert response.json()["scope"] == "resource:list resource:read tool:list"
@@ -131,7 +318,7 @@ async def test_register_omitted_scope_client_allowlist_includes_safe_metadata_wh
     async with await _client(app) as client:
         response = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
 
     assert response.status_code == 201
@@ -145,6 +332,7 @@ async def test_register_explicit_unknown_or_forbidden_scope_is_invalid_scope():
         response = await client.post(
             "/oauth/register",
             json={
+                "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
                 "scope": "tool:list scope:admin unknown",
             },
@@ -161,6 +349,7 @@ async def test_register_metadata_scope_requires_db_gate():
         response = await client.post(
             "/oauth/register",
             json={
+                "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
                 "scope": "tool:list tool:call:get_db_list",
             },
@@ -178,6 +367,7 @@ async def test_register_metadata_scope_allowed_when_db_gate_true_and_explicit():
         response = await client.post(
             "/oauth/register",
             json={
+                "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
                 "scope": "tool:list tool:call:get_db_list",
             },
@@ -195,6 +385,7 @@ async def test_register_resource_scopes_allowed_explicitly_without_metadata_gate
         response = await client.post(
             "/oauth/register",
             json={
+                "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
                 "scope": "tool:list resource:list resource:read",
             },
@@ -212,7 +403,7 @@ async def test_authorize_can_request_resource_scopes_after_dcr_omits_scope():
     async with await _client(app) as client:
         register = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
         client_id = register.json()["client_id"]
         challenge, _verifier = _pkce()
@@ -249,6 +440,7 @@ async def test_register_query_and_explain_scopes_require_their_own_gates(scope):
         response = await client.post(
             "/oauth/register",
             json={
+                "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
                 "scope": f"tool:list {scope}",
             },
@@ -270,7 +462,7 @@ async def test_register_omitted_scope_client_allowlist_includes_query_and_explai
     async with await _client(app) as client:
         response = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
 
     assert response.status_code == 201
@@ -293,6 +485,7 @@ async def test_register_short_tool_scope_aliases_are_canonicalized_when_enabled(
         response = await client.post(
             "/oauth/register",
             json={
+                "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
                 "scope": "tool:list get_db_list exec_query get_sql_explain",
             },
@@ -318,7 +511,7 @@ async def test_authorize_omitted_scope_grants_configured_server_allowlist():
     async with await _client(app) as client:
         register = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
         client_id = register.json()["client_id"]
         challenge, _verifier = _pkce()
@@ -360,7 +553,7 @@ async def test_authorize_short_tool_scope_aliases_are_canonicalized_when_enabled
     async with await _client(app) as client:
         register = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
         client_id = register.json()["client_id"]
         challenge, _verifier = _pkce()
@@ -405,6 +598,7 @@ async def test_expired_dcr_clients_do_not_count_against_capacity():
         client_id="expired-dcr",
         client_secret=None,
         token_endpoint_auth_method="none",
+        application_type="native",
         redirect_uris=("http://localhost:7000/callback",),
         client_allowed_scopes=("tool:list",),
         source="dcr",
@@ -415,7 +609,7 @@ async def test_expired_dcr_clients_do_not_count_against_capacity():
     async with await _client(app) as client:
         response = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
 
     assert response.status_code == 201
@@ -429,6 +623,7 @@ async def test_authorize_invalid_redirect_is_direct_400_and_invalid_scope_redire
         client_id="client-1",
         client_secret=None,
         token_endpoint_auth_method="none",
+        application_type="native",
         redirect_uris=("http://localhost:7777/callback",),
         client_allowed_scopes=("tool:list",),
         source="dcr",
@@ -478,7 +673,7 @@ async def test_full_login_code_exchange_auth_context_and_pool_missing_revocation
     async with await _client(app) as client:
         register = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
         client_id = register.json()["client_id"]
         challenge, verifier = _pkce()
@@ -601,7 +796,7 @@ async def test_full_login_without_scope_grants_configured_rbac_capability_envelo
     async with await _client(app) as client:
         register = await client.post(
             "/oauth/register",
-            json={"redirect_uris": ["http://localhost:7777/callback"]},
+            json=_native_registration(),
         )
         client_id = register.json()["client_id"]
         challenge, verifier = _pkce()
@@ -677,6 +872,7 @@ async def test_token_endpoint_invalid_code_invalid_client_refresh_pool_missing_a
         client_id="public",
         client_secret=None,
         token_endpoint_auth_method="none",
+        application_type="native",
         redirect_uris=("http://localhost:7777/callback",),
         client_allowed_scopes=("tool:list",),
         source="dcr",
@@ -686,6 +882,7 @@ async def test_token_endpoint_invalid_code_invalid_client_refresh_pool_missing_a
         client_id="secret-client",
         client_secret="dos_secret",
         token_endpoint_auth_method="client_secret_post",
+        application_type="native",
         redirect_uris=("http://localhost:7778/callback",),
         client_allowed_scopes=("tool:list",),
         source="dcr",
@@ -762,6 +959,7 @@ async def test_refresh_token_replay_under_lock_only_issues_one_new_pair():
         client_id="public",
         client_secret=None,
         token_endpoint_auth_method="none",
+        application_type="native",
         redirect_uris=("http://localhost:7777/callback",),
         client_allowed_scopes=("tool:list",),
         source="dcr",
@@ -806,7 +1004,7 @@ async def test_refresh_token_replay_under_lock_only_issues_one_new_pair():
 
 @pytest.mark.asyncio
 async def test_api_auth_token_defaults_to_configured_server_allowlist_not_wildcard():
-    _provider, cm, app = _provider_app()
+    provider, cm, app = _provider_app()
     async with await _client(app) as client:
         response = await client.post(
             "/api/auth/token",
@@ -817,6 +1015,7 @@ async def test_api_auth_token_defaults_to_configured_server_allowlist_not_wildca
     assert response.json()["scope"] == "resource:list resource:read tool:list"
     assert "*" not in response.json()["scope"]
     assert cm.create_calls == [("cli_user", "correct")]
+    assert provider.store.get_client("cli").application_type == "native"
 
 
 @pytest.mark.asyncio
@@ -828,6 +1027,7 @@ async def test_revoke_client_bucket_rate_limit_is_enforced():
         client_id="public",
         client_secret=None,
         token_endpoint_auth_method="none",
+        application_type="native",
         redirect_uris=("http://localhost:7777/callback",),
         client_allowed_scopes=("tool:list",),
         source="dcr",

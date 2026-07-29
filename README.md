@@ -732,6 +732,12 @@ For normal MCP OAuth flows, clients do not need to pass a long `--scopes` list. 
 
 Doris-backed OAuth still does not open prompts, ADBC, FE HTTP profile/monitoring, audit/governance, or performance analytics in this phase unless those paths are separately routed through per-user credentials or given an explicit service-account/admin design.
 
+Dynamic Client Registration requests must include `application_type` as either
+`native` or `web`. Native clients may register a reverse-domain custom-scheme
+redirect URI or loopback HTTP URI; web clients must register a non-loopback
+HTTPS URI. The server persists the application type with the client and uses
+exact redirect URI matching during authorization.
+
 #### Current Operational Limits
 
 Doris-backed OAuth is currently single-process and single-worker:
