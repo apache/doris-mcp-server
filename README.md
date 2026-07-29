@@ -264,8 +264,13 @@ cp .env.example .env
     *   `DORIS_DATABASE`: Default database name (default: information_schema)
     *   `DORIS_MIN_CONNECTIONS`: Minimum connection pool size (default: 5)
     *   `DORIS_MAX_CONNECTIONS`: Maximum connection pool size (default: 20)
-    *   `DORIS_BE_HOSTS`: BE nodes for monitoring (comma-separated, optional - auto-discovery via SHOW BACKENDS if empty)
+    *   `DORIS_FE_HTTP_PORT`: FE HTTP API port for profile, table-size, and monitoring tools (default: 8030)
+    *   `DORIS_BE_HOSTS`: Explicit BE HTTP allowlist for monitoring (comma-separated; BE HTTP metrics are disabled when empty)
     *   `DORIS_BE_WEBSERVER_PORT`: BE webserver port for monitoring tools (default: 8040)
+    *   `DORIS_HTTP_CONNECT_TIMEOUT_SECONDS`: FE/BE HTTP connection timeout (default: 3)
+    *   `DORIS_HTTP_READ_TIMEOUT_SECONDS`: FE/BE HTTP socket read timeout (default: 15)
+    *   `DORIS_HTTP_TOTAL_TIMEOUT_SECONDS`: FE/BE HTTP total timeout (default: 30; hard maximum: 60)
+    *   `DORIS_HTTP_MAX_RESPONSE_BYTES`: FE/BE HTTP response limit (default: 4 MiB; hard maximum: 16 MiB)
     *   `FE_ARROW_FLIGHT_SQL_PORT`: Frontend Arrow Flight SQL port for ADBC (New in v0.5.0)
     *   `BE_ARROW_FLIGHT_SQL_PORT`: Backend Arrow Flight SQL port for ADBC (New in v0.5.0)
 *   **Authentication Configuration (Enhanced in v0.6.0)**:
@@ -1475,21 +1480,21 @@ If you have further requirements for the returned results, you can describe the 
 
 ### Q: How to configure BE nodes for monitoring tools?
 
-**A:** Choose the appropriate configuration based on your deployment scenario:
+**A:** Configure every BE HTTP node that the MCP server may contact:
 
-**External Network (Manual Configuration):**
 ```bash
-# Manually specify BE node addresses
+# Explicitly allow these configured BE nodes
 DORIS_BE_HOSTS=10.1.1.100,10.1.1.101,10.1.1.102
 DORIS_BE_WEBSERVER_PORT=8040
 ```
 
-**Internal Network (Automatic Discovery):**
-```bash
-# Leave BE_HOSTS empty for auto-discovery
-# DORIS_BE_HOSTS=  # Not set or empty
-# System will use 'SHOW BACKENDS' command to get internal IPs
-```
+BE HTTP endpoints are never inferred from `SHOW BACKENDS`: SQL metadata is not
+an outbound HTTP allowlist. If `DORIS_BE_HOSTS` is empty, BE HTTP metrics are
+disabled. FE and BE requests use only configured hosts and ports, pin validated
+DNS results for each request, reject metadata/link-local destinations, disable
+redirects, and enforce connection/read/total timeouts plus a response byte
+limit. Private and loopback addresses remain available for normal internal
+Doris deployments and SSH tunnels.
 
 ### Q: How to use SQL Explain/Profile files with LLM for optimization?
 

@@ -19,7 +19,10 @@
 
 Set ``DORIS_REAL_INTEGRATION=1`` and provide ``DORIS_REAL_HOST``,
 ``DORIS_REAL_USER``, and ``DORIS_REAL_DATABASE``. ``DORIS_REAL_PORT`` defaults
-to 9030 and ``DORIS_REAL_PASSWORD`` may be empty.
+to 9030 and ``DORIS_REAL_PASSWORD`` may be empty. Set
+``DORIS_REAL_HTTP_INTEGRATION=1`` with ``DORIS_REAL_FE_HTTP_PORT``,
+``DORIS_REAL_BE_HOSTS``, and ``DORIS_REAL_BE_WEBSERVER_PORT`` to exercise the
+configured FE/BE HTTP monitoring boundary through both transports.
 """
 
 from __future__ import annotations
@@ -172,7 +175,7 @@ def _server_environment(
     user: str,
     password: str,
 ) -> dict[str, str]:
-    return {
+    environment = {
         **os.environ,
         "DORIS_HOST": settings.host,
         "DORIS_PORT": str(settings.port),
@@ -190,6 +193,16 @@ def _server_environment(
         "LOG_LEVEL": "ERROR",
         "PYTHONUNBUFFERED": "1",
     }
+    fe_http_port = os.getenv("DORIS_REAL_FE_HTTP_PORT", "").strip()
+    if fe_http_port:
+        environment["DORIS_FE_HTTP_PORT"] = fe_http_port
+    be_hosts = os.getenv("DORIS_REAL_BE_HOSTS", "").strip()
+    if be_hosts:
+        environment["DORIS_BE_HOSTS"] = be_hosts
+    be_http_port = os.getenv("DORIS_REAL_BE_WEBSERVER_PORT", "").strip()
+    if be_http_port:
+        environment["DORIS_BE_WEBSERVER_PORT"] = be_http_port
+    return environment
 
 
 def _free_tcp_port() -> int:
@@ -564,6 +577,68 @@ async def test_real_doris_tool_regression_paths(
             doris_sandbox.settings.user in role["users"]
             for role in role_analysis.values()
         )
+
+        recovered_result, recovered_payload = await _exec_query(
+            client,
+            "SELECT 1 AS recovered",
+        )
+        assert recovered_result.is_error is False
+        assert recovered_payload["success"] is True
+        assert recovered_payload["data"][0]["recovered"] == 1
+
+
+@pytest.mark.skipif(
+    os.getenv("DORIS_REAL_HTTP_INTEGRATION") != "1",
+    reason="set DORIS_REAL_HTTP_INTEGRATION=1 with FE/BE HTTP endpoints",
+)
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_configured_monitoring_http_endpoints_and_recovery(
+    transport: str,
+    doris_sandbox: DorisSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    assert environment.get("DORIS_FE_HTTP_PORT")
+    assert environment.get("DORIS_BE_HOSTS")
+    assert environment.get("DORIS_BE_WEBSERVER_PORT")
+
+    async with _transport_client(transport, environment) as client:
+        fe_result = await client.call_tool(
+            "get_monitoring_metrics",
+            {
+                "content_type": "data",
+                "role": "fe",
+                "monitor_type": "all",
+                "priority": "all",
+                "include_raw_metrics": False,
+            },
+        )
+        assert fe_result.is_error is False
+        assert isinstance(fe_result.structured_content, dict)
+        fe_payload = fe_result.structured_content["data"]["fe"]
+        assert fe_payload["success"] is True
+        assert fe_payload["node_type"] == "fe"
+        assert fe_payload["node_info"]["host"] == doris_sandbox.settings.host
+
+        be_result = await client.call_tool(
+            "get_monitoring_metrics",
+            {
+                "content_type": "data",
+                "role": "be",
+                "monitor_type": "all",
+                "priority": "all",
+                "include_raw_metrics": False,
+            },
+        )
+        assert be_result.is_error is False
+        assert isinstance(be_result.structured_content, dict)
+        be_payload = be_result.structured_content["data"]["be"]
+        assert be_payload
+        assert all(node["success"] is True for node in be_payload)
+        assert all(node["node_type"] == "be" for node in be_payload)
 
         recovered_result, recovered_payload = await _exec_query(
             client,

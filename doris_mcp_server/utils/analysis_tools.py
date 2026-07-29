@@ -23,11 +23,12 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List
 import uuid
-import aiohttp
 import hashlib
 from pathlib import Path
+from urllib.parse import quote
 
 from .db import DorisConnectionManager
+from .doris_http_client import DorisHTTPClient
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -879,72 +880,64 @@ class SQLAnalyzer:
             Query ID string or None if not found
         """
         try:
-            # Get database config
             db_config = self.connection_manager.config.database
-            
-            # Build HTTP API URL according to official documentation
-            # Reference: https://doris.apache.org/zh-CN/docs/admin-manual/open-api/fe-http/query-profile-action#通过-trace-id-获取-query-id
-            url = f"http://{db_config.host}:{db_config.fe_http_port}/rest/v2/manager/query/trace_id/{trace_id}"
-            
-            # HTTP Basic Auth
-            auth = aiohttp.BasicAuth(db_config.user, db_config.password)
-            
-            logger.info(f"Requesting query ID from: {url}")
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, auth=auth, timeout=10) as response:
-                    if response.status == 200:
-                        # Check content type first
-                        content_type = response.headers.get('content-type', '')
-                        response_text = await response.text()
-                        logger.info(f"Response content type: {content_type}")
-                        logger.info(
-                            "Query ID response body length: %s",
-                            len(response_text),
-                        )
-                        
-                        # Parse JSON response (regardless of content-type)
-                        if response_text.strip():
-                            try:
-                                import json
-                                result = json.loads(response_text)
-                                logger.info("Query ID API returned JSON")
-                                
-                                # Parse response according to Doris API format
-                                if result.get("code") == 0 and result.get("data"):
-                                    data = result["data"]
-                                    # Data can be either a string (query_id) or object with query_ids
-                                    if isinstance(data, str):
-                                        logger.info(f"Found query ID: {data}")
-                                        return data
-                                    elif isinstance(data, dict) and "query_ids" in data:
-                                        query_ids = data["query_ids"]
-                                        if query_ids:
-                                            query_id = query_ids[0]  # Take the first query ID
-                                            logger.info(f"Found query ID: {query_id}")
-                                            return query_id
-                                        else:
-                                            logger.warning("No query IDs found in response")
-                                else:
-                                    logger.error(f"API returned error: {result}")
-                                    
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Failed to parse JSON response: {e}")
-                                # Fallback: try to extract query ID using regex
-                                import re
-                                query_id_pattern = r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
-                                matches = re.findall(query_id_pattern, response_text)
-                                if matches:
-                                    query_id = matches[0]
-                                    logger.info(f"Extracted query ID from text: {query_id}")
+            http_client = DorisHTTPClient.from_database_config(db_config)
+            response = await http_client.get(
+                role="fe",
+                host=db_config.host,
+                port=db_config.fe_http_port,
+                path=(
+                    "/rest/v2/manager/query/trace_id/"
+                    f"{quote(trace_id, safe='')}"
+                ),
+                headers={"Accept": "application/json"},
+            )
+            if response.status == 200:
+                content_type = response.headers.get("content-type", "")
+                response_text = response.text()
+                logger.info(f"Response content type: {content_type}")
+                logger.info(
+                    "Query ID response body length: %s",
+                    len(response_text),
+                )
+                if response_text.strip():
+                    try:
+                        import json
+
+                        result = json.loads(response_text)
+                        logger.info("Query ID API returned JSON")
+                        if result.get("code") == 0 and result.get("data"):
+                            data = result["data"]
+                            if isinstance(data, str):
+                                logger.info(f"Found query ID: {data}")
+                                return data
+                            if isinstance(data, dict) and "query_ids" in data:
+                                query_ids = data["query_ids"]
+                                if query_ids:
+                                    query_id = query_ids[0]
+                                    logger.info(f"Found query ID: {query_id}")
                                     return query_id
-                    else:
-                        logger.error(f"HTTP request failed with status {response.status}")
-                        response_text = await response.text()
-                        logger.error(
-                            "Query ID response body omitted (length=%s)",
-                            len(response_text),
+                                logger.warning("No query IDs found in response")
+                        else:
+                            logger.error(f"API returned error: {result}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON response: {e}")
+                        import re
+
+                        query_id_pattern = (
+                            r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-"
+                            r"[a-f0-9]{4}-[a-f0-9]{12}"
                         )
+                        matches = re.findall(query_id_pattern, response_text)
+                        if matches:
+                            query_id = matches[0]
+                            logger.info(f"Extracted query ID from text: {query_id}")
+                            return query_id
+            else:
+                logger.error(
+                    "Query ID HTTP request failed with status %s",
+                    response.status,
+                )
             
             return None
             
@@ -963,79 +956,71 @@ class SQLAnalyzer:
             Profile data dict or None if failed
         """
         try:
-            # Get database config
             db_config = self.connection_manager.config.database
-            
-            # Try both API endpoints according to official documentation
-            urls = [
-                f"http://{db_config.host}:{db_config.fe_http_port}/rest/v2/manager/query/profile/text/{query_id}",
-                f"http://{db_config.host}:{db_config.fe_http_port}/api/profile/text?query_id={query_id}"
+            endpoints = [
+                (
+                    "/rest/v2/manager/query/profile/text/"
+                    f"{quote(query_id, safe='')}",
+                    None,
+                ),
+                ("/api/profile/text", {"query_id": query_id}),
             ]
-            
-            # HTTP Basic Auth
-            auth = aiohttp.BasicAuth(db_config.user, db_config.password)
-            
-            for i, url in enumerate(urls):
-                logger.info(f"Requesting profile from URL {i+1}: {url}")
-                
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, auth=auth, timeout=60) as response:
-                        if response.status == 200:
-                            content_type = response.headers.get('content-type', '')
-                            response_text = await response.text()
-                            logger.info(f"Profile response content type: {content_type}")
-                            logger.info(f"Profile response length: {len(response_text)}")
-                            
-                            # Handle JSON response
-                            if 'application/json' in content_type:
-                                try:
-                                    result = await response.json()
-                                    logger.info("Profile API returned JSON")
-                                    
-                                    if result.get("code") == 0 and result.get("data"):
-                                        profile_text = result["data"].get("profile", "")
-                                        return {
-                                            "query_id": query_id,
-                                            "profile_text": profile_text,
-                                            "profile_size": len(profile_text),
-                                            "retrieved_at": datetime.now().isoformat(),
-                                            "api_endpoint": url
-                                        }
-                                    else:
-                                        logger.warning(f"Profile API returned error: {result}")
-                                        continue  # Try next URL
-                                        
-                                except Exception as e:
-                                    logger.error(f"Failed to parse profile JSON: {e}")
-                                    continue
-                            
-                            # Handle plain text response
-                            else:
-                                if response_text.strip() and "not found" not in response_text.lower():
-                                    return {
-                                        "query_id": query_id,
-                                        "profile_text": response_text,
-                                        "profile_size": len(response_text),
-                                        "retrieved_at": datetime.now().isoformat(),
-                                        "api_endpoint": url
-                                    }
-                                else:
-                                    logger.warning(
-                                        "Profile not found or empty"
-                                    )
-                                    continue  # Try next URL
-                        
-                        elif response.status == 404:
-                            logger.warning(f"Profile not found (404) at {url}")
-                            continue  # Try next URL
-                        else:
-                            logger.error(f"Profile HTTP request failed with status {response.status} at {url}")
-                            response_text = await response.text()
-                            logger.error(
-                                "Profile response body omitted (length=%s)",
-                                len(response_text),
-                            )
-                            continue  # Try next URL
+            http_client = DorisHTTPClient.from_database_config(db_config)
+            for i, (path, params) in enumerate(endpoints):
+                logger.info("Requesting profile from configured FE endpoint %s", i + 1)
+                response = await http_client.get(
+                    role="fe",
+                    host=db_config.host,
+                    port=db_config.fe_http_port,
+                    path=path,
+                    params=params,
+                    headers={"Accept": "application/json, text/plain"},
+                )
+                if response.status == 200:
+                    content_type = response.headers.get("content-type", "")
+                    response_text = response.text()
+                    logger.info(f"Profile response content type: {content_type}")
+                    logger.info(f"Profile response length: {len(response_text)}")
+                    if "application/json" in content_type:
+                        try:
+                            import json
+
+                            result = json.loads(response_text)
+                            logger.info("Profile API returned JSON")
+                            if result.get("code") == 0 and result.get("data"):
+                                profile_text = result["data"].get("profile", "")
+                                return {
+                                    "query_id": query_id,
+                                    "profile_text": profile_text,
+                                    "profile_size": len(profile_text),
+                                    "retrieved_at": datetime.now().isoformat(),
+                                    "api_endpoint": response.url,
+                                }
+                            logger.warning(f"Profile API returned error: {result}")
+                            continue
+                        except Exception as e:
+                            logger.error(f"Failed to parse profile JSON: {e}")
+                            continue
+                    if (
+                        response_text.strip()
+                        and "not found" not in response_text.lower()
+                    ):
+                        return {
+                            "query_id": query_id,
+                            "profile_text": response_text,
+                            "profile_size": len(response_text),
+                            "retrieved_at": datetime.now().isoformat(),
+                            "api_endpoint": response.url,
+                        }
+                    logger.warning("Profile not found or empty")
+                    continue
+                if response.status == 404:
+                    logger.warning("Profile not found (404)")
+                    continue
+                logger.error(
+                    "Profile HTTP request failed with status %s",
+                    response.status,
+                )
             
             return None
             
@@ -1061,14 +1046,7 @@ class SQLAnalyzer:
             Dict containing table data size information
         """
         try:
-            # Get database config
             db_config = self.connection_manager.config.database
-            
-            # Build HTTP API URL according to official documentation
-            # Reference: https://doris.apache.org/zh-CN/docs/admin-manual/open-api/fe-http/show-table-data-action
-            url = f"http://{db_config.host}:{db_config.fe_http_port}/api/show_table_data"
-            
-            # Build query parameters
             params = {}
             if db_name:
                 params["db"] = db_name
@@ -1076,72 +1054,76 @@ class SQLAnalyzer:
                 params["table"] = table_name
             if single_replica:
                 params["single_replica"] = "true"
-            
-            # HTTP Basic Auth
-            auth = aiohttp.BasicAuth(db_config.user, db_config.password)
-            
-            logger.info(f"Requesting table data size from: {url} with params: {params}")
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, auth=auth, params=params, timeout=30) as response:
-                    if response.status == 200:
-                        response_text = await response.text()
-                        logger.info(f"Table data size response length: {len(response_text)}")
-                        
-                        try:
-                            # Parse JSON response
-                            import json
-                            result = json.loads(response_text)
-                            
-                            if result.get("code") == 0 and result.get("data"):
-                                data = result["data"]
-                                
-                                # Process and format the data
-                                formatted_data = self._format_table_data_size(data, db_name, table_name, single_replica)
-                                
-                                return {
-                                    "success": True,
-                                    "db_name": db_name,
-                                    "table_name": table_name,
-                                    "single_replica": single_replica,
-                                    "timestamp": datetime.now().isoformat(),
-                                    "data": formatted_data,
-                                    "url": url,
-                                    "note": "Table data size information from Doris FE HTTP API"
-                                }
-                            else:
-                                return {
-                                    "success": False,
-                                    "error": f"API returned error: {result}",
-                                    "db_name": db_name,
-                                    "table_name": table_name,
-                                    "url": url,
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                                
-                        except json.JSONDecodeError as e:
-                            logger.error(f"Failed to parse JSON response: {e}")
-                            return {
-                                "success": False,
-                                "error": f"Failed to parse JSON response: {e}",
-                                "response_text": response_text[:500],  # First 500 chars for debugging
-                                "url": url,
-                                "timestamp": datetime.now().isoformat()
-                            }
-                    else:
-                        logger.error(f"HTTP request failed with status {response.status}")
-                        response_text = await response.text()
-                        logger.error(
-                            "Table size response body omitted (length=%s)",
-                            len(response_text),
+            logger.info(
+                "Requesting table data size from configured FE endpoint with params: %s",
+                params,
+            )
+            http_client = DorisHTTPClient.from_database_config(db_config)
+            response = await http_client.get(
+                role="fe",
+                host=db_config.host,
+                port=db_config.fe_http_port,
+                path="/api/show_table_data",
+                params=params,
+                headers={"Accept": "application/json"},
+            )
+            if response.status == 200:
+                response_text = response.text()
+                logger.info(
+                    "Table data size response length: %s",
+                    len(response_text),
+                )
+                try:
+                    import json
+
+                    result = json.loads(response_text)
+                    if result.get("code") == 0 and result.get("data"):
+                        data = result["data"]
+                        formatted_data = self._format_table_data_size(
+                            data,
+                            db_name,
+                            table_name,
+                            single_replica,
                         )
                         return {
-                            "success": False,
-                            "error": f"HTTP request failed with status {response.status}",
-                            "response_text": response_text[:500],  # First 500 chars for debugging
-                            "url": url,
-                            "timestamp": datetime.now().isoformat()
+                            "success": True,
+                            "db_name": db_name,
+                            "table_name": table_name,
+                            "single_replica": single_replica,
+                            "timestamp": datetime.now().isoformat(),
+                            "data": formatted_data,
+                            "url": response.url,
+                            "note": (
+                                "Table data size information from Doris FE "
+                                "HTTP API"
+                            ),
                         }
+                    return {
+                        "success": False,
+                        "error": f"API returned error: {result}",
+                        "db_name": db_name,
+                        "table_name": table_name,
+                        "url": response.url,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse JSON response: {e}")
+                    return {
+                        "success": False,
+                        "error": f"Failed to parse JSON response: {e}",
+                        "url": response.url,
+                        "timestamp": datetime.now().isoformat(),
+                    }
+            logger.error(
+                "Table data size HTTP request failed with status %s",
+                response.status,
+            )
+            return {
+                "success": False,
+                "error": f"HTTP request failed with status {response.status}",
+                "url": response.url,
+                "timestamp": datetime.now().isoformat(),
+            }
                         
         except Exception as e:
             logger.error(f"Table data size request failed: {str(e)}")
