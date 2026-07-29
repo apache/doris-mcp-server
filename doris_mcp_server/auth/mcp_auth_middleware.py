@@ -17,16 +17,11 @@
 # under the License.
 """Shared ASGI authentication middleware for MCP HTTP routes."""
 
-from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qs
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from starlette.responses import JSONResponse
 
-from .doris_oauth_handlers import (
-    insufficient_scope_response,
-    protected_resource_error_response,
-)
-from .operation_policy import OperationAuthorizationError
 from ..utils.config import EffectiveAuthConfig
 from ..utils.logger import get_logger
 from ..utils.security import (
@@ -35,7 +30,11 @@ from ..utils.security import (
     reset_auth_context,
     set_current_auth_context,
 )
-
+from .doris_oauth_handlers import (
+    insufficient_scope_response,
+    protected_resource_error_response,
+)
+from .operation_policy import OperationAuthorizationError
 
 ASGIApp = Callable[[dict[str, Any], Callable[..., Awaitable[Any]], Callable[..., Awaitable[Any]]], Awaitable[Any]]
 logger = get_logger(__name__)
@@ -57,13 +56,6 @@ async def extract_auth_info_from_scope(scope: dict[str, Any]) -> dict[str, Any]:
         auth_info["token"] = authorization[7:]
     elif authorization.startswith("Token "):
         auth_info["token"] = authorization[6:]
-    else:
-        query_string = scope.get("query_string", b"")
-        if query_string:
-            query_params = parse_qs(query_string.decode("utf-8", errors="ignore"))
-            token_values = query_params.get("token") or []
-            if token_values:
-                auth_info["token"] = token_values[0]
     return auth_info
 
 

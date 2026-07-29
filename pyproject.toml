@@ -42,7 +42,7 @@ classifiers = [
 
 dependencies = [
     # Core MCP dependencies
-    "mcp>=1.8.0,<2.0.0",
+    "mcp>=2.0.0,<2.1.0",
     # Database drivers
     "aiomysql>=0.2.0",
     "PyMySQL>=1.1.0",
@@ -152,13 +152,14 @@ Changelog = "https://github.com/apache/doris-mcp-server/blob/main/CHANGELOG.md"
 
 [project.scripts]
 doris-mcp-server = "doris_mcp_server.main:main_sync"
-doris-mcp-client = "doris_mcp_server.client:main"
+doris-mcp-client = "doris_mcp_client.client:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["doris_mcp_server"]
+packages = ["doris_mcp_server", "doris_mcp_client"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "/doris_mcp_client",
     "/doris_mcp_server",
     "/README.md",
     "/LICENSE",
@@ -226,7 +227,7 @@ addopts = [
     "--cov-report=html",
     "--cov-report=xml",
 ]
-testpaths = ["tests"]
+testpaths = ["test"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -297,4 +298,3 @@ ignore = [
 dev = [
     "ruff>=0.11.13",
 ]
- 

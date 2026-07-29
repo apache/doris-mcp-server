@@ -5,8 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 import mcp.types as mcp_types
 import pytest
 
-from doris_mcp_server.auth.operation_policy import HIGH_RISK_TOOLS, OperationAuthorizationError, authorize_operation
-from doris_mcp_server.main import DorisServer, Server
+from doris_mcp_server.auth.operation_policy import (
+    HIGH_RISK_TOOLS,
+    OperationAuthorizationError,
+)
+from doris_mcp_server.protocol import create_doris_mcp_server
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
 from doris_mcp_server.utils.db import QueryResult
@@ -478,8 +481,7 @@ async def test_missing_auth_context_keeps_legacy_dispatch_compatible():
 
 
 def _server_with_mock_managers():
-    server = object.__new__(DorisServer)
-    server.server = Server("test-doris-mcp-server")
+    server = SimpleNamespace()
     server.resources_manager = MagicMock()
     server.resources_manager.list_resources = AsyncMock(return_value=[])
     server.resources_manager.read_resource = AsyncMock(return_value="{}")
@@ -487,23 +489,39 @@ def _server_with_mock_managers():
     server.prompts_manager.list_prompts = AsyncMock(return_value=[])
     server.prompts_manager.get_prompt = AsyncMock(return_value="prompt")
     server.tools_manager = MagicMock()
+    server.tools_manager.list_tools = AsyncMock(return_value=[])
+    server.tools_manager.call_tool = AsyncMock(return_value="{}")
     server.logger = MagicMock()
-    DorisServer._setup_handlers(server)
+    server.server = create_doris_mcp_server(
+        resources_manager=server.resources_manager,
+        tools_manager=server.tools_manager,
+        prompts_manager=server.prompts_manager,
+        name="test-doris-mcp-server",
+        version="0.6.1",
+        logger=server.logger,
+    )
     return server
 
 
-def _handler_request(operation):
-    if operation == "list_resources":
-        return mcp_types.ListResourcesRequest(method="resources/list")
-    if operation == "read_resource":
-        return SimpleNamespace(params=SimpleNamespace(uri="doris://tables"))
-    if operation == "list_prompts":
-        return mcp_types.ListPromptsRequest(method="prompts/list")
-    if operation == "get_prompt":
-        return SimpleNamespace(
-            params=SimpleNamespace(name="query_analysis", arguments={})
-        )
-    raise AssertionError(f"Unexpected operation: {operation}")
+async def _invoke_protocol_handler(server, operation):
+    method, params = {
+        "list_resources": ("resources/list", None),
+        "read_resource": (
+            "resources/read",
+            mcp_types.ReadResourceRequestParams(uri="doris://tables"),
+        ),
+        "list_prompts": ("prompts/list", None),
+        "get_prompt": (
+            "prompts/get",
+            mcp_types.GetPromptRequestParams(
+                name="query_analysis",
+                arguments={},
+            ),
+        ),
+    }[operation]
+    entry = server.server.get_request_handler(method)
+    assert entry is not None
+    return await entry.handler(None, params)
 
 
 def _manager_mock_for_operation(server, operation):
@@ -512,15 +530,6 @@ def _manager_mock_for_operation(server, operation):
         "read_resource": server.resources_manager.read_resource,
         "list_prompts": server.prompts_manager.list_prompts,
         "get_prompt": server.prompts_manager.get_prompt,
-    }[operation]
-
-
-def _handler_type_for_operation(operation):
-    return {
-        "list_resources": mcp_types.ListResourcesRequest,
-        "read_resource": mcp_types.ReadResourceRequest,
-        "list_prompts": mcp_types.ListPromptsRequest,
-        "get_prompt": mcp_types.GetPromptRequest,
     }[operation]
 
 
@@ -540,9 +549,7 @@ async def test_doris_oauth_resources_real_handler_calls_manager_with_matching_sc
     token = set_current_auth_context(doris_context([scope]))
 
     try:
-        await server.server.request_handlers[_handler_type_for_operation(operation)](
-            _handler_request(operation)
-        )
+        await _invoke_protocol_handler(server, operation)
     finally:
         reset_auth_context(token)
 
@@ -569,23 +576,18 @@ async def test_doris_oauth_resources_real_handler_propagates_manager_errors(
 
     try:
         with pytest.raises(RuntimeError, match=f"{operation} backend failed"):
-            await server.server.request_handlers[_handler_type_for_operation(operation)](
-                _handler_request(operation)
-            )
+            await _invoke_protocol_handler(server, operation)
     finally:
         reset_auth_context(token)
 
 
 @pytest.mark.asyncio
-async def test_legacy_list_resources_handler_keeps_empty_list_compatibility():
+async def test_list_resources_handler_propagates_backend_failure():
     server = _server_with_mock_managers()
     server.resources_manager.list_resources.side_effect = RuntimeError("legacy backend failed")
 
-    result = await server.server.request_handlers[mcp_types.ListResourcesRequest](
-        mcp_types.ListResourcesRequest(method="resources/list")
-    )
-
-    assert result.root.resources == []
+    with pytest.raises(RuntimeError, match="legacy backend failed"):
+        await _invoke_protocol_handler(server, "list_resources")
 
 
 @pytest.mark.parametrize(
@@ -608,9 +610,7 @@ async def test_doris_oauth_prompts_real_handler_rejected_before_manager(
 
     try:
         with pytest.raises(OperationAuthorizationError) as exc:
-            await server.server.request_handlers[_handler_type_for_operation(operation)](
-                _handler_request(operation)
-            )
+            await _invoke_protocol_handler(server, operation)
     finally:
         reset_auth_context(token)
 

@@ -24,193 +24,14 @@ Supports both stdio and streamable HTTP startup modes
 
 import argparse
 import asyncio
-import json
 import logging
+import os
 import sys
-from typing import Any
 
-# MCP version compatibility handling
-MCP_VERSION = 'unknown'
-Server = None
-InitializationOptions = None
-Prompt = None
-Resource = None
-TextContent = None
-Tool = None
-
-def _import_mcp_with_compatibility():
-    """Import MCP components with multi-version compatibility"""
-    global MCP_VERSION, Server, InitializationOptions, Prompt, Resource, TextContent, Tool
-    
-    try:
-        # Strategy 1: Try direct server-only imports to avoid client-side issues
-        from mcp.server import Server as _Server
-        from mcp.server.models import InitializationOptions as _InitOptions
-        from mcp.types import (
-            Prompt as _Prompt,
-            Resource as _Resource, 
-            TextContent as _TextContent,
-            Tool as _Tool,
-        )
-        
-        # Assign to globals
-        Server = _Server
-        InitializationOptions = _InitOptions
-        Prompt = _Prompt
-        Resource = _Resource
-        TextContent = _TextContent
-        Tool = _Tool
-        
-        # Try to get version safely
-        try:
-            import mcp
-            MCP_VERSION = getattr(mcp, '__version__', None)
-            if not MCP_VERSION:
-                # Fallback: try to get version from package metadata
-                try:
-                    import importlib.metadata
-                    MCP_VERSION = importlib.metadata.version('mcp')
-                except Exception:
-                    # Second fallback: try pkg_resources
-                    try:
-                        import pkg_resources
-                        MCP_VERSION = pkg_resources.get_distribution('mcp').version
-                    except Exception:
-                        MCP_VERSION = 'detected-but-version-unknown'
-        except Exception:
-            # Version detection failed, but imports worked
-            try:
-                import importlib.metadata
-                MCP_VERSION = importlib.metadata.version('mcp')
-            except Exception:
-                try:
-                    import pkg_resources
-                    MCP_VERSION = pkg_resources.get_distribution('mcp').version
-                except Exception:
-                    MCP_VERSION = 'imported-successfully'
-            
-        logger = logging.getLogger(__name__)
-        logger.info(f"MCP components imported successfully, version: {MCP_VERSION}")
-        return True
-        
-    except Exception as import_error:
-        logger = logging.getLogger(__name__)
-        
-        # Strategy 2: Handle RequestContext compatibility issues in 1.9.x versions
-        error_str = str(import_error).lower()
-        if 'requestcontext' in error_str and 'too few arguments' in error_str:
-            logger.warning(f"Detected MCP RequestContext compatibility issue: {import_error}")
-            logger.info("Attempting comprehensive workaround for MCP 1.9.x RequestContext issue...")
-            
-            try:
-                # Comprehensive monkey patch approach
-                import sys
-                import types
-                
-                # Create and install mock modules before any MCP imports
-                if 'mcp.shared.context' not in sys.modules:
-                    mock_context_module = types.ModuleType('mcp.shared.context')
-                    
-                    class FlexibleRequestContext:
-                        """Flexible RequestContext that accepts variable arguments"""
-                        def __init__(self, *args, **kwargs):
-                            self.args = args
-                            self.kwargs = kwargs
-                        
-                        def __class_getitem__(cls, params):
-                            # Accept any number of parameters and return cls
-                            return cls
-                        
-                        # Add other methods that might be called
-                        def __getattr__(self, name):
-                            return lambda *args, **kwargs: None
-                    
-                    mock_context_module.RequestContext = FlexibleRequestContext
-                    sys.modules['mcp.shared.context'] = mock_context_module
-                
-                # Also patch the typing system to be more permissive  
-                original_check_generic = None
-                try:
-                    import typing
-                    if hasattr(typing, '_check_generic'):
-                        original_check_generic = typing._check_generic
-                        def permissive_check_generic(cls, params, elen):
-                            # Don't enforce strict parameter count checking
-                            return
-                        typing._check_generic = permissive_check_generic
-                except Exception:
-                    pass
-                
-                # Clear any cached imports that might have failed
-                modules_to_clear = [k for k in sys.modules.keys() if k.startswith('mcp.')]
-                for module in modules_to_clear:
-                    if module in sys.modules:
-                        del sys.modules[module]
-                
-                # Now try importing again with the patches in place
-                from mcp.server import Server as _Server
-                from mcp.server.models import InitializationOptions as _InitOptions
-                from mcp.types import (
-                    Prompt as _Prompt,
-                    Resource as _Resource, 
-                    TextContent as _TextContent,
-                    Tool as _Tool,
-                )
-                
-                # Assign to globals
-                Server = _Server
-                InitializationOptions = _InitOptions
-                Prompt = _Prompt
-                Resource = _Resource
-                TextContent = _TextContent
-                Tool = _Tool
-                
-                # Try to detect actual version even in compatibility mode
-                try:
-                    import importlib.metadata
-                    actual_version = importlib.metadata.version('mcp')
-                    MCP_VERSION = f'compatibility-mode-{actual_version}'
-                except Exception:
-                    try:
-                        import pkg_resources
-                        actual_version = pkg_resources.get_distribution('mcp').version
-                        MCP_VERSION = f'compatibility-mode-{actual_version}'
-                    except Exception:
-                        MCP_VERSION = 'compatibility-mode-1.9.x'
-                
-                logger.info("MCP 1.9.x compatibility workaround successful!")
-                
-                # Restore original typing function if we patched it
-                if original_check_generic:
-                    typing._check_generic = original_check_generic
-                
-                return True
-                
-            except Exception as workaround_error:
-                logger.error(f"MCP compatibility workaround failed: {workaround_error}")
-                
-                # Restore original typing function if we patched it
-                if original_check_generic:
-                    try:
-                        import typing
-                        typing._check_generic = original_check_generic
-                    except Exception:
-                        pass
-        
-        logger.error(f"Failed to import MCP components: {import_error}")
-        return False
-
-# Perform MCP import with compatibility handling
-if not _import_mcp_with_compatibility():
-    raise ImportError(
-        "Failed to import MCP components. Please ensure MCP is properly installed. "
-        "Supported versions: 1.8.x, 1.9.x"
-    )
-
-from .tools.tools_manager import DorisToolsManager
+from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
-from .auth.operation_policy import OperationAuthorizationError, authorize_operation
+from .tools.tools_manager import DorisToolsManager
 from .utils.config import (
     DorisConfig,
     _mark_source,
@@ -218,14 +39,36 @@ from .utils.config import (
     normalize_effective_auth_config,
 )
 from .utils.db import DorisConnectionManager
-from .utils.security import DorisSecurityManager, get_current_auth_context
-import os
+from .utils.security import DorisSecurityManager
 
 # Configure logging - will be properly initialized later
 logger = logging.getLogger(__name__)
 
 # Create a default config instance for getting default values
 _default_config = DorisConfig()
+
+
+def _multiworker_environment(
+    config: DorisConfig,
+    *,
+    host: str,
+    port: int,
+    workers: int,
+) -> dict[str, str]:
+    """Serialize resolved parent settings inherited by Uvicorn workers."""
+    return {
+        "DORIS_HOST": config.database.host,
+        "DORIS_PORT": str(config.database.port),
+        "DORIS_USER": config.database.user,
+        "DORIS_PASSWORD": config.database.password,
+        "DORIS_DATABASE": config.database.database,
+        "SERVER_HOST": host,
+        "SERVER_PORT": str(port),
+        "SERVER_NAME": config.server_name,
+        "SERVER_VERSION": config.server_version,
+        "TRANSPORT": "http",
+        "WORKERS": str(workers),
+    }
 
 
 
@@ -235,7 +78,6 @@ class DorisServer:
 
     def __init__(self, config: DorisConfig):
         self.config = config
-        self.server = Server("doris-mcp-server")
 
         # Initialize security manager (without connection_manager initially)
         self.security_manager = DorisSecurityManager(config)
@@ -256,201 +98,14 @@ class DorisServer:
         # Import here to avoid circular imports
         from .utils.logger import get_logger
         self.logger = get_logger(f"{__name__}.DorisServer")
-        self._setup_handlers()
-
-    async def _extract_auth_info_from_scope(self, scope, headers):
-        """Extract authentication information from ASGI scope and headers"""
-        auth_info = {}
-        
-        # Extract client IP
-        client = scope.get("client")
-        if client:
-            auth_info["client_ip"] = client[0]
-        else:
-            auth_info["client_ip"] = "unknown"
-        
-        # Extract token from Authorization header
-        authorization = headers.get(b'authorization', b'').decode('utf-8')
-        if authorization:
-            if authorization.startswith('Bearer '):
-                auth_info["token"] = authorization[7:]
-                auth_info["authorization"] = authorization
-            elif authorization.startswith('Token '):
-                auth_info["token"] = authorization[6:]
-                auth_info["authorization"] = authorization
-        
-        # Extract token from query parameters (for compatibility)
-        query_string = scope.get("query_string", b"").decode('utf-8')
-        if query_string and "token=" in query_string:
-            import urllib.parse
-            query_params = urllib.parse.parse_qs(query_string)
-            if "token" in query_params:
-                auth_info["token"] = query_params["token"][0]
-        
-        # If no token found, this will be handled by the authentication system
-        # (either return anonymous context if auth disabled, or raise error if auth enabled)
-        
-        return auth_info
-
-    def _get_mcp_capabilities(self):
-        """Get MCP capabilities with version compatibility"""
-        try:
-            # For MCP 1.9.x and newer
-            from mcp.server.lowlevel.server import NotificationOptions
-            
-            return self.server.get_capabilities(
-                notification_options=NotificationOptions(
-                    prompts_changed=True,
-                    resources_changed=True,
-                    tools_changed=True
-                ),
-                experimental_capabilities={}
-            )
-        except TypeError:
-            try:
-                # For MCP 1.8.x
-                from mcp.server.lowlevel.server import NotificationOptions
-                
-                return self.server.get_capabilities(
-                    notification_options=NotificationOptions(
-                        prompts_changed=True,
-                        resources_changed=True,
-                        tools_changed=True
-                    ),
-                    experimental_capabilities={}
-                )
-            except Exception as e:
-                self.logger.warning(f"Could not get capabilities with NotificationOptions: {e}")
-                # Fallback for older versions
-                try:
-                    return self.server.get_capabilities()
-                except Exception as fallback_e:
-                    self.logger.error(f"Failed to get capabilities: {fallback_e}")
-                    # Return minimal capabilities
-                    return {
-                        "resources": {},
-                        "tools": {},
-                        "prompts": {}
-                    }
-
-    def _setup_handlers(self):
-        """Setup MCP protocol handlers"""
-
-        @self.server.list_resources()
-        async def handle_list_resources() -> list[Resource]:
-            """Handle resource list request"""
-            try:
-                authorize_operation(get_current_auth_context(), "list_resources")
-                self.logger.info("Handling resource list request")
-                resources = await self.resources_manager.list_resources()
-                self.logger.info(f"Returning {len(resources)} resources")
-                return resources
-            except OperationAuthorizationError:
-                raise
-            except Exception as e:
-                self.logger.error(f"Failed to handle resource list request: {e}")
-                if getattr(get_current_auth_context(), "auth_method", "") == "doris_oauth":
-                    raise
-                return []
-
-        @self.server.read_resource()
-        async def handle_read_resource(uri: str) -> str:
-            """Handle resource read request"""
-            try:
-                authorize_operation(get_current_auth_context(), "read_resource")
-                self.logger.info(f"Handling resource read request: {uri}")
-                content = await self.resources_manager.read_resource(uri)
-                return content
-            except OperationAuthorizationError:
-                raise
-            except Exception as e:
-                self.logger.error(f"Failed to handle resource read request: {e}")
-                if getattr(get_current_auth_context(), "auth_method", "") == "doris_oauth":
-                    raise
-                return json.dumps(
-                    {"error": f"Failed to read resource: {str(e)}", "uri": uri},
-                    ensure_ascii=False,
-                    indent=2,
-                )
-
-        @self.server.list_tools()
-        async def handle_list_tools() -> list[Tool]:
-            """Handle tool list request"""
-            try:
-                authorize_operation(get_current_auth_context(), "list_tools")
-                self.logger.info("Handling tool list request")
-                tools = await self.tools_manager.list_tools()
-                self.logger.info(f"Returning {len(tools)} tools")
-                return tools
-            except OperationAuthorizationError:
-                raise
-            except Exception as e:
-                self.logger.error(f"Failed to handle tool list request: {e}")
-                return []
-
-        @self.server.call_tool()
-        async def handle_call_tool(
-            name: str, arguments: dict[str, Any]
-        ) -> list[TextContent]:
-            """Handle tool call request"""
-            try:
-                self.logger.info(f"Handling tool call request: {name}")
-                result = await self.tools_manager.call_tool(name, arguments)
-
-                return [TextContent(type="text", text=result)]
-            except OperationAuthorizationError:
-                raise
-            except Exception as e:
-                self.logger.error(f"Failed to handle tool call request: {e}")
-                error_result = json.dumps(
-                    {
-                        "error": f"Tool call failed: {str(e)}",
-                        "tool_name": name,
-                        "arguments": arguments,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-
-                return [TextContent(type="text", text=error_result)]
-
-        @self.server.list_prompts()
-        async def handle_list_prompts() -> list[Prompt]:
-            """Handle prompt list request"""
-            try:
-                authorize_operation(get_current_auth_context(), "list_prompts")
-                self.logger.info("Handling prompt list request")
-                prompts = await self.prompts_manager.list_prompts()
-                self.logger.info(f"Returning {len(prompts)} prompts")
-                return prompts
-            except OperationAuthorizationError:
-                raise
-            except Exception as e:
-                self.logger.error(f"Failed to handle prompt list request: {e}")
-                return []
-
-        @self.server.get_prompt()
-        async def handle_get_prompt(name: str, arguments: dict[str, Any]) -> str:
-            """Handle prompt get request"""
-            try:
-                authorize_operation(get_current_auth_context(), "get_prompt")
-                self.logger.info(f"Handling prompt get request: {name}")
-                result = await self.prompts_manager.get_prompt(name, arguments)
-                return result
-            except OperationAuthorizationError:
-                raise
-            except Exception as e:
-                self.logger.error(f"Failed to handle prompt get request: {e}")
-                error_result = json.dumps(
-                    {
-                        "error": f"Failed to get prompt: {str(e)}",
-                        "prompt_name": name,
-                        "arguments": arguments,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                )
-                return error_result
+        self.server = create_doris_mcp_server(
+            resources_manager=self.resources_manager,
+            tools_manager=self.tools_manager,
+            prompts_manager=self.prompts_manager,
+            name=config.server_name,
+            version=config.server_version,
+            logger=self.logger,
+        )
 
     async def start_stdio(self):
         """Start stdio transport mode"""
@@ -465,16 +120,7 @@ class DorisServer:
             # Use the dedicated stdio mode initialization method
             await self.connection_manager.initialize_for_stdio_mode()
 
-            # Start stdio server - using compatible import approach
-            try:
-                from mcp.server.stdio import stdio_server
-            except ImportError:
-                # Fallback for different MCP versions
-                try:
-                    from mcp.server import stdio_server
-                except ImportError as stdio_import_error:
-                    self.logger.error(f"Failed to import stdio_server: {stdio_import_error}")
-                    raise RuntimeError("stdio_server module not available in this MCP version")
+            from mcp.server.stdio import stdio_server
             
             self.logger.info("Creating stdio_server transport...")
             
@@ -484,19 +130,13 @@ class DorisServer:
                     read_stream, write_stream = streams
                     self.logger.info("stdio_server streams created successfully")
                     
-                    # Create initialization options with version compatibility
-                    capabilities = self._get_mcp_capabilities()
-                    
-                    init_options = InitializationOptions(
-                        server_name="doris-mcp-server",
-                        server_version=os.getenv("SERVER_VERSION", _default_config.server_version),
-                        capabilities=capabilities,
-                    )
-                    self.logger.info("Initialization options created successfully")
-                    
                     # Run server
                     self.logger.info("Starting to run MCP server...")
-                    await self.server.run(read_stream, write_stream, init_options)
+                    await self.server.run(
+                        read_stream,
+                        write_stream,
+                        self.server.create_initialization_options(),
+                    )
                     
             except Exception as inner_e:
                 self.logger.error(f"stdio_server internal error: {inner_e}")
@@ -544,23 +184,22 @@ class DorisServer:
                     )
                 self.logger.info("HTTP mode running without global database pool, will use token-bound configurations")
 
-            # Use Starlette and StreamableHTTPSessionManager according to official example
-            import uvicorn
+            # Use the SDK v2 dual-era Streamable HTTP manager.
             import contextlib
             from collections.abc import AsyncIterator
+
+            import uvicorn
             from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
             from starlette.applications import Starlette
-            from starlette.routing import Route
             from starlette.responses import JSONResponse, Response
-            from starlette.types import Scope
-            from starlette.middleware.cors import CORSMiddleware
-            from .auth.mcp_cors import mcp_cors_preflight_response, send_with_mcp_cors
-            
+            from starlette.routing import Route
+
             # Create session manager
             session_manager = StreamableHTTPSessionManager(
                 app=self.server,
-                json_response=True,  # Enable JSON response
-                stateless=False  # Maintain session state
+                json_response=True,
+                stateless=True,
+                security_settings=create_transport_security(host),
             )
             
             self.logger.info(f"StreamableHTTP session manager created, will start at http://{host}:{port}")
@@ -646,7 +285,7 @@ class DorisServer:
 
             # Create ASGI application - use direct session manager as ASGI app
             starlette_app = Starlette(
-                debug=True,
+                debug=False,
                 routes=routes,
                 lifespan=lifespan,
             )
@@ -655,27 +294,6 @@ class DorisServer:
 
             async def authenticated_mcp_downstream(scope, receive, send):
                 """Handle authenticated MCP request after auth context is set."""
-                method = scope.get("method", "UNKNOWN")
-                headers = dict(scope.get("headers", []))
-
-                # Handle Dify compatibility for GET requests
-                if method == "GET":
-                    accept_header = headers.get(b'accept', b'').decode('utf-8')
-
-                    # For other GET requests, try to add application/json to Accept header
-                    if 'text/event-stream' in accept_header and 'application/json' not in accept_header:
-                        self.logger.info("Adding application/json to Accept header for GET request")
-                        new_headers = []
-                        for name, value in scope.get("headers", []):
-                            if name == b'accept':
-                                new_value = value.decode('utf-8') + ', application/json'
-                                new_headers.append((name, new_value.encode('utf-8')))
-                            else:
-                                new_headers.append((name, value))
-                        scope = dict(scope)
-                        scope["headers"] = new_headers
-                        self.logger.info(f"Modified Accept header to: {new_value}")
-
                 await session_manager.handle_request(scope, receive, send)
 
             mcp_auth_middleware = MCPAuthASGIMiddleware(
@@ -684,16 +302,7 @@ class DorisServer:
                 effective_auth,
             )
 
-            # Add CORS middleware allowing all origins
-            starlette_app.add_middleware(
-                CORSMiddleware,
-                allow_origins=["*"],
-                allow_credentials=True,
-                allow_methods=["*"],
-                allow_headers=["*"],
-            )
-            
-            # Custom ASGI app that handles both /mcp and /mcp/ without redirects
+            # Custom ASGI app that keeps auxiliary routes outside MCP auth.
             async def mcp_app(scope, receive, send):
                 # Handle lifespan events
                 if scope["type"] == "lifespan":
@@ -722,18 +331,9 @@ class DorisServer:
                             await starlette_app(scope, receive, send)
                             return
                         
-                        # Handle MCP requests - both /mcp and /mcp/ go to session manager
-                        if path == "/mcp" or path.startswith("/mcp/"):
+                        if path == "/mcp":
                             self.logger.info(f"Handling MCP request for path: {path}")
-                            method = scope.get("method", "UNKNOWN")
-                            if method == "OPTIONS":
-                                response = mcp_cors_preflight_response(scope)
-                                await response(scope, receive, send)
-                                return
-                            async def send_with_cors(message):
-                                await send_with_mcp_cors(scope, send, message)
-
-                            await mcp_auth_middleware(scope, receive, send_with_cors)
+                            await mcp_auth_middleware(scope, receive, send)
                             return
                         
                         # 404 for other paths
@@ -755,7 +355,19 @@ class DorisServer:
             if workers > 1:
                 self.logger.info(f"Using multi-process mode with {workers} workers")
                 self.logger.info("Note: Multi-worker mode provides full MCP functionality with independent worker processes")
-                
+
+                # Uvicorn workers import ``multiworker_app`` in fresh processes.
+                # Persist the already-resolved parent configuration so CLI
+                # overrides are not lost when each child calls ``from_env()``.
+                os.environ.update(
+                    _multiworker_environment(
+                        self.config,
+                        host=host,
+                        port=port,
+                        workers=workers,
+                    )
+                )
+
                 # Use the dedicated multiworker app module with full MCP support
                 uvicorn.run(
                     "doris_mcp_server.multiworker_app:app",
@@ -818,7 +430,7 @@ def create_arg_parser():
         epilog="""
 Transport Modes:
   stdio    - Standard input/output (for local process communication)
-  http     - Streamable HTTP mode (MCP 2025-03-26 protocol)
+  http     - Streamable HTTP mode (MCP 2026-07-28 with legacy compatibility)
 
 Examples:
   python -m doris_mcp_server --transport stdio

@@ -34,16 +34,23 @@ Usage:
     pytest test/security/test_sql_injection_api.py -v --no-cov
 """
 
-import pytest
-import httpx
-import json
 import asyncio
-from typing import Optional
+import json
+import os
 
+import httpx
+import pytest
+from mcp import Client as SDKClient
 
-# Server configuration
-MCP_BASE_URL = "http://localhost:3000"
-MCP_ENDPOINT = f"{MCP_BASE_URL}/mcp"
+# This suite targets a separately managed, destructive-test-safe MCP instance.
+# It must never attach itself to an arbitrary process already using localhost:3000.
+_configured_mcp_endpoint = os.getenv("DORIS_MCP_INTEGRATION_URL", "").rstrip("/")
+pytestmark = pytest.mark.skipif(
+    not _configured_mcp_endpoint,
+    reason="set DORIS_MCP_INTEGRATION_URL to run the external MCP injection suite",
+)
+MCP_ENDPOINT = _configured_mcp_endpoint or "http://localhost:3000/mcp"
+MCP_BASE_URL = MCP_ENDPOINT.removesuffix("/mcp")
 HEALTH_ENDPOINT = f"{MCP_BASE_URL}/health"
 TIMEOUT = 30.0
 
@@ -54,83 +61,32 @@ class MCPClient:
     def __init__(self, base_url: str = MCP_BASE_URL):
         self.base_url = base_url
         self.mcp_endpoint = f"{base_url}/mcp"
-        self.session_id: Optional[str] = None
-        self.request_id = 0
-        self.client = httpx.AsyncClient(timeout=TIMEOUT)
     
     async def close(self):
-        await self.client.aclose()
-    
-    def _next_id(self) -> int:
-        self.request_id += 1
-        return self.request_id
+        """No-op: each request owns and closes its SDK client context."""
     
     async def initialize(self) -> dict:
-        """Initialize MCP session"""
-        response = await self.client.post(
+        """Connect using SDK 2.0 auto-negotiation."""
+        async with SDKClient(
             self.mcp_endpoint,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream"
-            },
-            json={
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "sql-injection-test",
-                        "version": "1.0.0"
-                    }
-                },
-                "id": self._next_id()
-            }
-        )
-        
-        # Extract session ID from response header
-        self.session_id = response.headers.get("mcp-session-id")
-        return self._parse_response(response.text)
+            read_timeout_seconds=TIMEOUT,
+        ) as client:
+            return {"protocolVersion": client.protocol_version}
     
     async def call_tool(self, tool_name: str, arguments: dict) -> dict:
         """Call an MCP tool"""
-        if not self.session_id:
-            await self.initialize()
-        
-        response = await self.client.post(
+        async with SDKClient(
             self.mcp_endpoint,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-                "mcp-session-id": self.session_id
-            },
-            json={
-                "jsonrpc": "2.0",
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": arguments
-                },
-                "id": self._next_id()
-            }
-        )
-        
-        return self._parse_response(response.text)
-    
-    def _parse_response(self, text: str) -> dict:
-        """Parse JSON response"""
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            # Try SSE format
-            lines = text.strip().split("\n")
-            for line in lines:
-                if line.startswith("data: "):
-                    try:
-                        return json.loads(line[6:])
-                    except json.JSONDecodeError:
-                        continue
-            return {"raw": text}
+            read_timeout_seconds=TIMEOUT,
+        ) as client:
+            response = await client.call_tool(tool_name, arguments)
+        return {
+            "result": response.model_dump(
+                by_alias=True,
+                mode="json",
+                exclude_none=True,
+            )
+        }
 
 
 def print_result(test_name: str, payload: dict, result: dict):
@@ -211,7 +167,7 @@ class TestSQLInjectionAPI:
         
         # Should return error, not execute the DROP
         assert self._is_blocked_or_error(result), \
-            f"DROP TABLE injection should be blocked"
+            "DROP TABLE injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_exec_query_with_union_injection(self, mcp_client):
@@ -229,7 +185,7 @@ class TestSQLInjectionAPI:
         print_result("DELETE Injection", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"DELETE injection should be blocked"
+            "DELETE injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_exec_query_with_update_injection(self, mcp_client):
@@ -239,7 +195,7 @@ class TestSQLInjectionAPI:
         print_result("UPDATE Injection", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"UPDATE injection should be blocked"
+            "UPDATE injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_exec_query_db_name_injection(self, mcp_client):
@@ -250,7 +206,7 @@ class TestSQLInjectionAPI:
         print_result("db_name Parameter Injection", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"db_name injection should be blocked"
+            "db_name injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_exec_query_catalog_name_injection(self, mcp_client):
@@ -261,7 +217,7 @@ class TestSQLInjectionAPI:
         print_result("catalog_name Parameter Injection", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"catalog_name injection should be blocked"
+            "catalog_name injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_get_table_schema_injection(self, mcp_client):
@@ -272,7 +228,7 @@ class TestSQLInjectionAPI:
         print_result("table_name Injection (get_table_schema)", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"table_name injection should be blocked"
+            "table_name injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_get_table_schema_db_injection(self, mcp_client):
@@ -282,7 +238,7 @@ class TestSQLInjectionAPI:
         print_result("db_name Injection (get_table_schema)", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"db_name injection in get_table_schema should be blocked"
+            "db_name injection in get_table_schema should be blocked"
     
     @pytest.mark.asyncio
     async def test_analyze_dependencies_injection(self, mcp_client):
@@ -293,7 +249,7 @@ class TestSQLInjectionAPI:
         print_result("analyze_dependencies Injection (Original Report)", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"analyze_dependencies db_name injection should be blocked"
+            "analyze_dependencies db_name injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_stacked_queries_injection(self, mcp_client):
@@ -304,7 +260,7 @@ class TestSQLInjectionAPI:
         print_result("Stacked Queries (INSERT) Injection", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"Stacked queries with INSERT should be blocked"
+            "Stacked queries with INSERT should be blocked"
     
     @pytest.mark.asyncio
     async def test_comment_based_injection(self, mcp_client):
@@ -331,7 +287,7 @@ class TestSQLInjectionAPI:
         print_result("Backtick Escape Injection", payload, result)
         
         assert self._is_blocked_or_error(result), \
-            f"Backtick escape injection should be blocked"
+            "Backtick escape injection should be blocked"
     
     @pytest.mark.asyncio
     async def test_valid_query_succeeds(self, mcp_client):
@@ -417,7 +373,7 @@ class TestIdentifierInjectionAPI:
         
         # Should be blocked by identifier validation
         assert self._contains_error_indicator(result), \
-            f"Table name with semicolon should be rejected"
+            "Table name with semicolon should be rejected"
     
     @pytest.mark.asyncio
     async def test_table_name_with_quotes(self, mcp_client):
@@ -427,7 +383,7 @@ class TestIdentifierInjectionAPI:
         print_result("Table Name with Quotes", payload, result)
         
         assert self._contains_error_indicator(result), \
-            f"Table name with quotes should be rejected"
+            "Table name with quotes should be rejected"
     
     @pytest.mark.asyncio  
     async def test_db_name_with_special_chars(self, mcp_client):
@@ -501,7 +457,7 @@ class TestMultiStatementInjectionAPI:
         print_result("Hidden DROP after SELECT", payload, result)
         
         assert self._is_dangerous_blocked(result), \
-            f"Hidden DROP statement should be blocked"
+            "Hidden DROP statement should be blocked"
     
     @pytest.mark.asyncio
     async def test_hidden_truncate_after_select(self, mcp_client):
@@ -511,7 +467,7 @@ class TestMultiStatementInjectionAPI:
         print_result("Hidden TRUNCATE after SELECT", payload, result)
         
         assert self._is_dangerous_blocked(result), \
-            f"Hidden TRUNCATE should be blocked"
+            "Hidden TRUNCATE should be blocked"
     
     @pytest.mark.asyncio
     async def test_hidden_grant_after_select(self, mcp_client):
@@ -521,7 +477,7 @@ class TestMultiStatementInjectionAPI:
         print_result("Hidden GRANT after SELECT", payload, result)
         
         assert self._is_dangerous_blocked(result), \
-            f"Hidden GRANT should be blocked"
+            "Hidden GRANT should be blocked"
     
     @pytest.mark.asyncio
     async def test_multiple_safe_selects_allowed(self, mcp_client):
@@ -868,4 +824,3 @@ def event_loop():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short", "-x"])
-

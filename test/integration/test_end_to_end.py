@@ -20,12 +20,16 @@ End-to-end integration tests
 """
 
 import json
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import Mock, patch
 
 from doris_mcp_server.main import DorisServer
-from doris_mcp_server.utils.config import DorisConfig
-from doris_mcp_server.utils.security import SecurityLevel, AuthContext
+from doris_mcp_server.utils.config import (
+    DorisConfig,
+    normalize_effective_auth_config,
+)
+from doris_mcp_server.utils.security import AuthContext, SecurityLevel
 
 
 class TestEndToEndIntegration:
@@ -34,12 +38,8 @@ class TestEndToEndIntegration:
     @pytest.fixture
     def mock_config(self):
         """Create mock configuration"""
-        from doris_mcp_server.utils.config import ADBCConfig, DatabaseConfig, SecurityConfig
-        
-        config = Mock(spec=DorisConfig)
-        
-        # Add database config
-        config.database = Mock(spec=DatabaseConfig)
+        config = DorisConfig()
+
         config.database.host = "localhost"
         config.database.port = 9030
         config.database.user = "test_user"
@@ -49,19 +49,12 @@ class TestEndToEndIntegration:
         config.database.max_connections = 20
         config.database.connection_timeout = 30
         config.database.max_connection_age = 3600
-        
-        # Add security config
-        config.security = Mock(spec=SecurityConfig)
+
         config.security.enable_masking = True
-        config.security.auth_type = "token"
-        config.security.token_secret = "test_secret"
-        config.security.token_expiry = 3600
         config.security.blocked_keywords = ["DROP"]
-        
-        # Add adbc config
-        config.adbc = Mock(spec=ADBCConfig)
         config.adbc.enabled = True
 
+        normalize_effective_auth_config(config, requested_workers=1)
         return config
 
     @pytest.fixture

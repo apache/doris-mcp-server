@@ -20,8 +20,9 @@ Tools manager tests
 """
 
 import json
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
 
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
@@ -260,11 +261,11 @@ class TestDorisToolsManager:
             # Each tool should have required fields
             assert hasattr(tool, 'name')
             assert hasattr(tool, 'description')
-            assert hasattr(tool, 'inputSchema')
+            assert hasattr(tool, 'input_schema')
             
             # Input schema should have properties
-            assert 'properties' in tool.inputSchema
+            assert 'properties' in tool.input_schema
             
             # Required fields should be defined
-            if 'required' in tool.inputSchema:
-                assert isinstance(tool.inputSchema['required'], list) 
+            if 'required' in tool.input_schema:
+                assert isinstance(tool.input_schema['required'], list)

@@ -22,8 +22,8 @@ Implements configuration loading, validation and management functionality
 
 import json
 import logging
-import os
 import multiprocessing
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -492,7 +492,7 @@ class DorisConfig:
 
     # Basic configuration
     server_name: str = "doris-mcp-server"
-    server_version: str = "0.4.1"
+    server_version: str = "0.6.1"
     server_host: str = "localhost"
     server_port: int = 3000
     transport: str = "stdio"
@@ -919,6 +919,9 @@ class DorisConfig:
         # Server configuration
         config.server_name = os.getenv("SERVER_NAME", config.server_name)
         config.server_version = os.getenv("SERVER_VERSION", config.server_version)
+        server_host = os.getenv("SERVER_HOST", "").strip()
+        if server_host:
+            config.server_host = server_host
         if "TRANSPORT" in os.environ:
             config.transport = os.getenv("TRANSPORT", config.transport)
             _mark_source(config, "transport", "env")
@@ -1497,8 +1500,9 @@ class ConfigManager:
 
     def setup_logging(self):
         """Setup logging configuration using enhanced logger"""
-        from .logger import setup_logging, get_logger
         import sys
+
+        from .logger import setup_logging
         
         # Determine log directory
         log_dir = "logs"
