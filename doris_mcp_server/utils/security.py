@@ -76,6 +76,9 @@ class AuthContext:
     oauth_client_id: str = ""
     oauth_scopes: list[str] = field(default_factory=list)
     oauth_token_id: str = ""
+    oauth_issuer: str = ""
+    oauth_resource: str = ""
+    oauth_audiences: list[str] = field(default_factory=list)
     pool_key: str = ""
 
 
