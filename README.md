@@ -208,6 +208,9 @@ export DORIS_PASSWORD="your_password"
 # identified 2025-11-25 client still needs /mcp/legacy.
 export ENABLE_LEGACY_HTTP_ADAPTER=false
 
+# Bound each resources/list, tools/list, and prompts/list response.
+export MCP_LIST_PAGE_SIZE=100
+
 # Token Management Interface (Security-Critical)
 export TOKEN_ADMIN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export TOKEN_MANAGEMENT_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -283,6 +286,8 @@ cp .env.example .env
     *   `ENABLE_LEGACY_HTTP_ADAPTER`: Expose the isolated
         `2025-11-25` migration adapter at `/mcp/legacy` (default: false);
         modern traffic always uses `POST /mcp`
+    *   `MCP_LIST_PAGE_SIZE`: Maximum resources, tools, or prompts returned
+        per protocol page (default: 100; range: 1-1000)
 *   **Authentication Configuration (Enhanced in v0.6.0)**:
     *   `ENABLE_TOKEN_AUTH`: Enable token-based authentication (default: false)
     *   `ENABLE_JWT_AUTH`: Enable JWT authentication (default: false)
@@ -540,6 +545,20 @@ curl --request POST http://127.0.0.1:3000/mcp \
 Stdio carries the same JSON-RPC request metadata in the message body, but it
 does not use HTTP headers. Do not write logs or other diagnostics to stdout in
 stdio mode; stdout is reserved for MCP protocol messages.
+
+### List Pagination
+
+`resources/list`, `tools/list`, and `prompts/list` return at most
+`MCP_LIST_PAGE_SIZE` entries per response on both Streamable HTTP and stdio.
+Results are ordered by their stable resource URI, tool name, or prompt name.
+When `nextCursor` is present, pass that opaque value as the next request's
+`cursor`; do not parse or construct cursors.
+
+A cursor is bound to its list type, the current visible-list snapshot, and the
+current authorization context. Reusing it for another list, after visibility
+changes, or under another principal returns `Invalid Params`. Restart the
+listing without a cursor in that case. This prevents a multi-page traversal
+from silently duplicating, dropping, or crossing permission-scoped entries.
 
 ### Migrating from MCP 2025-11-25
 

@@ -288,17 +288,25 @@ async def _http_process(environment: dict[str, str]) -> AsyncIterator[str]:
 
 
 @asynccontextmanager
-async def _http_client(environment: dict[str, str]) -> AsyncIterator[Client]:
+async def _http_client(
+    environment: dict[str, str],
+    *,
+    read_timeout_seconds: int = 15,
+) -> AsyncIterator[Client]:
     async with _http_process(environment) as base_url:
         async with Client(
             f"{base_url}/mcp",
-            read_timeout_seconds=15,
+            read_timeout_seconds=read_timeout_seconds,
         ) as client:
             yield client
 
 
 @asynccontextmanager
-async def _stdio_client(environment: dict[str, str]) -> AsyncIterator[Client]:
+async def _stdio_client(
+    environment: dict[str, str],
+    *,
+    read_timeout_seconds: int = 15,
+) -> AsyncIterator[Client]:
     parameters = StdioServerParameters(
         command=sys.executable,
         args=["-m", "doris_mcp_server", "--transport", "stdio"],
@@ -311,7 +319,7 @@ async def _stdio_client(environment: dict[str, str]) -> AsyncIterator[Client]:
             client = await stack.enter_async_context(
                 Client(
                     stdio_client(parameters, errlog=log_file),
-                    read_timeout_seconds=15,
+                    read_timeout_seconds=read_timeout_seconds,
                 )
             )
         except Exception:
@@ -329,10 +337,18 @@ async def _stdio_client(environment: dict[str, str]) -> AsyncIterator[Client]:
 def _transport_client(
     transport: str,
     environment: dict[str, str],
+    *,
+    read_timeout_seconds: int = 15,
 ) -> Any:
     if transport == "http":
-        return _http_client(environment)
-    return _stdio_client(environment)
+        return _http_client(
+            environment,
+            read_timeout_seconds=read_timeout_seconds,
+        )
+    return _stdio_client(
+        environment,
+        read_timeout_seconds=read_timeout_seconds,
+    )
 
 
 async def _exec_query(
@@ -351,6 +367,36 @@ async def _exec_query(
     )
     assert isinstance(result.structured_content, dict)
     return result, result.structured_content
+
+
+async def _collect_list_pages(
+    list_method: Any,
+    *,
+    result_field: str,
+    identifier: Any,
+    max_page_size: int,
+) -> tuple[list[str], int]:
+    cursor = None
+    seen_cursors: set[str] = set()
+    identifiers: list[str] = []
+    page_count = 0
+
+    while True:
+        result = await list_method(cursor=cursor, cache_mode="bypass")
+        page = getattr(result, result_field)
+        assert 0 < len(page) <= max_page_size
+        identifiers.extend(identifier(item) for item in page)
+        page_count += 1
+
+        cursor = result.next_cursor
+        if cursor is None:
+            break
+        assert cursor not in seen_cursors
+        seen_cursors.add(cursor)
+
+    assert identifiers == sorted(identifiers)
+    assert len(identifiers) == len(set(identifiers))
+    return identifiers, page_count
 
 
 async def test_real_doris_liveness_and_readiness(
@@ -377,6 +423,49 @@ async def test_real_doris_liveness_and_readiness(
         "service": "ready",
         "doris": "ready",
     }
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_protocol_lists_paginate_without_loss(
+    transport: str,
+    doris_sandbox: DorisSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    page_size = 100
+    environment["MCP_LIST_PAGE_SIZE"] = str(page_size)
+    results: dict[str, tuple[list[str], int]] = {}
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        for list_method, result_field, identifier in (
+            (
+                client.list_resources,
+                "resources",
+                lambda resource: str(resource.uri),
+            ),
+            (client.list_tools, "tools", lambda tool: tool.name),
+            (client.list_prompts, "prompts", lambda prompt: prompt.name),
+        ):
+            identifiers, page_count = await _collect_list_pages(
+                list_method,
+                result_field=result_field,
+                identifier=identifier,
+                max_page_size=page_size,
+            )
+            results[result_field] = (identifiers, page_count)
+
+    resource_identifiers, resource_page_count = results["resources"]
+    assert len(resource_identifiers) > page_size
+    assert resource_page_count > 1
+    assert results["tools"][0]
+    assert results["prompts"][0]
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio"])

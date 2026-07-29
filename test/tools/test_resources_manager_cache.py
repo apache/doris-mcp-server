@@ -196,14 +196,53 @@ async def test_metadata_cache_disabled_by_default():
 
 
 @pytest.mark.asyncio
-async def test_resources_manager_does_not_reuse_global_metadata_cache():
+async def test_resources_manager_reuses_identity_scoped_metadata_cache():
     connection_manager = FakeConnectionManager()
     manager = DorisResourcesManager(connection_manager)
 
     first = await manager._get_table_metadata()
     second = await manager._get_table_metadata()
 
-    assert manager.metadata_cache.enabled is False
+    assert manager.metadata_cache.enabled is True
+    assert [table.name for table in first] == ["orders_1"]
+    assert [table.name for table in second] == ["orders_1"]
+    assert connection_manager.acquires == 1
+    assert connection_manager.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_resources_manager_does_not_share_metadata_across_identities():
+    connection_manager = FakeConnectionManager()
+    manager = DorisResourcesManager(connection_manager)
+
+    first_token = set_current_auth_context(
+        AuthContext(
+            token_id="token-a",
+            user_id="user-a",
+            roles=["reader"],
+            permissions=["resource:list"],
+            auth_method="token",
+        )
+    )
+    try:
+        first = await manager._get_table_metadata()
+    finally:
+        reset_auth_context(first_token)
+
+    second_token = set_current_auth_context(
+        AuthContext(
+            token_id="token-b",
+            user_id="user-b",
+            roles=["reader"],
+            permissions=["resource:list"],
+            auth_method="token",
+        )
+    )
+    try:
+        second = await manager._get_table_metadata()
+    finally:
+        reset_auth_context(second_token)
+
     assert [table.name for table in first] == ["orders_1"]
     assert [table.name for table in second] == ["orders_2"]
     assert connection_manager.acquires == 2

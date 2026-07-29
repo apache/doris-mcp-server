@@ -35,6 +35,8 @@ under **Unreleased** until a new version is selected and published.
   client/redirect host context.
 - Per-request client capability enforcement, cache hints, typed protocol
   errors, and deterministic product identity.
+- Permission-bound cursor pagination for resources, tools, and prompts on
+  Streamable HTTP and stdio.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed

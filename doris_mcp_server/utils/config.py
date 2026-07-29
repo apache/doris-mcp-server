@@ -603,6 +603,7 @@ class DorisConfig:
     mcp_allowed_hosts: list[str] = field(default_factory=list)
     mcp_allowed_origins: list[str] = field(default_factory=list)
     enable_legacy_http_adapter: bool = False
+    mcp_list_page_size: int = 100
     transport: str = "stdio"
     workers: int = 1
 
@@ -1148,6 +1149,12 @@ class DorisConfig:
                 os.getenv("ENABLE_LEGACY_HTTP_ADAPTER", "false").lower() == "true"
             )
             _mark_source(config, "enable_legacy_http_adapter", "env")
+        if "MCP_LIST_PAGE_SIZE" in os.environ:
+            config.mcp_list_page_size = _env_int(
+                "MCP_LIST_PAGE_SIZE",
+                config.mcp_list_page_size,
+            )
+            _mark_source(config, "mcp_list_page_size", "env")
         config.temp_files_dir = os.getenv("TEMP_FILES_DIR", config.temp_files_dir)
 
         return config
@@ -1165,6 +1172,7 @@ class DorisConfig:
             "mcp_allowed_hosts",
             "mcp_allowed_origins",
             "enable_legacy_http_adapter",
+            "mcp_list_page_size",
             "temp_files_dir",
             "transport",
             "workers",
@@ -1239,6 +1247,7 @@ class DorisConfig:
             "mcp_allowed_hosts": self.mcp_allowed_hosts,
             "mcp_allowed_origins": self.mcp_allowed_origins,
             "enable_legacy_http_adapter": self.enable_legacy_http_adapter,
+            "mcp_list_page_size": self.mcp_list_page_size,
             "temp_files_dir": self.temp_files_dir,
             "database": {
                 "host": self.database.host,
@@ -1432,6 +1441,9 @@ class DorisConfig:
 
         if self.database.http_max_response_bytes <= 0:
             errors.append("Doris HTTP response byte limit must be greater than 0")
+
+        if not 1 <= self.mcp_list_page_size <= 1000:
+            errors.append("MCP list page size must be in the range 1-1000")
 
         # Validate security configuration
         if self.security.auth_type not in ["token", "basic", "oauth", "jwt"]:
