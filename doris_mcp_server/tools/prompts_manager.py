@@ -19,6 +19,8 @@ Apache Doris MCP Prompts Manager
 Provides standardized management of query templates and intelligent prompts
 """
 
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -61,12 +63,59 @@ class PromptTemplate:
         return content
 
 
+class UnknownPromptError(ValueError):
+    """The requested prompt name is not registered."""
+
+    error_code = "UNKNOWN_PROMPT"
+
+
+class MissingPromptArgumentError(ValueError):
+    """A registered prompt is missing one required template argument."""
+
+    error_code = "MISSING_REQUIRED_ARGUMENT"
+
+    def __init__(self, argument: str):
+        super().__init__(f"Missing required parameter: {argument}")
+        self.argument = argument
+
+
+class PromptDatabaseContextError(RuntimeError):
+    """The database context needed to render a prompt is unavailable."""
+
+    error_code = "DATABASE_CONTEXT_UNAVAILABLE"
+
+
 class DorisPromptsManager:
     """Apache Doris Prompts Manager"""
 
-    def __init__(self, connection_manager: DorisConnectionManager):
+    def __init__(
+        self,
+        connection_manager: DorisConnectionManager,
+        database_context_timeout_seconds: float = 10.0,
+    ):
         self.connection_manager = connection_manager
+        self.database_context_timeout_seconds = database_context_timeout_seconds
         self.templates = self._init_prompt_templates()
+
+    @asynccontextmanager
+    async def _connection_context(self, session_id: str = "system"):
+        manager_context = getattr(
+            self.connection_manager,
+            "get_connection_context",
+            None,
+        )
+        if manager_context:
+            async with manager_context(session_id) as connection:
+                yield connection
+            return
+
+        connection = await self.connection_manager.get_connection(session_id)
+        try:
+            yield connection
+        finally:
+            release = getattr(self.connection_manager, "release_connection", None)
+            if release:
+                await release(session_id, connection)
 
     def _init_prompt_templates(self) -> dict[str, PromptTemplate]:
         """Initialize prompt templates"""
@@ -344,7 +393,7 @@ Please provide complete monitoring solution and implementation recommendations."
     async def get_prompt(self, name: str, arguments: dict[str, Any]) -> GetPromptResult:
         """Get content of specific prompt template"""
         if name not in self.templates:
-            raise ValueError(f"Prompt template named '{name}' not found")
+            raise UnknownPromptError(f"Prompt template named '{name}' not found")
 
         template = self.templates[name]
 
@@ -383,7 +432,7 @@ Please generate accurate and efficient SQL queries based on the above requiremen
             if arg.name in arguments:
                 processed[arg.name] = arguments[arg.name]
             elif arg.required:
-                raise ValueError(f"Missing required parameter: {arg.name}")
+                raise MissingPromptArgumentError(arg.name)
             else:
                 # Provide default handling for optional parameters
                 processed[arg.name] = self._get_default_argument_text(arg.name)
@@ -411,9 +460,18 @@ Please generate accurate and efficient SQL queries based on the above requiremen
     async def _get_database_context(self) -> str:
         """Get database context information"""
         try:
-            connection = await self.connection_manager.get_connection("system")
+            return await asyncio.wait_for(
+                self._query_database_context(),
+                timeout=self.database_context_timeout_seconds,
+            )
+        except Exception as e:
+            raise PromptDatabaseContextError(
+                "Database context unavailable"
+            ) from e
 
-            # Get basic database information
+    async def _query_database_context(self) -> str:
+        """Query the prompt context within the caller's bounded deadline."""
+        async with self._connection_context("system") as connection:
             db_info_sql = """
             SELECT
                 COUNT(*) as table_count,
@@ -424,10 +482,12 @@ Please generate accurate and efficient SQL queries based on the above requiremen
             """
 
             auth_context = get_auth_context()
-            db_result = await connection.execute(db_info_sql, auth_context=auth_context)
+            db_result = await connection.execute(
+                db_info_sql,
+                auth_context=auth_context,
+            )
             db_info = db_result.data[0] if db_result.data else {}
 
-            # Get main table list
             tables_sql = """
             SELECT
                 table_name,
@@ -440,24 +500,24 @@ Please generate accurate and efficient SQL queries based on the above requiremen
             LIMIT 10
             """
 
-            tables_result = await connection.execute(tables_sql, auth_context=auth_context)
+            tables_result = await connection.execute(
+                tables_sql,
+                auth_context=auth_context,
+            )
 
-            context = f"""Current database statistics:
+        context = f"""Current database statistics:
 - Total number of tables: {db_info.get("table_count", 0)}
 - Total data rows: {db_info.get("total_rows", 0):,}
 
 Main data tables:"""
 
-            for table in tables_result.data:
-                context += f"\n- {table['table_name']}"
-                if table.get("table_comment"):
-                    context += f": {table['table_comment']}"
-                context += f" ({table.get('table_rows', 0):,} rows)"
+        for table in tables_result.data:
+            context += f"\n- {table['table_name']}"
+            if table.get("table_comment"):
+                context += f": {table['table_comment']}"
+            context += f" ({table.get('table_rows', 0):,} rows)"
 
-            return context
-
-        except Exception as e:
-            return f"Unable to get database context information: {str(e)}"
+        return context
 
     def get_templates_by_category(self, category: str) -> list[PromptTemplate]:
         """Get templates by category"""

@@ -29,6 +29,7 @@ from mcp.server.context import CallNext
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.shared.exceptions import MCPError
 from mcp.types import (
+    INTERNAL_ERROR,
     INVALID_PARAMS,
     LATEST_PROTOCOL_VERSION,
     MISSING_REQUIRED_CLIENT_CAPABILITY,
@@ -112,6 +113,12 @@ _RESOURCE_INVALID_PARAMS_MESSAGES = {
     "INVALID_RESOURCE_URI": "Invalid resource URI",
     "RESOURCE_NOT_FOUND": "Resource not found",
 }
+
+_PROMPT_INVALID_PARAMS_MESSAGES = {
+    "UNKNOWN_PROMPT": "Prompt not found",
+    "MISSING_REQUIRED_ARGUMENT": "Missing required prompt argument",
+}
+_PROMPT_DATABASE_CONTEXT_ERROR = "DATABASE_CONTEXT_UNAVAILABLE"
 
 
 def _decode_resource_request_error(payload: str) -> tuple[str, str] | None:
@@ -222,10 +229,41 @@ def create_doris_mcp_server(
     ) -> GetPromptResult:
         del ctx
         authorize_operation(get_current_auth_context(), "get_prompt")
-        return await prompts_manager.get_prompt(
-            params.name,
-            dict(params.arguments or {}),
-        )
+        try:
+            return await prompts_manager.get_prompt(
+                params.name,
+                dict(params.arguments or {}),
+            )
+        except Exception as exc:
+            prompt_error_code = getattr(exc, "error_code", None)
+            message = _PROMPT_INVALID_PARAMS_MESSAGES.get(prompt_error_code)
+            if message is not None:
+                data = {
+                    "name": params.name,
+                    "promptErrorCode": prompt_error_code,
+                }
+                argument = getattr(exc, "argument", None)
+                if isinstance(argument, str):
+                    data["argument"] = argument
+                raise MCPError(
+                    code=INVALID_PARAMS,
+                    message=message,
+                    data=data,
+                ) from exc
+            if prompt_error_code == _PROMPT_DATABASE_CONTEXT_ERROR:
+                logger.exception(
+                    "Database context failed while rendering prompt %s",
+                    params.name,
+                )
+                raise MCPError(
+                    code=INTERNAL_ERROR,
+                    message="Database context unavailable",
+                    data={
+                        "name": params.name,
+                        "promptErrorCode": prompt_error_code,
+                    },
+                ) from exc
+            raise
 
     private_no_cache = CacheHint(ttl_ms=0, scope="private")
     server = Server(

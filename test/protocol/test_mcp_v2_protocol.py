@@ -90,11 +90,40 @@ class StubToolsManager:
         return json.dumps({"name": name, "arguments": arguments})
 
 
+class PromptFixtureError(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str,
+        argument: str | None = None,
+    ):
+        super().__init__(message)
+        self.error_code = error_code
+        self.argument = argument
+
+
 class StubPromptsManager:
     async def list_prompts(self) -> list[Prompt]:
         return [Prompt(name="explain", description="Explain a query.")]
 
     async def get_prompt(self, name: str, arguments: dict) -> GetPromptResult:
+        if name == "missing":
+            raise PromptFixtureError(
+                "Prompt not found",
+                error_code="UNKNOWN_PROMPT",
+            )
+        if name == "needs_argument" and "required" not in arguments:
+            raise PromptFixtureError(
+                "Missing required argument",
+                error_code="MISSING_REQUIRED_ARGUMENT",
+                argument="required",
+            )
+        if name == "database_failure":
+            raise PromptFixtureError(
+                "Database context failed",
+                error_code="DATABASE_CONTEXT_UNAVAILABLE",
+            )
         return GetPromptResult(
             description=name,
             messages=[
@@ -222,6 +251,28 @@ def modern_resource_headers(uri: str) -> dict[str, str]:
     return {
         **modern_headers("resources/read"),
         "Mcp-Name": uri,
+    }
+
+
+def modern_prompt_request(
+    request_id: int,
+    name: str,
+    arguments: dict | None = None,
+) -> dict:
+    request = modern_request(request_id, "prompts/get")
+    request["params"].update(
+        {
+            "name": name,
+            "arguments": arguments or {},
+        }
+    )
+    return request
+
+
+def modern_prompt_headers(name: str) -> dict[str, str]:
+    return {
+        **modern_headers("prompts/get"),
+        "Mcp-Name": name,
     }
 
 
@@ -474,6 +525,80 @@ async def test_http_resource_not_found_is_invalid_params_and_server_recovers():
 
 
 @pytest.mark.asyncio
+async def test_http_prompt_errors_are_typed_and_server_recovers():
+    app = create_test_server().streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        unknown = await client.post(
+            "/mcp",
+            json=modern_prompt_request(1, "missing"),
+            headers=modern_prompt_headers("missing"),
+        )
+        assert unknown.status_code == 400
+        assert unknown.json()["error"] == {
+            "code": -32602,
+            "message": "Prompt not found",
+            "data": {
+                "name": "missing",
+                "promptErrorCode": "UNKNOWN_PROMPT",
+            },
+        }
+
+        missing_argument = await client.post(
+            "/mcp",
+            json=modern_prompt_request(2, "needs_argument"),
+            headers=modern_prompt_headers("needs_argument"),
+        )
+        assert missing_argument.status_code == 400
+        assert missing_argument.json()["error"] == {
+            "code": -32602,
+            "message": "Missing required prompt argument",
+            "data": {
+                "name": "needs_argument",
+                "promptErrorCode": "MISSING_REQUIRED_ARGUMENT",
+                "argument": "required",
+            },
+        }
+
+        database_failure = await client.post(
+            "/mcp",
+            json=modern_prompt_request(3, "database_failure"),
+            headers=modern_prompt_headers("database_failure"),
+        )
+        assert database_failure.status_code == 200
+        assert database_failure.json()["error"] == {
+            "code": -32603,
+            "message": "Database context unavailable",
+            "data": {
+                "name": "database_failure",
+                "promptErrorCode": "DATABASE_CONTEXT_UNAVAILABLE",
+            },
+        }
+
+        recovered = await client.post(
+            "/mcp",
+            json=modern_prompt_request(4, "explain", {"sql": "SELECT 1"}),
+            headers=modern_prompt_headers("explain"),
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["result"]["messages"][0]["content"]["text"] == (
+            "Explain SELECT 1"
+        )
+
+
+@pytest.mark.asyncio
 async def test_stdio_validates_capabilities_versions_and_process_survival():
     server_script = Path(__file__).with_name("stdio_capability_server.py")
     server_params = StdioServerParameters(
@@ -527,3 +652,46 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
         assert [tool.name for tool in (await legacy.list_tools()).tools] == ["echo"]
         legacy_error = await legacy.read_resource("doris://table/missing")
         assert json.loads(legacy_error.contents[0].text)["error_code"] == "RESOURCE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_stdio_prompt_errors_are_typed_and_process_survives():
+    server_script = Path(__file__).with_name("stdio_capability_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(stdio_client(server_params)) as modern:
+        with pytest.raises(MCPError) as unknown:
+            await modern.get_prompt("missing", {})
+        assert unknown.value.code == -32602
+        assert unknown.value.data == {
+            "name": "missing",
+            "promptErrorCode": "UNKNOWN_PROMPT",
+        }
+
+        with pytest.raises(MCPError) as missing_argument:
+            await modern.get_prompt("needs_argument", {})
+        assert missing_argument.value.code == -32602
+        assert missing_argument.value.data == {
+            "name": "needs_argument",
+            "promptErrorCode": "MISSING_REQUIRED_ARGUMENT",
+            "argument": "required",
+        }
+
+        with pytest.raises(MCPError) as database_failure:
+            await modern.get_prompt("database_failure", {})
+        assert database_failure.value.code == -32603
+        assert database_failure.value.data == {
+            "name": "database_failure",
+            "promptErrorCode": "DATABASE_CONTEXT_UNAVAILABLE",
+        }
+
+        recovered = await modern.get_prompt("explain", {"sql": "SELECT 1"})
+        assert recovered.messages[0].content.text == "Explain SELECT 1"
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        with pytest.raises(MCPError) as legacy_unknown:
+            await legacy.get_prompt("missing", {})
+        assert legacy_unknown.value.code == -32602
