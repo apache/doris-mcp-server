@@ -204,6 +204,10 @@ export DORIS_PORT="9030"
 export DORIS_USER="root"
 export DORIS_PASSWORD="your_password"
 
+# Keep the isolated legacy HTTP migration adapter disabled unless an
+# identified 2025-11-25 client still needs /mcp/legacy.
+export ENABLE_LEGACY_HTTP_ADAPTER=false
+
 # Token Management Interface (Security-Critical)
 export TOKEN_ADMIN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export TOKEN_MANAGEMENT_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -275,6 +279,10 @@ cp .env.example .env
     *   `DORIS_HTTP_MAX_RESPONSE_BYTES`: FE/BE HTTP response limit (default: 4 MiB; hard maximum: 16 MiB)
     *   `FE_ARROW_FLIGHT_SQL_PORT`: Frontend Arrow Flight SQL port for ADBC (New in v0.5.0)
     *   `BE_ARROW_FLIGHT_SQL_PORT`: Backend Arrow Flight SQL port for ADBC (New in v0.5.0)
+*   **MCP HTTP Configuration**:
+    *   `ENABLE_LEGACY_HTTP_ADAPTER`: Expose the isolated
+        `2025-11-25` migration adapter at `/mcp/legacy` (default: false);
+        modern traffic always uses `POST /mcp`
 *   **Authentication Configuration (Enhanced in v0.6.0)**:
     *   `ENABLE_TOKEN_AUTH`: Enable token-based authentication (default: false)
     *   `ENABLE_JWT_AUTH`: Enable JWT authentication (default: false)
@@ -464,12 +472,13 @@ and [Streamable HTTP transport specification](https://modelcontextprotocol.io/sp
 | Client protocol | Streamable HTTP | stdio | Connection behavior | Doris MCP Server status |
 |:----------------|:----------------|:------|:--------------------|:------------------------|
 | `2026-07-28` | Supported and preferred | Supported and preferred | Stateless, self-contained requests; no initialization handshake or protocol session | Covered by modern HTTP and real-process stdio tests |
-| `2025-11-25` | Supported for migration | Supported for migration | Legacy `initialize` is accepted, but the server remains stateless and does not issue `Mcp-Session-Id` | Covered by legacy HTTP and stdio tests |
+| `2025-11-25` | Opt-in at `/mcp/legacy` | Supported for migration | Legacy `initialize` is accepted, but the server remains stateless and does not issue `Mcp-Session-Id` | HTTP adapter is disabled by default; covered by legacy HTTP and stdio tests |
 | `2025-06-18` and older | Not guaranteed | Not guaranteed | Older negotiation and transport behavior is outside the supported compatibility contract | Upgrade the client before connecting |
 | HTTP+SSE (`2024-11-05`) | Not supported | Not applicable | The retired separate SSE endpoint is not exposed | Migrate to Streamable HTTP at `/mcp` |
 
-The compatibility path for `2025-11-25` exists to support migrations. New
-integrations should target `2026-07-28`.
+The HTTP compatibility path for `2025-11-25` is isolated from the modern
+endpoint and disabled by default. New integrations should target `2026-07-28`
+at `POST /mcp`.
 
 ### MCP 2026-07-28 Request Contract
 
@@ -551,8 +560,10 @@ stdio mode; stdout is reserved for MCP protocol messages.
    integration supports both transports.
 
 Clients that cannot migrate immediately may keep the `2025-11-25`
-`initialize` flow. Doris MCP Server accepts that flow on both supported
-transports, but does not create an HTTP protocol session.
+`initialize` flow over stdio. For Streamable HTTP, an operator must explicitly
+set `ENABLE_LEGACY_HTTP_ADAPTER=true` and point that client to
+`/mcp/legacy`; `/mcp` never falls back to the legacy transport. The adapter
+remains stateless and does not create an HTTP protocol session.
 
 ### Deployment Constraints
 
@@ -590,8 +601,9 @@ Interaction with the Doris MCP Server requires an **MCP Client**. The client con
     *   **Non-streaming**: The client receives a response containing `content` or `isError`.
     *   **Streaming**: The client receives a series of progress notifications, followed by a final response.
 
-Legacy `2025-11-25` clients initialize as before, subject to the stateless
-compatibility limits described above.
+Legacy `2025-11-25` stdio clients initialize as before. HTTP clients require
+the explicitly enabled `/mcp/legacy` adapter and remain subject to the
+stateless compatibility limits described above.
 
 ### Catalog Federation Support
 
@@ -1698,10 +1710,12 @@ workload before production use.
 
 ### Q: Which MCP protocol revisions are supported?
 
-**A:** New integrations should use MCP `2026-07-28`. Doris MCP Server also
-accepts the `2025-11-25` initialization flow as a migration bridge on both
-Streamable HTTP and stdio. Older revisions and the retired HTTP+SSE transport
-are not part of the supported compatibility contract.
+**A:** New integrations should use MCP `2026-07-28`. Doris MCP Server accepts
+the `2025-11-25` initialization flow over stdio and, when
+`ENABLE_LEGACY_HTTP_ADAPTER=true`, at the isolated `/mcp/legacy` HTTP
+endpoint. The modern `/mcp` endpoint is POST-only and never falls back to the
+legacy transport. Older revisions and the retired HTTP+SSE transport are not
+part of the supported compatibility contract.
 
 Do not infer wire-protocol support from the Doris MCP Server package version or
 the Python `mcp` dependency version. See

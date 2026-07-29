@@ -19,7 +19,7 @@
 Multi-worker application module for doris-mcp-server
 
 This module provides full MCP functionality with multi-worker support.
-Each worker process creates its own MCP server and session manager using the same
+Each worker process creates its own MCP server and HTTP transport using the same
 robust architecture as the single-worker mode.
 """
 
@@ -31,7 +31,6 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING
 
 from mcp.server import Server
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -43,6 +42,11 @@ from .auth.doris_oauth_handlers import DorisOAuthHandlers
 from .auth.oauth_handlers import OAuthHandlers
 from .auth.token_handlers import TokenHandlers
 from .health import liveness_payload, readiness_payload
+from .http_transport import (
+    LEGACY_MCP_PATH,
+    MODERN_MCP_PATH,
+    DorisMCPHTTPTransport,
+)
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
@@ -63,11 +67,11 @@ if TYPE_CHECKING:
 
 # Global variables for worker-specific instances
 _worker_server: Server | None = None
-_worker_session_manager: StreamableHTTPSessionManager | None = None
+_worker_http_transport: DorisMCPHTTPTransport | None = None
 _worker_connection_manager: DorisConnectionManager | None = None
 _worker_security_manager: DorisSecurityManager | None = None
 _worker_tools_manager: DorisToolsManager | None = None
-_worker_session_manager_context: AbstractAsyncContextManager[None] | None = None
+_worker_http_transport_context: AbstractAsyncContextManager[None] | None = None
 _worker_initialized = False
 _worker_effective_auth: EffectiveAuthConfig | None = None
 _doris_oauth_handlers: DorisOAuthHandlers | None = None
@@ -79,11 +83,11 @@ async def initialize_worker() -> None:
     """Initialize MCP server and managers for this worker process"""
     global \
         _worker_server, \
-        _worker_session_manager, \
+        _worker_http_transport, \
         _worker_connection_manager, \
         _worker_security_manager, \
         _worker_tools_manager, \
-        _worker_session_manager_context, \
+        _worker_http_transport_context, \
         _worker_initialized, \
         _oauth_handlers, \
         _token_handlers, \
@@ -161,21 +165,20 @@ async def initialize_worker() -> None:
             logger=logger,
         )
 
-        # Create session manager for this worker
-        _worker_session_manager = StreamableHTTPSessionManager(
+        # Create the exact modern/legacy HTTP boundary for this worker.
+        _worker_http_transport = DorisMCPHTTPTransport(
             app=_worker_server,
-            json_response=True,
-            stateless=True,
             security_settings=create_transport_security(
                 config.server_host,
                 allowed_hosts=config.mcp_allowed_hosts,
                 allowed_origins=config.mcp_allowed_origins,
             ),
+            legacy_adapter_enabled=config.enable_legacy_http_adapter,
         )
 
-        # Start the session manager context
-        _worker_session_manager_context = _worker_session_manager.run()
-        await _worker_session_manager_context.__aenter__()
+        # Start the shared HTTP transport context.
+        _worker_http_transport_context = _worker_http_transport.run()
+        await _worker_http_transport_context.__aenter__()
 
         # Initialize OAuth and Token handlers
         _oauth_handlers = OAuthHandlers(_worker_security_manager)
@@ -420,7 +423,7 @@ async def root_info(request: Request) -> JSONResponse:
                 "health": "/health",
                 "live": "/live",
                 "ready": "/ready",
-                "mcp": "/mcp",
+                "mcp": MODERN_MCP_PATH,
             },
         }
     )
@@ -446,13 +449,13 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
 
         logger = get_logger(__name__)
 
-        # Close session manager context
-        if _worker_session_manager_context:
+        # Close MCP HTTP transport context.
+        if _worker_http_transport_context:
             try:
-                await _worker_session_manager_context.__aexit__(None, None, None)
-                logger.info(f"Worker {os.getpid()} session manager context closed")
+                await _worker_http_transport_context.__aexit__(None, None, None)
+                logger.info(f"Worker {os.getpid()} MCP HTTP transport context closed")
             except Exception as e:
-                logger.error(f"Error closing worker session manager context: {e}")
+                logger.error(f"Error closing worker MCP HTTP transport context: {e}")
 
         if _worker_tools_manager:
             try:
@@ -537,8 +540,8 @@ async def mcp_asgi_app(scope: Scope, receive: Receive, send: Send) -> None:
         authenticated_receive: Receive,
         authenticated_send: Send,
     ) -> None:
-        session_manager = _worker_session_manager
-        if session_manager is None:
+        http_transport = _worker_http_transport
+        if http_transport is None:
             await authenticated_send(
                 {
                     "type": "http.response.start",
@@ -549,11 +552,11 @@ async def mcp_asgi_app(scope: Scope, receive: Receive, send: Send) -> None:
             await authenticated_send(
                 {
                     "type": "http.response.body",
-                    "body": b'{"error": "Worker session manager not initialized"}',
+                    "body": b'{"error": "Worker MCP HTTP transport not initialized"}',
                 }
             )
             return
-        await session_manager.handle_request(
+        await http_transport.handle_request(
             authenticated_scope, authenticated_receive, authenticated_send
         )
 
@@ -613,7 +616,13 @@ async def app(scope: Scope, receive: Receive, send: Send) -> None:
     """Main ASGI app that routes requests"""
     path = scope.get("path", "/")
 
-    if path == "/mcp":
+    legacy_adapter_enabled = bool(
+        _worker_http_transport
+        and _worker_http_transport.legacy_adapter_enabled
+    )
+    if path == MODERN_MCP_PATH or (
+        path == LEGACY_MCP_PATH and legacy_adapter_enabled
+    ):
         await mcp_asgi_app(scope, receive, send)
     elif (
         path.startswith("/auth/")

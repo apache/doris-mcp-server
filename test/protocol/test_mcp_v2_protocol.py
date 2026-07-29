@@ -37,6 +37,10 @@ from mcp.types import (
 )
 
 from doris_mcp_server import __version__
+from doris_mcp_server.http_transport import (
+    LEGACY_MCP_PATH,
+    DorisMCPHTTPTransport,
+)
 from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
@@ -421,12 +425,11 @@ async def test_http_discover_is_stateless_and_unknown_method_does_not_kill_serve
 
 
 @pytest.mark.asyncio
-async def test_http_rejects_untrusted_origin_and_legacy_is_stateless():
-    app = create_test_server().streamable_http_app(
-        json_response=True,
-        stateless_http=True,
-        host="127.0.0.1",
-        transport_security=create_transport_security("127.0.0.1"),
+async def test_http_rejects_untrusted_origin_and_legacy_adapter_is_stateless():
+    app = DorisMCPHTTPTransport(
+        app=create_test_server(),
+        security_settings=create_transport_security("127.0.0.1"),
+        legacy_adapter_enabled=True,
     )
     legacy_initialize = {
         "jsonrpc": "2.0",
@@ -444,8 +447,8 @@ async def test_http_rejects_untrusted_origin_and_legacy_is_stateless():
     }
 
     async with (
-        app.router.lifespan_context(app),
-        httpx2.ASGITransport(app) as transport,
+        app.run(),
+        httpx2.ASGITransport(app.handle_request) as transport,
         httpx2.AsyncClient(
             transport=transport,
             base_url="http://127.0.0.1:3000",
@@ -472,7 +475,7 @@ async def test_http_rejects_untrusted_origin_and_legacy_is_stateless():
         assert rejected_host.status_code == 421
 
         initialized = await client.post(
-            "/mcp",
+            LEGACY_MCP_PATH,
             json=legacy_initialize,
             headers=legacy_headers,
         )

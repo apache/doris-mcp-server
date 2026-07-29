@@ -41,7 +41,7 @@ async def test_send_with_mcp_cors_forwards_response_start_and_body():
     headers = dict(messages[0]["headers"])
     assert headers[b"access-control-allow-origin"] == b"https://client.example"
     assert headers[b"access-control-allow-credentials"] == b"true"
-    assert headers[b"access-control-expose-headers"] == b"mcp-session-id, www-authenticate"
+    assert headers[b"access-control-expose-headers"] == b"www-authenticate"
     assert messages[1]["body"] == b"ok"
 
 
@@ -72,7 +72,10 @@ def test_mcp_cors_preflight_response_uses_origin_and_requested_headers():
         _scope(
             [
                 (b"origin", b"https://client.example"),
-                (b"access-control-request-headers", b"authorization, mcp-session-id"),
+                (
+                    b"access-control-request-headers",
+                    b"authorization, mcp-protocol-version",
+                ),
             ]
         )
     )
@@ -80,6 +83,24 @@ def test_mcp_cors_preflight_response_uses_origin_and_requested_headers():
     assert response.status_code == 204
     assert response.headers["Access-Control-Allow-Origin"] == "https://client.example"
     assert response.headers["Access-Control-Allow-Credentials"] == "true"
-    assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE, OPTIONS"
-    assert response.headers["Access-Control-Allow-Headers"] == "authorization, mcp-session-id"
+    assert response.headers["Access-Control-Allow-Methods"] == "POST, OPTIONS"
+    assert (
+        response.headers["Access-Control-Allow-Headers"]
+        == "authorization, mcp-protocol-version"
+    )
     assert response.headers["Vary"] == "Origin"
+
+
+def test_mcp_cors_preflight_defaults_advertise_only_modern_http_fields():
+    response = mcp_cors_preflight_response(_scope())
+
+    assert response.headers["Access-Control-Allow-Methods"] == "POST, OPTIONS"
+    allowed_headers = response.headers["Access-Control-Allow-Headers"].split(", ")
+    assert allowed_headers == [
+        "authorization",
+        "content-type",
+        "mcp-protocol-version",
+        "mcp-method",
+        "mcp-name",
+    ]
+    assert "mcp-session-id" not in response.headers["Access-Control-Allow-Headers"]

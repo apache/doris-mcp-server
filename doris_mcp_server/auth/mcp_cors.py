@@ -36,7 +36,7 @@ def mcp_cors_header_pairs(scope: dict[str, Any]) -> list[tuple[bytes, bytes]]:
     cors_headers = [
         (b"access-control-allow-origin", origin),
         (b"access-control-allow-credentials", b"true"),
-        (b"access-control-expose-headers", b"mcp-session-id, www-authenticate"),
+        (b"access-control-expose-headers", b"www-authenticate"),
     ]
     if origin != b"*":
         cors_headers.append((b"vary", b"Origin"))
@@ -68,9 +68,13 @@ def mcp_cors_preflight_response(scope: dict[str, Any]) -> Response:
     response = Response("", status_code=204)
     response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Access-Control-Allow-Credentials"] = "true"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
-        request_headers or "authorization, content-type, mcp-session-id"
+        request_headers
+        or (
+            "authorization, content-type, mcp-protocol-version, "
+            "mcp-method, mcp-name"
+        )
     )
     response.headers["Access-Control-Max-Age"] = "86400"
     if origin != "*":

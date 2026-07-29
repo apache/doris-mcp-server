@@ -602,6 +602,7 @@ class DorisConfig:
     server_port: int = 3000
     mcp_allowed_hosts: list[str] = field(default_factory=list)
     mcp_allowed_origins: list[str] = field(default_factory=list)
+    enable_legacy_http_adapter: bool = False
     transport: str = "stdio"
     workers: int = 1
 
@@ -1142,6 +1143,11 @@ class DorisConfig:
                 if value.strip()
             ]
             _mark_source(config, "mcp_allowed_origins", "env")
+        if "ENABLE_LEGACY_HTTP_ADAPTER" in os.environ:
+            config.enable_legacy_http_adapter = (
+                os.getenv("ENABLE_LEGACY_HTTP_ADAPTER", "false").lower() == "true"
+            )
+            _mark_source(config, "enable_legacy_http_adapter", "env")
         config.temp_files_dir = os.getenv("TEMP_FILES_DIR", config.temp_files_dir)
 
         return config
@@ -1158,6 +1164,7 @@ class DorisConfig:
             "server_port",
             "mcp_allowed_hosts",
             "mcp_allowed_origins",
+            "enable_legacy_http_adapter",
             "temp_files_dir",
             "transport",
             "workers",
@@ -1231,6 +1238,7 @@ class DorisConfig:
             "server_port": self.server_port,
             "mcp_allowed_hosts": self.mcp_allowed_hosts,
             "mcp_allowed_origins": self.mcp_allowed_origins,
+            "enable_legacy_http_adapter": self.enable_legacy_http_adapter,
             "temp_files_dir": self.temp_files_dir,
             "database": {
                 "host": self.database.host,

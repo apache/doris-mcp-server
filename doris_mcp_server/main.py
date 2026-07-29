@@ -36,6 +36,11 @@ from starlette.types import Receive, Scope, Send
 
 from ._version import __version__
 from .health import liveness_payload, readiness_payload
+from .http_transport import (
+    LEGACY_MCP_PATH,
+    MODERN_MCP_PATH,
+    DorisMCPHTTPTransport,
+)
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
 from .tools.resources_manager import DorisResourcesManager
@@ -75,6 +80,9 @@ def _multiworker_environment(
         "SERVER_PORT": str(port),
         "MCP_ALLOWED_HOSTS": ",".join(config.mcp_allowed_hosts),
         "MCP_ALLOWED_ORIGINS": ",".join(config.mcp_allowed_origins),
+        "ENABLE_LEGACY_HTTP_ADAPTER": str(
+            config.enable_legacy_http_adapter
+        ).lower(),
         "SERVER_NAME": config.server_name,
         "TRANSPORT": "http",
         "WORKERS": str(workers),
@@ -239,25 +247,25 @@ class DorisServer:
             from collections.abc import AsyncIterator
 
             import uvicorn
-            from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
             from starlette.applications import Starlette
             from starlette.responses import JSONResponse
             from starlette.routing import Route
 
-            # Create session manager
-            session_manager = StreamableHTTPSessionManager(
+            # Create the exact modern/legacy HTTP boundary.
+            http_transport = DorisMCPHTTPTransport(
                 app=self.server,
-                json_response=True,
-                stateless=True,
                 security_settings=create_transport_security(
                     host,
                     allowed_hosts=self.config.mcp_allowed_hosts,
                     allowed_origins=self.config.mcp_allowed_origins,
                 ),
+                legacy_adapter_enabled=self.config.enable_legacy_http_adapter,
             )
 
             self.logger.info(
-                f"StreamableHTTP session manager created, will start at http://{host}:{port}"
+                "Streamable HTTP transport created at "
+                f"http://{host}:{port}{MODERN_MCP_PATH}; legacy adapter "
+                f"{'enabled' if self.config.enable_legacy_http_adapter else 'disabled'}"
             )
 
             # Health check endpoint
@@ -339,7 +347,7 @@ class DorisServer:
                     self.security_manager.auth_provider.doris_oauth_provider
                 )
 
-            # Lifecycle manager - simplified since we manage session_manager externally
+            # Lifecycle manager - the MCP transport lifespan is managed externally.
             @contextlib.asynccontextmanager
             async def lifespan(app: Starlette) -> AsyncIterator[None]:
                 """Context manager for managing application lifecycle"""
@@ -382,7 +390,7 @@ class DorisServer:
                 ]
             )
 
-            # Create ASGI application - use direct session manager as ASGI app
+            # Create the auxiliary ASGI application; MCP routing stays separate.
             starlette_app = Starlette(
                 debug=False,
                 routes=routes,
@@ -397,7 +405,7 @@ class DorisServer:
                 send: Send,
             ) -> None:
                 """Handle authenticated MCP request after auth context is set."""
-                await session_manager.handle_request(scope, receive, send)
+                await http_transport.handle_request(scope, receive, send)
 
             mcp_auth_middleware = MCPAuthASGIMiddleware(
                 self.security_manager,
@@ -445,7 +453,10 @@ class DorisServer:
                             await starlette_app(scope, receive, send)
                             return
 
-                        if path == "/mcp":
+                        if path == MODERN_MCP_PATH or (
+                            path == LEGACY_MCP_PATH
+                            and self.config.enable_legacy_http_adapter
+                        ):
                             self.logger.info(f"Handling MCP request for path: {path}")
                             await mcp_auth_middleware(scope, receive, send)
                             return
@@ -496,16 +507,16 @@ class DorisServer:
 
             else:
                 self.logger.info("Using single-process mode")
-                # Single worker mode, use original logic with session manager lifecycle
+                # Single worker mode, use the shared MCP transport lifecycle.
                 config = uvicorn.Config(
                     app=mcp_app, host=host, port=port, log_level="info"
                 )
                 server = uvicorn.Server(config)
 
-                # Run session manager and server together
-                async with session_manager.run():
+                # Run MCP transport and server together.
+                async with http_transport.run():
                     self.logger.info(
-                        "Session manager started, now starting HTTP server"
+                        "MCP HTTP transport started, now starting HTTP server"
                     )
                     await server.serve()
 

@@ -41,6 +41,8 @@ under **Unreleased** until a new version is selected and published.
 
 - Consolidated tools, resources, and prompts on the Python SDK v2 protocol
   core.
+- Restricted the modern `/mcp` endpoint to 2026-07-28 POST requests and moved
+  legacy HTTP migration traffic to a default-off `/mcp/legacy` adapter.
 - Unified package metadata, CLI output, `server/discover`, legacy
   `serverInfo`, and health endpoints on one product version source.
 - Documented the modern request headers, migration steps, and deployment
