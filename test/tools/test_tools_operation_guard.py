@@ -12,6 +12,7 @@ from doris_mcp_server.auth.operation_policy import (
 from doris_mcp_server.protocol import create_doris_mcp_server
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
+from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
 from doris_mcp_server.utils.db import QueryResult
 from doris_mcp_server.utils.query_executor import DorisQueryExecutor
 from doris_mcp_server.utils.schema_extractor import MetadataExtractor
@@ -408,6 +409,45 @@ async def test_sql_profile_binds_auth_context_without_catalog(tmp_path, db_name)
     ):
         assert call["sql"].startswith(sql_prefix)
         assert call["doris_user"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_data_freshness_none_threshold_uses_default():
+    manager = object.__new__(DorisToolsManager)
+    manager.data_governance_tools = SimpleNamespace(
+        monitor_data_freshness=AsyncMock(return_value={"ok": True})
+    )
+
+    result = await manager._monitor_data_freshness_tool(
+        {
+            "table_names": ["orders"],
+            "freshness_threshold_hours": None,
+        }
+    )
+
+    assert result == {"ok": True}
+    manager.data_governance_tools.monitor_data_freshness.assert_awaited_once_with(
+        tables=["orders"],
+        time_threshold_hours=24,
+        catalog_name=None,
+        db_name=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unknown_data_freshness_is_not_compared_as_a_number():
+    governance = DataGovernanceTools(SimpleNamespace())
+
+    issues = await governance._identify_data_flow_issues(
+        {
+            "orders": {
+                "status": "unknown",
+                "staleness_hours": None,
+            }
+        }
+    )
+
+    assert issues == []
 
 
 @pytest.mark.asyncio

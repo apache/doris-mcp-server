@@ -139,7 +139,7 @@
 | `CORE-008` | P2 | 大结果边界 | 无 | 行数、字节数、超时和取消可配置且有硬上限 | `BACKLOG` |
 | `CORE-009` | P2 | manager 模块职责拆分 | CORE-005 | 不改变行为前提下缩小超大文件，模块边界有测试 | `BACKLOG` |
 | `CORE-010` | P1 | 修复 SQL profile 分析未绑定 `auth_context` | 无 | 真实 Doris 调用不再触发局部变量未赋值；鉴权上下文覆盖测试通过 | `DONE` |
-| `CORE-011` | P1 | 修复数据新鲜度空阈值比较 | 无 | 阈值缺失或为 `None` 时返回类型化错误/默认值，不抛 `TypeError` | `READY` |
+| `CORE-011` | P1 | 修复数据新鲜度空阈值比较 | 无 | 阈值缺失或为 `None` 时返回类型化错误/默认值，不抛 `TypeError` | `DONE` |
 | `COMPAT-001` | P1 | Doris 4.0 元数据字段兼容 | 无 | Doris 4.0.5 的角色/权限查询不再依赖不存在的 `Default_role` 字段 | `READY` |
 | `COMPAT-002` | P2 | FE/BE HTTP 端点独立配置 | SEC-018 | SQL、FE HTTP、BE HTTP 可分别配置主机/端口并通过代理/隧道环境测试 | `BACKLOG` |
 
@@ -477,13 +477,46 @@ recovery result: org_tenant=47040
 
 连接通过既有 SSH key 与临时 SQL/FE HTTP 隧道完成；凭据未写入仓库、测试或台账，探针结束后 MCP 服务与隧道均已关闭。
 
+提交与评审回执：
+
+- commit：`e2e90e0 fix: bind auth context for SQL profiles`
+- Draft PR：[apache/doris-mcp-server#97](https://github.com/apache/doris-mcp-server/pull/97)
+
+### CORE-011
+
+数据新鲜度工具现在把缺省或显式为 `None` 的 `freshness_threshold_hours` 统一归一为 24 小时，并在业务实现入口再次兜底。无法从 Doris 推断更新时间时，`staleness_hours=None` 保持为明确的 `unknown` 状态，不再进入数值比较；只有真实数字且超过 72 小时时才生成“严重陈旧”数据流问题。
+
+自动化验证：
+
+- 路由层：显式 `None` 向业务层传递默认值 24；
+- 分析层：`unknown + staleness_hours=None` 返回空问题列表，不抛 `TypeError`；
+- Streamable HTTP：缺省阈值、未知更新时间返回结构化结果；
+- 真实子进程 STDIO modern/legacy：同一未知状态和默认阈值契约；
+- 完整 pytest：`351 passed / 57 skipped / 0 failed / 249 warnings`；
+- `uv lock --check`、新增测试完整 Ruff、运行时严重错误规则 Ruff、`compileall`、`uv build` 全部通过。
+
+真实 Doris 验证：
+
+```text
+environment: 192.168.31.63 / hhm_dt_sim
+table: org_tenant
+default threshold: 24
+explicit null threshold: 24
+freshness status: unknown
+recovery result: org_tenant=47040
+```
+
+- HTTP modern/legacy：缺省与显式空阈值均返回 24，未知更新时间不抛异常，随后真实查询成功；
+- STDIO modern/legacy：同样覆盖缺省与显式空阈值，随后真实查询成功；
+- 连接通过既有 SSH key 和临时本地隧道完成；凭据未写入仓库、测试或台账，探针完成后服务与隧道均已关闭。
+
 ## 11. 下一开发批次
 
 批次：`BATCH-02-CONFORMANCE-AND-ERROR-SEMANTICS`
 
 按以下顺序推进：
 
-1. `CORE-011` / `COMPAT-001`：继续修复真实 Doris 已复现缺陷；
+1. `COMPAT-001`：继续修复真实 Doris 已复现缺陷；
 2. `TEST-003`：运行官方 `server-stateless` Conformance；
 3. `TEST-005` / `TEST-012`：补权限不足、超时、故障恢复和工具错误路径；
 4. `PROTO-018` / `DOC-001` / `DOC-002`：版本单一来源和迁移文档；

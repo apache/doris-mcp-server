@@ -34,7 +34,9 @@ from mcp.types import (
 )
 
 from doris_mcp_server.protocol import create_doris_mcp_server
+from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
+from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
 from doris_mcp_server.utils.db import QueryResult
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
@@ -88,9 +90,30 @@ class ProfileAnalyzer(SQLAnalyzer):
         return {"profile": "ok", "query_id": query_id}
 
 
+class FreshnessGovernanceTools(DataGovernanceTools):
+    async def _analyze_table_freshness(
+        self,
+        connection,
+        table_name: str,
+        threshold_hours: int,
+    ) -> dict:
+        return {
+            "last_update": None,
+            "staleness_hours": None,
+            "freshness_score": 0.0,
+            "status": "unknown",
+            "method_used": "none",
+        }
+
+
 class OneToolManager:
     def __init__(self) -> None:
-        self.profile_analyzer = ProfileAnalyzer(ProfileConnectionManager())
+        connection_manager = ProfileConnectionManager()
+        self.profile_analyzer = ProfileAnalyzer(connection_manager)
+        self.freshness_router = object.__new__(DorisToolsManager)
+        self.freshness_router.data_governance_tools = FreshnessGovernanceTools(
+            connection_manager
+        )
 
     async def list_tools(self) -> list[Tool]:
         return [
@@ -111,6 +134,20 @@ class OneToolManager:
                     "required": ["sql"],
                 },
             ),
+            Tool(
+                name="monitor_data_freshness",
+                description="Exercise unknown freshness values with the default threshold.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "table_names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "freshness_threshold_hours": {"type": "integer"},
+                    },
+                },
+            ),
         ]
 
     async def call_tool(self, name: str, arguments: dict) -> str:
@@ -120,6 +157,10 @@ class OneToolManager:
                     arguments["sql"],
                     db_name=arguments.get("db_name"),
                 )
+            )
+        if name == "monitor_data_freshness":
+            return json.dumps(
+                await self.freshness_router._monitor_data_freshness_tool(arguments)
             )
         return "{}"
 
