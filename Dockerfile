@@ -41,8 +41,11 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy only runtime files. This keeps source-control metadata, local reports,
+# tests, caches, and untracked operator files out of the production image.
+COPY doris_mcp_server ./doris_mcp_server
+COPY start_server.sh .
+COPY LICENSE.txt .
 
 # Convert line endings for shell scripts and ensure proper execution format
 RUN find . -name "*.sh" -exec dos2unix {} \; && \
@@ -56,12 +59,14 @@ RUN groupadd -r doris && useradd -r -g doris doris
 RUN chown -R doris:doris /app
 USER doris
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+# The image-level probe reports process liveness. Deployments that route Doris
+# traffic should override it with the /ready probe, as docker-compose.yml does.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD curl --fail --silent --show-error --max-time 3 \
+        http://127.0.0.1:3000/live || exit 1
 
-# Expose ports
-EXPOSE 3000 3001 3002
+# Streamable HTTP, liveness, and readiness share the server's HTTP listener.
+EXPOSE 3000
 
 # Start command
 CMD ["/app/start_server.sh"]

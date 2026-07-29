@@ -23,6 +23,8 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.database.password = "test-password"
     config.database.database = "hhm_dt_sim"
     config.server_name = "doris-mcp-server"
+    config.mcp_allowed_hosts = ["mcp.example.test", "mcp.example.test:*"]
+    config.mcp_allowed_origins = ["https://client.example.test"]
 
     worker_env = _multiworker_environment(
         config,
@@ -43,6 +45,11 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.database.database == "hhm_dt_sim"
     assert child_config.server_host == "127.0.0.1"
     assert child_config.server_port == 31133
+    assert child_config.mcp_allowed_hosts == [
+        "mcp.example.test",
+        "mcp.example.test:*",
+    ]
+    assert child_config.mcp_allowed_origins == ["https://client.example.test"]
     assert child_config.server_name == "doris-mcp-server"
     assert child_config.server_version == __version__
     assert child_config.transport == "http"

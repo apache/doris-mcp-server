@@ -379,8 +379,31 @@ If you want to run only Doris MCP Server in docker:
 ```bash
 cd doris-mcp-server
 docker build -t doris-mcp-server .
-docker run -d -p <port>:<port> -v /*your-host*/doris-mcp-server/.env:/app/.env --name <your-mcp-server-name> -it doris-mcp-server:latest
+docker run -d -p <host-port>:3000 -v /*your-host*/doris-mcp-server/.env:/app/.env --name <your-mcp-server-name> doris-mcp-server:latest
 ```
+
+The container always listens on port `3000`. The bundled Compose deployment
+publishes it on host port `3000` by default and publishes Grafana on host port
+`3003`, so the two services do not contend for the same port. Override those
+defaults with `MCP_HTTP_PORT` and `GRAFANA_HTTP_PORT`:
+
+```bash
+MCP_HTTP_PORT=3100 GRAFANA_HTTP_PORT=3103 docker compose up -d
+```
+
+The image-level Docker health check uses `/live`, so a temporary Doris outage
+does not cause the MCP process to be treated as dead. Compose overrides that
+probe with `/ready` and only marks the service ready after the bounded Doris
+probe succeeds. Both probes use the actual internal listener on port `3000`.
+
+Compose allows `127.0.0.1:*` and `localhost:*` Host headers by default. A
+deployment reached through another hostname, IP address, or reverse proxy must
+set an explicit comma-separated allowlist; an allow-all `*` value is rejected:
+
+```bash
+MCP_ALLOWED_HOSTS='mcp.example.com,mcp.example.com:*' docker compose up -d
+```
+
 **Service Endpoints:**
 
 *   **Streamable HTTP**: `http://<host>:<port>/mcp` (MCP messages use `POST`; do not depend on `GET` or `DELETE` compatibility behavior)

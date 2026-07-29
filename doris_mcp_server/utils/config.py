@@ -604,6 +604,8 @@ class DorisConfig:
     server_version: str = field(default=__version__, init=False)
     server_host: str = "localhost"
     server_port: int = 3000
+    mcp_allowed_hosts: list[str] = field(default_factory=list)
+    mcp_allowed_origins: list[str] = field(default_factory=list)
     transport: str = "stdio"
     
     # Temporary files configuration
@@ -1122,6 +1124,20 @@ class DorisConfig:
         server_port = os.getenv("SERVER_PORT", "").strip()
         if server_port and server_port.isdigit():
             config.server_port = int(server_port)
+        if "MCP_ALLOWED_HOSTS" in os.environ:
+            config.mcp_allowed_hosts = [
+                value.strip()
+                for value in os.getenv("MCP_ALLOWED_HOSTS", "").split(",")
+                if value.strip()
+            ]
+            _mark_source(config, "mcp_allowed_hosts", "env")
+        if "MCP_ALLOWED_ORIGINS" in os.environ:
+            config.mcp_allowed_origins = [
+                value.strip()
+                for value in os.getenv("MCP_ALLOWED_ORIGINS", "").split(",")
+                if value.strip()
+            ]
+            _mark_source(config, "mcp_allowed_origins", "env")
         config.temp_files_dir = os.getenv("TEMP_FILES_DIR", config.temp_files_dir)
 
         return config
@@ -1136,6 +1152,8 @@ class DorisConfig:
             "server_name",
             "server_host",
             "server_port",
+            "mcp_allowed_hosts",
+            "mcp_allowed_origins",
             "temp_files_dir",
             "transport",
             "workers",
@@ -1207,6 +1225,8 @@ class DorisConfig:
             "server_version": self.server_version,
             "server_host": self.server_host,
             "server_port": self.server_port,
+            "mcp_allowed_hosts": self.mcp_allowed_hosts,
+            "mcp_allowed_origins": self.mcp_allowed_origins,
             "temp_files_dir": self.temp_files_dir,
             "database": {
                 "host": self.database.host,

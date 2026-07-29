@@ -14,8 +14,6 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-version: '3.8'
-
 services:
   # Doris MCP Server
   doris-mcp-server:
@@ -24,9 +22,7 @@ services:
       dockerfile: Dockerfile
     container_name: doris-mcp-server
     ports:
-      - "3000:3000"  # MCP service port
-      - "3001:3001"  # Monitoring metrics port
-      - "3002:3002"  # Health check port
+      - "${MCP_HTTP_PORT:-3000}:3000"  # Streamable HTTP, liveness, and readiness
     environment:
       # Database configuration
       - DORIS_HOST=doris-fe
@@ -40,7 +36,9 @@ services:
       - DORIS_MAX_CONNECTIONS=20
       
       # Security configuration
-      - MCP_HOST=0.0.0.0
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=3000
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-127.0.0.1:*,localhost:*}
       - ENABLE_TOKEN_AUTH=true
       - TOKEN_ADMIN=${MCP_STATIC_TOKEN:?Set MCP_STATIC_TOKEN to a securely generated value of at least 32 characters}
       - MAX_RESULT_ROWS=10000
@@ -60,15 +58,17 @@ services:
       - ./logs:/app/logs
       - ./config:/app/config
     depends_on:
-      - doris-fe
-      - doris-be
+      doris-fe:
+        condition: service_healthy
+      doris-be:
+        condition: service_healthy
     networks:
       - doris-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--max-time", "3", "http://127.0.0.1:3000/ready"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 40s
 
@@ -165,7 +165,7 @@ services:
     image: grafana/grafana:latest
     container_name: doris-grafana
     ports:
-      - "3000:3000"
+      - "${GRAFANA_HTTP_PORT:-3003}:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin123
     volumes:
@@ -190,7 +190,8 @@ services:
       - ./nginx/ssl:/etc/nginx/ssl
       - ./nginx/logs:/var/log/nginx
     depends_on:
-      - doris-mcp-server
+      doris-mcp-server:
+        condition: service_healthy
     networks:
       - doris-network
     restart: unless-stopped

@@ -46,6 +46,25 @@ from test.protocol.stdio_capability_server import OneToolManager as ProfileToolM
 REQUIRED_EXTENSION = "io.apache.doris/read"
 
 
+def test_transport_security_accepts_explicit_deployment_allowlists():
+    settings = create_transport_security(
+        "0.0.0.0",
+        allowed_hosts=["mcp.example.test", "mcp.example.test:*"],
+        allowed_origins=["https://client.example.test"],
+    )
+
+    assert settings.allowed_hosts == [
+        "mcp.example.test",
+        "mcp.example.test:*",
+    ]
+    assert settings.allowed_origins == ["https://client.example.test"]
+
+
+def test_transport_security_rejects_allow_all_host():
+    with pytest.raises(ValueError, match="must list deployment hosts explicitly"):
+        create_transport_security("0.0.0.0", allowed_hosts=["*"])
+
+
 async def _unused_sampling_callback(context, params):
     del context, params
     raise AssertionError("The capability fixture must not issue sampling requests")

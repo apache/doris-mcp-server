@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 
 from mcp.server import Server, ServerRequestContext
@@ -81,24 +81,52 @@ class PromptsManager(Protocol):
     ) -> GetPromptResult: ...
 
 
-def create_transport_security(host: str) -> TransportSecuritySettings:
+def _explicit_transport_allowlist(
+    values: Iterable[str] | None,
+    *,
+    setting: str,
+) -> list[str]:
+    """Normalize an explicit transport allowlist without accepting allow-all."""
+    normalized = list(dict.fromkeys(str(value).strip() for value in values or ()))
+    normalized = [value for value in normalized if value]
+    if "*" in normalized:
+        raise ValueError(
+            f"{setting} must list deployment hosts explicitly; '*' is not allowed"
+        )
+    return normalized
+
+
+def create_transport_security(
+    host: str,
+    *,
+    allowed_hosts: Iterable[str] | None = None,
+    allowed_origins: Iterable[str] | None = None,
+) -> TransportSecuritySettings:
     """Create a fail-closed Host and Origin policy for a bind host."""
+    configured_hosts = _explicit_transport_allowlist(
+        allowed_hosts,
+        setting="MCP_ALLOWED_HOSTS",
+    )
+    configured_origins = _explicit_transport_allowlist(
+        allowed_origins,
+        setting="MCP_ALLOWED_ORIGINS",
+    )
     if host in {"127.0.0.1", "localhost", "::1"}:
-        allowed_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
-        allowed_origins = [
+        default_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+        default_origins = [
             "http://127.0.0.1:*",
             "http://localhost:*",
             "http://[::1]:*",
         ]
     else:
         # A bind address is not a public deployment hostname. Explicit
-        # deployment allowlists will replace this conservative fallback.
-        allowed_hosts = [host, f"{host}:*"]
-        allowed_origins = []
+        # deployment allowlists replace this conservative fallback.
+        default_hosts = [host, f"{host}:*"]
+        default_origins = []
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=allowed_hosts,
-        allowed_origins=allowed_origins,
+        allowed_hosts=configured_hosts or default_hosts,
+        allowed_origins=configured_origins or default_origins,
     )
 
 
