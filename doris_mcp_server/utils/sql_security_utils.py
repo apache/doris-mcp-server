@@ -22,7 +22,8 @@ to prevent SQL injection attacks.
 """
 
 import re
-from typing import Optional, Tuple, List, Any
+from collections.abc import Mapping, Sequence
+from typing import Optional, Tuple
 
 from .logger import get_logger
 from .security import (
@@ -67,6 +68,19 @@ class SQLSecurityUtils:
         'DISTINCT', 'INTO', 'VALUES', 'SET', 'DEFAULT', 'PRIMARY', 'KEY',
         'FOREIGN', 'REFERENCES', 'CHECK', 'UNIQUE', 'CONSTRAINT'
     }
+
+    RULE_OPERATORS = {
+        "=",
+        "!=",
+        "<>",
+        "<",
+        ">",
+        "<=",
+        ">=",
+        "LIKE",
+        "NOT LIKE",
+    }
+    NULL_RULE_OPERATORS = {"IS NULL", "IS NOT NULL"}
     
     @classmethod
     def validate_identifier(cls, name: str, identifier_type: str = "identifier") -> str:
@@ -256,6 +270,73 @@ class SQLSecurityUtils:
             return f"{quoted_column} {operator} %s", True
         else:
             return f"{quoted_column} {operator}", False
+
+    @staticmethod
+    def validate_integer(
+        value: object,
+        value_name: str,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        """Return an integer that is safe to embed in SQL grammar positions."""
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise SQLSecurityError(f"Invalid {value_name}: must be an integer")
+        if not minimum <= value <= maximum:
+            raise SQLSecurityError(
+                f"Invalid {value_name}: must be between {minimum} and {maximum}"
+            )
+        return value
+
+    @classmethod
+    def build_rule_predicate(
+        cls,
+        rule: Mapping[str, object],
+    ) -> tuple[str, tuple[object, ...]]:
+        """Build one parameterized business-rule predicate.
+
+        Raw SQL fragments are intentionally unsupported. Callers provide a column,
+        an allowlisted operator, and a value (or values for ``IN``).
+        """
+        if "sql_condition" in rule:
+            raise SQLSecurityError(
+                "Raw sql_condition rules are not supported; use column/operator/value"
+            )
+
+        column_name = rule.get("column")
+        if not isinstance(column_name, str):
+            raise SQLSecurityError("Business rule column must be a string")
+        column = cls.quote_identifier(column_name, "column name")
+        operator = str(rule.get("operator", "=")).strip().upper()
+
+        if operator in cls.NULL_RULE_OPERATORS:
+            return f"{column} {operator}", ()
+
+        if operator == "IN":
+            values = rule.get("values")
+            if (
+                not isinstance(values, Sequence)
+                or isinstance(values, str | bytes)
+                or not values
+                or len(values) > 100
+            ):
+                raise SQLSecurityError(
+                    "IN rule values must be a non-empty sequence of at most 100 items"
+                )
+            placeholders = ", ".join("%s" for _ in values)
+            return f"{column} IN ({placeholders})", tuple(values)
+
+        if operator not in cls.RULE_OPERATORS:
+            allowed = sorted(
+                cls.RULE_OPERATORS | cls.NULL_RULE_OPERATORS | {"IN"}
+            )
+            raise SQLSecurityError(
+                f"Invalid business rule operator: {operator!r}; allowed: {allowed}"
+            )
+
+        if "value" not in rule:
+            raise SQLSecurityError("Business rule value is required")
+        return f"{column} {operator} %s", (rule["value"],)
     
     @staticmethod
     def get_auth_context():
@@ -296,5 +377,7 @@ validate_identifier = SQLSecurityUtils.validate_identifier
 quote_identifier = SQLSecurityUtils.quote_identifier
 build_table_reference = SQLSecurityUtils.build_table_reference
 build_column_reference = SQLSecurityUtils.build_column_reference
+build_rule_predicate = SQLSecurityUtils.build_rule_predicate
+validate_integer = SQLSecurityUtils.validate_integer
 get_auth_context = SQLSecurityUtils.get_auth_context
 set_auth_context = SQLSecurityUtils.set_auth_context

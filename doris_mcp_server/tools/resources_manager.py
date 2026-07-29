@@ -30,7 +30,7 @@ from mcp.types import Resource
 from ..utils.db import DorisConnectionManager
 from ..utils.logger import get_logger
 from ..utils.redaction import redact_uri
-from ..utils.sql_security_utils import get_auth_context
+from ..utils.sql_security_utils import get_auth_context, quote_identifier
 
 
 logger = get_logger(__name__)
@@ -141,9 +141,10 @@ class DorisResourcesManager:
         return getattr(get_auth_context(), "auth_method", "") == "doris_oauth"
 
     def _schema_filter(self, column_name: str, db_name: str | None) -> tuple[str, tuple]:
+        safe_column = quote_identifier(column_name, "information schema column")
         if db_name:
-            return f"{column_name} = %s", (db_name,)
-        return f"{column_name} = DATABASE()", ()
+            return f"{safe_column} = %s", (db_name,)
+        return f"{safe_column} = DATABASE()", ()
 
     def _first_row_value(self, row: Any) -> Any:
         if isinstance(row, dict):
@@ -383,6 +384,8 @@ class DorisResourcesManager:
     ) -> list[TableMetadata]:
         """Get table metadata for a specific database or the current database."""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
+        # SQL sink audit: schema column -> quote_identifier and database value
+        # -> bound param; fixed template -> DorisConnection.execute.
         tables_query = """
         SELECT
             table_name,
@@ -393,7 +396,7 @@ class DorisResourcesManager:
         WHERE {schema_filter}
         AND table_type = 'BASE TABLE'
         ORDER BY table_name
-        """.format(schema_filter=schema_filter)
+        """.format(schema_filter=schema_filter)  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -423,6 +426,8 @@ class DorisResourcesManager:
     ) -> list[dict]:
         """Get column information for table"""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
+        # SQL sink audit: schema column -> quote_identifier; database/table
+        # values -> bound params; fixed template -> DorisConnection.execute.
         columns_query = """
         SELECT
             column_name,
@@ -435,7 +440,7 @@ class DorisResourcesManager:
         WHERE {schema_filter}
         AND table_name = %s
         ORDER BY ordinal_position
-        """.format(schema_filter=schema_filter)
+        """.format(schema_filter=schema_filter)  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -463,6 +468,8 @@ class DorisResourcesManager:
     ) -> list[ViewMetadata]:
         """Get view metadata for a specific database or the current database."""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
+        # SQL sink audit: schema column -> quote_identifier and database value
+        # -> bound param; fixed template -> DorisConnection.execute.
         views_query = """
         SELECT
             table_name,
@@ -471,7 +478,7 @@ class DorisResourcesManager:
         FROM information_schema.views
         WHERE {schema_filter}
         ORDER BY table_name
-        """.format(schema_filter=schema_filter)
+        """.format(schema_filter=schema_filter)  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -496,6 +503,8 @@ class DorisResourcesManager:
         """Get detailed structure information of table"""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # Get basic table information
+        # SQL sink audit: schema column -> quote_identifier; database/table
+        # values -> bound params; fixed template -> DorisConnection.execute.
         table_info_query = """
         SELECT
             table_name,
@@ -506,7 +515,7 @@ class DorisResourcesManager:
         FROM information_schema.tables
         WHERE {schema_filter}
         AND table_name = %s
-        """.format(schema_filter=schema_filter)
+        """.format(schema_filter=schema_filter)  # nosec B608
 
         async with self._connection_context("system") as connection:
             auth_context = get_auth_context()
@@ -545,6 +554,8 @@ class DorisResourcesManager:
     ) -> list[dict]:
         """Get index information for table"""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
+        # SQL sink audit: schema column -> quote_identifier; database/table
+        # values -> bound params; fixed template -> DorisConnection.execute.
         indexes_query = """
         SELECT
             index_name,
@@ -555,7 +566,7 @@ class DorisResourcesManager:
         WHERE {schema_filter}
         AND table_name = %s
         ORDER BY index_name, seq_in_index
-        """.format(schema_filter=schema_filter)
+        """.format(schema_filter=schema_filter)  # nosec B608
 
         auth_context = get_auth_context()
         result = await connection.execute(
@@ -568,6 +579,8 @@ class DorisResourcesManager:
     async def _get_view_definition(self, view_name: str, db_name: str | None = None) -> str:
         """Get definition information of view"""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
+        # SQL sink audit: schema column -> quote_identifier; database/view
+        # values -> bound params; fixed template -> DorisConnection.execute.
         view_query = """
         SELECT
             table_name,
@@ -576,7 +589,7 @@ class DorisResourcesManager:
         FROM information_schema.views
         WHERE {schema_filter}
         AND table_name = %s
-        """.format(schema_filter=schema_filter)
+        """.format(schema_filter=schema_filter)  # nosec B608
 
         async with self._connection_context("system") as connection:
             auth_context = get_auth_context()
@@ -604,6 +617,8 @@ class DorisResourcesManager:
         """Get database statistics"""
         schema_filter, schema_params = self._schema_filter("table_schema", db_name)
         # Get table statistics
+        # SQL sink audit: schema column -> quote_identifier and database value
+        # -> bound param; fixed template -> DorisConnection.execute.
         table_stats_query = """
         SELECT
             COUNT(*) as table_count,
@@ -611,7 +626,7 @@ class DorisResourcesManager:
         FROM information_schema.tables
         WHERE {schema_filter}
         AND table_type = 'BASE TABLE'
-        """.format(schema_filter=schema_filter)
+        """.format(schema_filter=schema_filter)  # nosec B608
 
         async with self._connection_context("system") as connection:
             auth_context = get_auth_context()
@@ -623,11 +638,12 @@ class DorisResourcesManager:
             table_stats = table_result.data[0] if table_result.data else {}
 
             # Get view statistics
+            # SQL sink audit: same quoted schema column and bound database value.
             view_stats_query = """
             SELECT COUNT(*) as view_count
             FROM information_schema.views
             WHERE {schema_filter}
-            """.format(schema_filter=schema_filter)
+            """.format(schema_filter=schema_filter)  # nosec B608
 
             view_result = await connection.execute(
                 view_stats_query,

@@ -26,7 +26,7 @@ from collections import Counter, defaultdict
 
 from .db import DorisConnectionManager
 from .logger import get_logger
-from .sql_security_utils import get_auth_context
+from .sql_security_utils import get_auth_context, validate_integer
 
 logger = get_logger(__name__)
 
@@ -57,6 +57,13 @@ class SecurityAnalyticsTools:
         """
         connection = None
         try:
+            days = validate_integer(days, "days", minimum=1, maximum=3650)
+            min_query_threshold = validate_integer(
+                min_query_threshold,
+                "minimum query threshold",
+                minimum=0,
+                maximum=1_000_000,
+            )
             start_time = time.time()
             
             # 🚀 PROGRESS: Initialize security analysis
@@ -176,11 +183,15 @@ class SecurityAnalyticsTools:
         try:
             # System users filter
             system_user_filter = ""
+            params = [start_date, end_date]
             if not include_system_users:
                 system_users = ['root', 'admin', 'system', 'doris', 'information_schema']
-                user_list = ','.join([f'"{user}"' for user in system_users])
-                system_user_filter = f"AND `user` NOT IN ({user_list})"
+                placeholders = ", ".join("%s" for _ in system_users)
+                system_user_filter = f"AND `user` NOT IN ({placeholders})"
+                params.extend(system_users)
             
+            # SQL sink audit: filter has only fixed local variants; date/user
+            # values are bound through params before DorisConnection.execute.
             audit_sql = f"""
             SELECT 
                 `user` as user_name,
@@ -193,24 +204,30 @@ class SecurityAnalyticsTools:
                 `return_rows` as return_rows,
                 `query_time` as execution_time_ms
             FROM internal.__internal_schema.audit_log 
-            WHERE `time` >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                AND `time` <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+            WHERE `time` >= %s
+                AND `time` <= %s
                 AND `stmt` IS NOT NULL
                 AND `stmt` != ''
                 {system_user_filter}
             ORDER BY `time` DESC
             LIMIT 10000
-            """
+            """  # nosec B608
             
             # SECURITY FIX: Pass auth_context to execute
             auth_context = get_auth_context()
-            result = await connection.execute(audit_sql, auth_context=auth_context)
+            result = await connection.execute(
+                audit_sql,
+                params=tuple(params),
+                auth_context=auth_context,
+            )
             return result.data if result.data else []
             
         except Exception as e:
             logger.warning(f"Failed to get audit log data: {str(e)}")
             # Try alternative method without detailed metrics
             try:
+                # SQL sink audit: same fixed filter and bound values as the
+                # primary audit query.
                 simple_audit_sql = f"""
                 SELECT 
                     `user` as user_name,
@@ -219,16 +236,20 @@ class SecurityAnalyticsTools:
                     `stmt` as sql_statement,
                     `state` as query_status
                 FROM internal.__internal_schema.audit_log 
-                WHERE `time` >= '{start_date.strftime('%Y-%m-%d %H:%M:%S')}'
-                    AND `time` <= '{end_date.strftime('%Y-%m-%d %H:%M:%S')}'
+                WHERE `time` >= %s
+                    AND `time` <= %s
                     AND `stmt` IS NOT NULL
                     {system_user_filter}
                 ORDER BY `time` DESC
                 LIMIT 10000
-                """
+                """  # nosec B608
                 
                 auth_context = get_auth_context()
-                result = await connection.execute(simple_audit_sql, auth_context=auth_context)
+                result = await connection.execute(
+                    simple_audit_sql,
+                    params=tuple(params),
+                    auth_context=auth_context,
+                )
                 return result.data if result.data else []
                 
             except Exception as e2:

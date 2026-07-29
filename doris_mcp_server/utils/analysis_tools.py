@@ -34,7 +34,8 @@ from .sql_security_utils import (
     validate_identifier,
     quote_identifier,
     build_table_reference,
-    get_auth_context
+    get_auth_context,
+    validate_integer,
 )
 
 logger = get_logger(__name__)
@@ -107,9 +108,19 @@ class TableAnalyzer:
         }
         
         # Get sample data using quoted identifier
-        if include_sample and sample_size > 0:
+        safe_sample_size = validate_integer(
+            sample_size,
+            "sample size",
+            minimum=0,
+            maximum=10000,
+        )
+        if include_sample and safe_sample_size > 0:
             quoted_table = quote_identifier(table_name, "table name")
-            sample_sql = f"SELECT * FROM {quoted_table} LIMIT {sample_size}"
+            # SQL sink audit: caller integer -> bounded validation + quoted
+            # identifier -> DorisConnection.execute.
+            sample_sql = (
+                f"SELECT * FROM {quoted_table} LIMIT {safe_sample_size}"  # nosec B608
+            )
             sample_result = await connection.execute(sample_sql, auth_context=auth_context)
             summary["sample_data"] = sample_result.data
         
@@ -123,20 +134,28 @@ class TableAnalyzer:
     ) -> Dict[str, Any]:
         """Analyze column statistics"""
         try:
+            safe_table = quote_identifier(table_name, "table name")
+            safe_column = quote_identifier(column_name, "column name")
             connection = await self.connection_manager.get_connection("query")
             
             # Basic statistics
+            # SQL sink audit: MCP identifiers -> quote_identifier; label value
+            # -> bound parameter -> DorisConnection.execute.
             basic_stats_sql = f"""
             SELECT 
-                '{column_name}' as column_name,
+                %s as column_name,
                 COUNT(*) as total_count,
-                COUNT({column_name}) as non_null_count,
-                COUNT(DISTINCT {column_name}) as distinct_count
-            FROM {table_name}
-            """
+                COUNT({safe_column}) as non_null_count,
+                COUNT(DISTINCT {safe_column}) as distinct_count
+            FROM {safe_table}
+            """  # nosec B608
             
             auth_context = get_auth_context()
-            basic_result = await connection.execute(basic_stats_sql, auth_context=auth_context)
+            basic_result = await connection.execute(
+                basic_stats_sql,
+                params=(column_name,),
+                auth_context=auth_context,
+            )
             if not basic_result.data:
                 return {
                     "success": False,
@@ -149,16 +168,18 @@ class TableAnalyzer:
         
             if analysis_type in ["distribution", "detailed"]:
                 # Data distribution analysis
+                # SQL sink audit: MCP identifiers -> quote_identifier ->
+                # DorisConnection.execute.
                 distribution_sql = f"""
                 SELECT 
-                    {column_name} as value,
+                    {safe_column} as value,
                     COUNT(*) as frequency
-                FROM {table_name}
-                WHERE {column_name} IS NOT NULL
-                GROUP BY {column_name}
+                FROM {safe_table}
+                WHERE {safe_column} IS NOT NULL
+                GROUP BY {safe_column}
                 ORDER BY frequency DESC
                 LIMIT 20
-                """
+                """  # nosec B608
                 
                 distribution_result = await connection.execute(distribution_sql, auth_context=auth_context)
                 analysis["value_distribution"] = distribution_result.data
@@ -166,14 +187,16 @@ class TableAnalyzer:
             if analysis_type == "detailed":
                 # Detailed statistics (for numeric types)
                 try:
+                    # SQL sink audit: MCP identifiers -> quote_identifier ->
+                    # DorisConnection.execute.
                     numeric_stats_sql = f"""
                     SELECT 
-                        MIN({column_name}) as min_value,
-                        MAX({column_name}) as max_value,
-                        AVG({column_name}) as avg_value
-                    FROM {table_name}
-                    WHERE {column_name} IS NOT NULL
-                    """
+                        MIN({safe_column}) as min_value,
+                        MAX({safe_column}) as max_value,
+                        AVG({safe_column}) as avg_value
+                    FROM {safe_table}
+                    WHERE {safe_column} IS NOT NULL
+                    """  # nosec B608
                     
                     numeric_result = await connection.execute(numeric_stats_sql, auth_context=auth_context)
                     if numeric_result.data:
@@ -202,18 +225,22 @@ class TableAnalyzer:
         connection = await self.connection_manager.get_connection("system")
         
         # Get table basic information
-        table_info_sql = f"""
+        table_info_sql = """
         SELECT 
             table_name,
             table_comment,
             table_rows
         FROM information_schema.tables 
         WHERE table_schema = DATABASE()
-        AND table_name = '{table_name}'
+        AND table_name = %s
         """
         
         auth_context = get_auth_context()
-        table_result = await connection.execute(table_info_sql, auth_context=auth_context)
+        table_result = await connection.execute(
+            table_info_sql,
+            params=(table_name,),
+            auth_context=auth_context,
+        )
         if not table_result.data:
             raise ValueError(f"Table {table_name} does not exist")
         

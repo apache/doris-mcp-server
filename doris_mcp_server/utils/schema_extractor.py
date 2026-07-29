@@ -35,7 +35,8 @@ from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
     validate_identifier,
-    quote_identifier
+    validate_integer,
+    quote_identifier,
 )
 
 # Configure logging
@@ -195,14 +196,19 @@ class MetadataExtractor:
 
         effective_db = db_name or self.db_name
         effective_catalog = catalog_name or self.catalog_name
-        query = f"""
+        query = """
         SELECT 1 AS TABLE_VISIBLE
         FROM information_schema.tables
-        WHERE TABLE_SCHEMA = '{effective_db}'
-          AND TABLE_NAME = '{table_name}'
+        WHERE TABLE_SCHEMA = %s
+          AND TABLE_NAME = %s
         LIMIT 1
         """
-        result = await self._execute_query_with_catalog_async(query, effective_db, effective_catalog)
+        result = await self._execute_query_with_catalog_async(
+            query,
+            effective_db,
+            effective_catalog,
+            params=(effective_db, table_name),
+        )
         if not result or not result[0]:
             raise self._doris_oauth_table_not_visible_error(table_name, effective_db, effective_catalog)
         
@@ -368,6 +374,14 @@ class MetadataExtractor:
         if not db_name:
             logger.warning("Database name not specified")
             return []
+
+        try:
+            validate_identifier(db_name, "database name")
+            if effective_catalog:
+                validate_identifier(effective_catalog, "catalog name")
+        except SQLSecurityError as exc:
+            logger.warning(f"Invalid identifier rejected: {exc}")
+            return []
         
         cache_key = f"tables_{effective_catalog or 'default'}_{db_name}"
         if cache_key in self.metadata_cache and (datetime.now() - self.metadata_cache_time.get(cache_key, datetime.min)).total_seconds() < self.cache_ttl:
@@ -375,6 +389,8 @@ class MetadataExtractor:
         
         try:
             # Use information_schema.tables table to get table list
+            # SQL sink audit: deprecated sync path validates both identifiers
+            # before the fixed metadata query reaches its legacy executor.
             query = f"""
             SELECT 
                 TABLE_NAME 
@@ -383,7 +399,7 @@ class MetadataExtractor:
             WHERE 
                 TABLE_SCHEMA = '{db_name}' 
                 AND TABLE_TYPE = 'BASE TABLE'
-            """
+            """  # nosec B608
             
             result = self._execute_query_with_catalog(query, db_name, effective_catalog)
             logger.info(
@@ -572,7 +588,7 @@ class MetadataExtractor:
         
         try:
             # Use information_schema.columns table to get table schema (async)
-            query = f"""
+            query = """
             SELECT 
                 COLUMN_NAME, 
                 DATA_TYPE, 
@@ -585,13 +601,18 @@ class MetadataExtractor:
             FROM 
                 information_schema.columns 
             WHERE 
-                TABLE_SCHEMA = '{db_name}' 
-                AND TABLE_NAME = '{table_name}'
+                TABLE_SCHEMA = %s
+                AND TABLE_NAME = %s
             ORDER BY 
                 ORDINAL_POSITION
             """
 
-            result = await self._execute_query_with_catalog_async(query, db_name, effective_catalog)
+            result = await self._execute_query_with_catalog_async(
+                query,
+                db_name,
+                effective_catalog,
+                params=(db_name, table_name),
+            )
 
             if not result:
                 logger.warning(f"Table {effective_catalog or 'default'}.{db_name}.{table_name} does not exist or has no columns")
@@ -626,17 +647,20 @@ class MetadataExtractor:
 
             # Get table type information (async)
             try:
-                table_type_query = f"""
+                table_type_query = """
                 SELECT 
                     TABLE_TYPE,
                     ENGINE 
                 FROM 
                     information_schema.tables 
                 WHERE 
-                    TABLE_SCHEMA = '{db_name}' 
-                    AND TABLE_NAME = '{table_name}'
+                    TABLE_SCHEMA = %s
+                    AND TABLE_NAME = %s
                 """
-                table_type_result = await self._execute_query_async(table_type_query)
+                table_type_result = await self._execute_query_async(
+                    table_type_query,
+                    params=(db_name, table_name),
+                )
                 if table_type_result:
                     schema["table_type"] = table_type_result[0].get("TABLE_TYPE", "")
                     schema["engine"] = table_type_result[0].get("ENGINE", "")
@@ -687,6 +711,8 @@ class MetadataExtractor:
         
         try:
             # Use information_schema.tables table to get table comment
+            # SQL sink audit: deprecated sync path validates table, database
+            # and catalog identifiers before its legacy executor.
             query = f"""
             SELECT 
                 TABLE_COMMENT 
@@ -695,7 +721,7 @@ class MetadataExtractor:
             WHERE 
                 TABLE_SCHEMA = '{db_name}' 
                 AND TABLE_NAME = '{table_name}'
-            """
+            """  # nosec B608
             
             result = self._execute_query_with_catalog(query, db_name, effective_catalog)
             
@@ -748,6 +774,8 @@ class MetadataExtractor:
         
         try:
             # Use information_schema.columns table to get column comments
+            # SQL sink audit: deprecated sync path validates table, database
+            # and catalog identifiers before its legacy executor.
             query = f"""
             SELECT 
                 COLUMN_NAME, 
@@ -759,7 +787,7 @@ class MetadataExtractor:
                 AND TABLE_NAME = '{table_name}'
             ORDER BY 
                 ORDINAL_POSITION
-            """
+            """  # nosec B608
             
             result = self._execute_query_with_catalog(query, db_name, effective_catalog)
             
@@ -931,20 +959,6 @@ class MetadataExtractor:
             pd.DataFrame: Audit log DataFrame
         """
         try:
-            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-            
-            query = f"""
-            SELECT client_ip, user, db, time, stmt_id, stmt, state, error_code
-            FROM `__internal_schema`.`audit_log`
-            WHERE `time` >= '{start_date}'
-            AND state = 'EOF' AND error_code = 0
-            AND `stmt` NOT LIKE 'SHOW%'
-            AND `stmt` NOT LIKE 'DESC%'
-            AND `stmt` NOT LIKE 'EXPLAIN%'
-            AND `stmt` NOT LIKE 'SELECT 1%'
-            ORDER BY time DESC
-            LIMIT {limit}
-            """
             # Deprecated sync path removed; this method is deprecated overall
             df = pd.DataFrame()
             return df
@@ -1241,20 +1255,6 @@ class MetadataExtractor:
             Dict: Partition information
         """
         try:
-            # Get partition information
-            query = f"""
-            SELECT 
-                PARTITION_NAME,
-                PARTITION_EXPRESSION,
-                PARTITION_DESCRIPTION,
-                TABLE_ROWS
-            FROM 
-                information_schema.partitions
-            WHERE 
-                TABLE_SCHEMA = '{db_name}'
-                AND TABLE_NAME = '{table_name}'
-            """
-            
             # Deprecated sync path removed
             partitions = []
             
@@ -1281,7 +1281,13 @@ class MetadataExtractor:
 
     # Removed sync _execute_query_with_catalog; use async variant instead
 
-    async def _execute_query_with_catalog_async(self, query: str, db_name: str = None, catalog_name: str = None):
+    async def _execute_query_with_catalog_async(
+        self,
+        query: str,
+        db_name: str = None,
+        catalog_name: str = None,
+        params: tuple | None = None,
+    ):
         """
         Async version of _execute_query_with_catalog to avoid cross-event-loop issues.
 
@@ -1291,19 +1297,33 @@ class MetadataExtractor:
         """
         try:
             if catalog_name and 'information_schema' in query.lower():
-                modified_query = query.replace('information_schema', f'{catalog_name}.information_schema')
+                safe_catalog = quote_identifier(catalog_name, "catalog name")
+                modified_query = query.replace(
+                    'information_schema',
+                    f'{safe_catalog}.information_schema',
+                )
                 logger.info(
                     "Prepared catalog-qualified query for %s",
                     catalog_name,
                 )
-                return await self._execute_query_async(modified_query, db_name)
+                return await self._execute_query_async(
+                    modified_query,
+                    db_name,
+                    params=params,
+                )
             else:
-                return await self._execute_query_async(query, db_name)
+                return await self._execute_query_async(query, db_name, params=params)
         except Exception as e:
             logger.error(f"Error executing async query with catalog: {str(e)}")
             raise
 
-    async def _execute_query_async(self, query: str, db_name: str = None, return_dataframe: bool = False):
+    async def _execute_query_async(
+        self,
+        query: str,
+        db_name: str = None,
+        return_dataframe: bool = False,
+        params: tuple | None = None,
+    ):
         """
         Execute database query asynchronously
         
@@ -1319,7 +1339,12 @@ class MetadataExtractor:
         try:
             if self.connection_manager:
                 # Use the injected connection manager directly (async)
-                result = await self.connection_manager.execute_query(self._session_id, query, None, auth_context)
+                result = await self.connection_manager.execute_query(
+                    self._session_id,
+                    query,
+                    params,
+                    auth_context,
+                )
                 
                 # Extract data from QueryResult
                 if hasattr(result, 'data'):
@@ -1549,17 +1574,22 @@ class MetadataExtractor:
                 logger.warning(f"Invalid identifier rejected: {e}")
                 return ""
 
-            query = f"""
+            query = """
             SELECT 
                 TABLE_COMMENT 
             FROM 
                 information_schema.tables 
             WHERE 
-                TABLE_SCHEMA = '{effective_db}' 
-                AND TABLE_NAME = '{table_name}'
+                TABLE_SCHEMA = %s
+                AND TABLE_NAME = %s
             """
 
-            result = await self._execute_query_with_catalog_async(query, effective_db, effective_catalog)
+            result = await self._execute_query_with_catalog_async(
+                query,
+                effective_db,
+                effective_catalog,
+                params=(effective_db, table_name),
+            )
             if not result or not result[0]:
                 self._raise_if_doris_oauth_table_not_visible(table_name, effective_db, effective_catalog)
                 return ""
@@ -1584,20 +1614,25 @@ class MetadataExtractor:
                 logger.warning(f"Invalid identifier rejected: {e}")
                 return {}
 
-            query = f"""
+            query = """
             SELECT 
                 COLUMN_NAME, 
                 COLUMN_COMMENT 
             FROM 
                 information_schema.columns 
             WHERE 
-                TABLE_SCHEMA = '{effective_db}' 
-                AND TABLE_NAME = '{table_name}'
+                TABLE_SCHEMA = %s
+                AND TABLE_NAME = %s
             ORDER BY 
                 ORDINAL_POSITION
             """
 
-            rows = await self._execute_query_with_catalog_async(query, effective_db, effective_catalog)
+            rows = await self._execute_query_with_catalog_async(
+                query,
+                effective_db,
+                effective_catalog,
+                params=(effective_db, table_name),
+            )
             if not rows:
                 await self._ensure_table_visible_for_doris_oauth_metadata(
                     table_name,
@@ -1686,20 +1721,25 @@ class MetadataExtractor:
     async def get_recent_audit_logs_async(self, days: int = 7, limit: int = 100):
         """Async version: get recent audit logs and return a pandas DataFrame."""
         try:
-            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-            query = f"""
+            safe_days = validate_integer(days, "days", minimum=1, maximum=3650)
+            safe_limit = validate_integer(limit, "limit", minimum=1, maximum=10000)
+            start_date = datetime.now() - timedelta(days=safe_days)
+            query = """
             SELECT client_ip, user, db, time, stmt_id, stmt, state, error_code
             FROM `__internal_schema`.`audit_log`
-            WHERE `time` >= '{start_date}'
+            WHERE `time` >= %s
             AND state = 'EOF' AND error_code = 0
             AND `stmt` NOT LIKE 'SHOW%'
             AND `stmt` NOT LIKE 'DESC%'
             AND `stmt` NOT LIKE 'EXPLAIN%'
             AND `stmt` NOT LIKE 'SELECT 1%'
             ORDER BY time DESC
-            LIMIT {limit}
+            LIMIT %s
             """
-            rows = await self._execute_query_async(query)
+            rows = await self._execute_query_async(
+                query,
+                params=(start_date, safe_limit),
+            )
             import pandas as pd
             return pd.DataFrame(rows or [])
         except Exception as e:
