@@ -172,7 +172,8 @@ field and do not persist or propagate the token in URLs.
   - All operations require admin authentication
   - Real-time IP validation
   - Complete audit logging
-  - **Automatic persistence** to `tokens.json`
+  - **Digest-only persistence** to `tokens.json`; plaintext is returned once
+    when a token is created
 
 > **🔐 Security Note**: The interface is designed for localhost administration only. It cannot be accessed remotely, ensuring maximum security for token management operations.
 
@@ -283,6 +284,7 @@ cp .env.example .env
     *   `DORIS_OAUTH_CIMD_MAX_CLIENTS`: Maximum discovered Client ID Metadata clients held in memory (default: 1000)
     *   `TOKEN_FILE_PATH`: Path to tokens.json file for token management (default: tokens.json)
     *   `TOKEN_HOT_RELOAD`: Enable hot reloading of token configuration (default: true)
+    *   `TOKEN_HASH_ALGORITHM`: Digest algorithm for newly created static tokens (`sha256` or `sha512`; default: `sha256`)
     *   `TOKEN_<ID>`: Explicit static bearer token; each active token must be a
         securely generated value of at least 32 characters
 *   **Legacy Security Configuration**:
@@ -815,17 +817,35 @@ For production deployments:
 
 ### Token-Bound Database Configuration (New in v0.6.0)
 
-Create a `tokens.json` file for advanced token management with database binding:
+Managed token creation returns the bearer value once and writes only its digest
+to `tokens.json`. For manual provisioning, generate the bearer value and digest
+outside the repository, store the bearer value in the client secret store, and
+place only the digest in the server file:
+
+```bash
+python - <<'PY'
+import hashlib
+import secrets
+
+token = secrets.token_urlsafe(32)
+print(f"Bearer token (store once): {token}")
+print(f"token_digest: sha256:{hashlib.sha256(token.encode()).hexdigest()}")
+PY
+```
+
+The v2 file format uses the generated digest:
 
 ```json
 {
-  "version": "1.0",
+  "version": "2.0",
   "tokens": [
     {
       "token_id": "customer-a-token",
-      "token": "customer_a_secure_token_12345",
+      "token_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "created_at": "2026-07-29T00:00:00Z",
+      "expires_at": null,
+      "last_used": null,
       "description": "Customer A dedicated database access",
-      "expires_hours": null,
       "is_active": true,
       "database_config": {
         "host": "customer-a-db.example.com",
@@ -836,26 +856,16 @@ Create a `tokens.json` file for advanced token management with database binding:
         "charset": "UTF8",
         "fe_http_port": 8030
       }
-    },
-    {
-      "token_id": "customer-b-token", 
-      "token": "customer_b_secure_token_67890",
-      "description": "Customer B dedicated database access",
-      "expires_hours": 720,
-      "is_active": true,
-      "database_config": {
-        "host": "customer-b-db.example.com",
-        "port": 9030,
-        "user": "customer_b_user", 
-        "password": "secure_password",
-        "database": "customer_b_data",
-        "charset": "UTF8",
-        "fe_http_port": 8030
-      }
     }
   ]
 }
 ```
+
+Replace the all-zero example with the generated digest; it is intentionally not
+a usable credential. Managed writes are atomic and set the file mode to `0600`.
+Version 1 files containing `token` plaintext are accepted once for migration,
+then immediately replaced with version 2 digest-only records. The server cannot
+recover or display the original bearer value from `token_digest`.
 
 ### Hot Reload Configuration Updates (New in v0.6.0)
 
@@ -1783,16 +1793,18 @@ cat logs/doris_mcp_server_critical.log
    TOKEN_FILE_PATH=tokens.json
    ```
 
-2. **Create tokens.json Configuration**:
+2. **Create the bearer token once and store only its digest in tokens.json**:
    ```json
    {
-     "version": "1.0",
+     "version": "2.0",
      "tokens": [
        {
          "token_id": "tenant-alpha",
-         "token": "<generated-deployment-token-at-least-32-characters>",
+         "token_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+         "created_at": "2026-07-29T00:00:00Z",
+         "expires_at": null,
+         "last_used": null,
          "description": "Tenant Alpha database access",
-         "expires_hours": null,
          "is_active": true,
          "database_config": {
            "host": "tenant-alpha-db.company.com",
@@ -1806,6 +1818,10 @@ cat logs/doris_mcp_server_critical.log
      ]
    }
    ```
+   Generate the real bearer token and digest with the command in
+   [Token-Bound Database Configuration](#token-bound-database-configuration-new-in-v060).
+   The all-zero value above is deliberately unusable. Give the bearer value to
+   the client once; do not place it in the file.
 
 3. **Configuration Priority** (New in v0.6.0):
    - **Token-bound DB config** (highest priority)
@@ -1872,15 +1888,24 @@ cp tokens.json tokens.json.backup
 
 **Primary Token Management Method (Recommended):**
 ```bash
-# 1. Edit tokens.json file directly (safest method)
-nano tokens.json
+# 1. Keep the management endpoint disabled unless local administration is needed.
+# 2. When enabled, create a token through the protected localhost endpoint.
+curl -X POST \
+  -H "Authorization: Bearer $TOKEN_MANAGEMENT_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"token_id":"service-a","expires_hours":720}' \
+  http://127.0.0.1:3000/token/create
 
-# 2. Hot reload will automatically detect changes
-# No server restart required - changes applied within 10 seconds
-
-# 3. Monitor hot reload in logs
+# 3. Capture the returned bearer token once and place it in the client secret store.
+# 4. The server writes only token_digest to tokens.json.
+# 5. Monitor hot reload in logs.
 tail -f logs/doris_mcp_server_info.log | grep "hot reload"
 ```
+
+For deployments without HTTP token management, use a high-entropy `TOKEN_<ID>`
+environment secret or generate a bearer/digest pair offline as shown above.
+Manual `tokens.json` entries must use `token_digest`; plaintext `token` entries
+exist only for one-way migration from version 1.
 
 **Administrative Endpoints (Secure, Local Access Only):**
 
@@ -1912,18 +1937,22 @@ curl -H "Authorization: Bearer $TOKEN_MANAGEMENT_ADMIN_TOKEN" http://127.0.0.1:3
    ```json
    // tokens.json
    {
-     "version": "1.0",
+     "version": "2.0",
      "tokens": [
        {
          "token_id": "dev-token",
-         "token": "<generated-development-token-at-least-32-characters>",
+         "token_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+         "created_at": "2026-07-29T00:00:00Z",
+         "expires_at": "2026-07-30T00:00:00Z",
+         "last_used": null,
          "description": "Development environment access",
-         "expires_hours": 24,
          "is_active": true
        }
      ]
    }
    ```
+   Replace the all-zero digest with one derived from a securely generated
+   bearer token, and keep that bearer token outside the server file.
 
 2. **Production Deployment**:
    ```bash
@@ -1936,19 +1965,25 @@ curl -H "Authorization: Bearer $TOKEN_MANAGEMENT_ADMIN_TOKEN" http://127.0.0.1:3
    ```
 
 **Security Features:**
-- **File-Based Management**: Primary management through secured configuration files
+- **Digest-Only Persistence**: Bearer plaintext is returned only when created;
+  version 2 files contain self-describing SHA-256/SHA-512 digests
+- **Atomic File Management**: Managed writes use same-directory replacement and
+  force owner-only `0600` permissions
 - **Hot Reload**: Automatic configuration updates without service interruption
-- **Token Hashing**: Tokens stored as SHA-256 hashes internally
+- **Legacy Migration**: Version 1 plaintext entries are replaced by digest-only
+  records on first successful load
 - **Audit Trail**: Complete logging of all token operations and changes
 - **Expiration Management**: Automatic cleanup of expired tokens
 - **Local Admin Only**: Management endpoints restricted to localhost access
 - **Configuration Validation**: Immediate validation of token and database configurations
 
 **Security Best Practices:**
-- Always manage tokens through secure configuration files
+- Store bearer values in client-side secret management; keep only digests on
+  the server
 - Never expose token management endpoints to external networks
 - Use strong, randomly generated tokens for production
-- Implement proper file permissions for tokens.json (600 or 640)
+- Keep manually managed `tokens.json` files owner-readable only; managed writes
+  enforce `0600`
 - Regular audit of active tokens and their usage patterns
 - Monitor hot reload logs for unauthorized configuration changes
 

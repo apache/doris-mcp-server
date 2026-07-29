@@ -47,6 +47,9 @@ under **Unreleased** until a new version is selected and published.
   constraints.
 - Positioned Dynamic Client Registration as a compatibility fallback behind
   preconfigured clients and Client ID Metadata Documents.
+- Persisted static bearer tokens as self-describing SHA-256/SHA-512 digests,
+  with atomic owner-only writes and one-way migration from legacy plaintext
+  token files.
 
 ### Fixed
 
