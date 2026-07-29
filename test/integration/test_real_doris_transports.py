@@ -409,3 +409,82 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
         assert denied_result.is_error is True
         assert denied_payload["success"] is False
         assert denied_payload["error_type"] == "permission_denied"
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_tool_regression_paths(
+    transport: str,
+    doris_sandbox: DorisSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    missing_table = f"{doris_sandbox.table}_missing"
+
+    async with _transport_client(transport, environment) as client:
+        profile_result = await client.call_tool(
+            "get_sql_profile",
+            {
+                "sql": f"SELECT COUNT(*) AS row_count FROM {doris_sandbox.qualified_table}",
+                "db_name": doris_sandbox.settings.database,
+            },
+        )
+        assert isinstance(profile_result.structured_content, dict)
+        profile_payload = profile_result.structured_content
+        assert isinstance(profile_payload["success"], bool)
+        assert profile_payload["trace_id"]
+        assert isinstance(profile_payload["execution_time"], int | float)
+        assert "auth_context" not in str(profile_payload.get("error", ""))
+        assert "referenced before assignment" not in str(
+            profile_payload.get("error", "")
+        )
+
+        freshness_result = await client.call_tool(
+            "monitor_data_freshness",
+            {
+                "table_names": [missing_table],
+                "db_name": doris_sandbox.settings.database,
+            },
+        )
+        assert freshness_result.is_error is False
+        assert isinstance(freshness_result.structured_content, dict)
+        freshness_payload = freshness_result.structured_content
+        assert freshness_payload["monitoring_scope"]["time_threshold_hours"] == 24
+        assert freshness_payload["table_freshness"][missing_table] == {
+            "last_update": None,
+            "staleness_hours": None,
+            "freshness_score": 0.0,
+            "status": "unknown",
+            "method_used": "none",
+            "error": "Unable to determine last update time",
+        }
+        assert freshness_payload["data_flow_issues"] == []
+
+        access_result = await client.call_tool(
+            "analyze_data_access_patterns",
+            {
+                "days": 1,
+                "include_system_users": True,
+                "min_query_threshold": 1,
+            },
+        )
+        assert access_result.is_error is False
+        assert isinstance(access_result.structured_content, dict)
+        access_payload = access_result.structured_content
+        assert "error" not in access_payload
+        role_analysis = access_payload["role_analysis"]
+        assert role_analysis
+        assert any(
+            doris_sandbox.settings.user in role["users"]
+            for role in role_analysis.values()
+        )
+
+        recovered_result, recovered_payload = await _exec_query(
+            client,
+            "SELECT 1 AS recovered",
+        )
+        assert recovered_result.is_error is False
+        assert recovered_payload["success"] is True
+        assert recovered_payload["data"][0]["recovered"] == 1

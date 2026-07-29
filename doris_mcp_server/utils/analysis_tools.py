@@ -821,6 +821,14 @@ class SQLAnalyzer:
                     "catalog": catalog_name,
                     "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
                 }
+            finally:
+                release_connection = getattr(
+                    self.connection_manager,
+                    "release_connection",
+                    None,
+                )
+                if callable(release_connection):
+                    await release_connection("query", connection)
                 
         except Exception as e:
             logger.error(f"SQL PROFILE failed: {str(e)}")
