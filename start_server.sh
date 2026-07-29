@@ -66,7 +66,10 @@ fi
 # Set HTTP-specific environment variables
 # FIX for Issue #62 Bug 4: Use SERVER_PORT instead of MCP_PORT for consistency with code
 export MCP_TRANSPORT_TYPE="http"
-export MCP_HOST="${MCP_HOST:-127.0.0.1}"
+export SERVER_HOST="${SERVER_HOST:-${MCP_HOST:-127.0.0.1}}"
+# Keep MCP_HOST available for existing .env files while using the server's
+# canonical host setting for the actual process.
+export MCP_HOST="${SERVER_HOST}"
 export SERVER_PORT="${SERVER_PORT:-3000}"  # Changed from MCP_PORT to SERVER_PORT
 export WORKERS="${WORKERS:-1}"
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"
@@ -78,15 +81,16 @@ export MCP_DEBUG_ADAPTER="true"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 
 echo -e "${GREEN}Starting MCP server (Streamable HTTP mode)...${NC}"
-echo -e "${YELLOW}Service will run on http://${MCP_HOST}:${SERVER_PORT}/mcp${NC}"
-echo -e "${YELLOW}Health Check: http://${MCP_HOST}:${SERVER_PORT}/health${NC}"
-echo -e "${YELLOW}MCP Endpoint: http://${MCP_HOST}:${SERVER_PORT}/mcp${NC}"
+echo -e "${YELLOW}Service will run on http://${SERVER_HOST}:${SERVER_PORT}/mcp${NC}"
+echo -e "${YELLOW}Liveness: http://${SERVER_HOST}:${SERVER_PORT}/live${NC}"
+echo -e "${YELLOW}Readiness: http://${SERVER_HOST}:${SERVER_PORT}/ready${NC}"
+echo -e "${YELLOW}MCP Endpoint: http://${SERVER_HOST}:${SERVER_PORT}/mcp${NC}"
 echo -e "${YELLOW}Local access: http://localhost:${SERVER_PORT}/mcp${NC}"
 echo -e "${YELLOW}Workers: ${WORKERS}${NC}"
 echo -e "${YELLOW}Use Ctrl+C to stop the service${NC}"
 
 # Start the server in HTTP mode (Streamable HTTP)
-python -m doris_mcp_server.main --transport http --host ${MCP_HOST} --port ${SERVER_PORT} --workers ${WORKERS}
+python -m doris_mcp_server.main --transport http --host "${SERVER_HOST}" --port "${SERVER_PORT}" --workers "${WORKERS}"
 
 # Check exit status
 if [ $? -ne 0 ]; then
@@ -98,4 +102,5 @@ fi
 echo -e "${YELLOW}Tip: If the page displays abnormally, please clear your browser cache or use incognito mode${NC}"
 echo -e "${YELLOW}Chrome browser clear cache shortcut: Ctrl+Shift+Del (Windows) or Cmd+Shift+Del (Mac)${NC}"
 echo -e "${CYAN}For testing HTTP endpoints, you can use:${NC}"
-echo -e "${CYAN}  curl http://127.0.0.1:${SERVER_PORT}/health${NC}"
+echo -e "${CYAN}  curl --fail http://127.0.0.1:${SERVER_PORT}/live${NC}"
+echo -e "${CYAN}  curl --fail http://127.0.0.1:${SERVER_PORT}/ready${NC}"

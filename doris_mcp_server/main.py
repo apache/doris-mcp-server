@@ -67,6 +67,8 @@ def _multiworker_environment(
         "DORIS_DATABASE": config.database.database,
         "SERVER_HOST": host,
         "SERVER_PORT": str(port),
+        "MCP_ALLOWED_HOSTS": ",".join(config.mcp_allowed_hosts),
+        "MCP_ALLOWED_ORIGINS": ",".join(config.mcp_allowed_origins),
         "SERVER_NAME": config.server_name,
         "TRANSPORT": "http",
         "WORKERS": str(workers),
@@ -218,7 +220,11 @@ class DorisServer:
                 app=self.server,
                 json_response=True,
                 stateless=True,
-                security_settings=create_transport_security(host),
+                security_settings=create_transport_security(
+                    host,
+                    allowed_hosts=self.config.mcp_allowed_hosts,
+                    allowed_origins=self.config.mcp_allowed_origins,
+                ),
             )
             
             self.logger.info(f"StreamableHTTP session manager created, will start at http://{host}:{port}")

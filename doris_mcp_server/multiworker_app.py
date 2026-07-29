@@ -129,7 +129,11 @@ async def initialize_worker():
             app=_worker_server,
             json_response=True,
             stateless=True,
-            security_settings=create_transport_security(config.server_host),
+            security_settings=create_transport_security(
+                config.server_host,
+                allowed_hosts=config.mcp_allowed_hosts,
+                allowed_origins=config.mcp_allowed_origins,
+            ),
         )
         
         # Start the session manager context
