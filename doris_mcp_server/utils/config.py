@@ -37,6 +37,10 @@ except ImportError:
     load_dotenv = None
 
 from .logger import get_logger
+from .secret_policy import (
+    is_static_token_environment_variable,
+    validate_high_entropy_secret,
+)
 
 
 class AuthConfigError(ValueError):
@@ -276,7 +280,7 @@ class SecurityConfig:
     
     # Legacy configuration (kept for backward compatibility)
     auth_type: str = "token"  # jwt, token, basic, oauth (deprecated: use individual switches)
-    token_secret: str = "default_secret"  # Legacy token secret for backward compatibility
+    token_secret: str = ""  # Deprecated legacy field; no usable default secret
     token_expiry: int = 3600
     
     # Enhanced Token Authentication Configuration
@@ -1290,6 +1294,73 @@ def build_auth_config_inputs(config: DorisConfig, requested_workers: int | None 
     )
 
 
+def _configured_static_tokens(
+    security_config: SecurityConfig,
+) -> list[tuple[str, Any, bool]]:
+    """Load source labels, raw values, and active flags for configured static tokens."""
+    configured: list[tuple[str, Any, bool]] = []
+    for name, value in os.environ.items():
+        if is_static_token_environment_variable(name):
+            configured.append((name, value, True))
+
+    token_file = Path(security_config.token_file_path)
+    if not token_file.exists():
+        return configured
+
+    try:
+        token_data = json.loads(token_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AuthConfigError(f"Unable to load static token file {token_file}: {exc}") from exc
+
+    if isinstance(token_data, dict) and "tokens" in token_data:
+        token_entries = token_data["tokens"]
+    elif isinstance(token_data, list):
+        token_entries = token_data
+    else:
+        raise AuthConfigError(
+            f"Static token file {token_file} must contain a tokens array"
+        )
+    if not isinstance(token_entries, list):
+        raise AuthConfigError(
+            f"Static token file {token_file} must contain a tokens array"
+        )
+
+    for index, token_entry in enumerate(token_entries):
+        if not isinstance(token_entry, dict):
+            raise AuthConfigError(
+                f"Static token file {token_file} entry {index} must be an object"
+            )
+        token_id = str(token_entry.get("token_id") or "").strip()
+        if not token_id:
+            raise AuthConfigError(
+                f"Static token file {token_file} entry {index} requires token_id"
+            )
+        raw_token = token_entry.get("token")
+        configured.append(
+            (
+                f"{token_file}:{token_id}",
+                raw_token,
+                _str_to_bool(token_entry.get("is_active", True)),
+            )
+        )
+    return configured
+
+
+def _validate_static_token_bootstrap(config: DorisConfig) -> None:
+    """Require at least one active high-entropy token when static auth is enabled."""
+    configured = _configured_static_tokens(config.security)
+    for setting, raw_token, _active in configured:
+        try:
+            validate_high_entropy_secret(raw_token, setting=setting)
+        except ValueError as exc:
+            raise AuthConfigError(str(exc)) from exc
+    if not any(active for _setting, _raw_token, active in configured):
+        raise AuthConfigError(
+            "Token authentication requires at least one active high-entropy credential. "
+            "Set TOKEN_<ID> or populate TOKEN_FILE_PATH before enabling it."
+        )
+
+
 def normalize_effective_auth_config(
     config: DorisConfig,
     requested_workers: int | None = None,
@@ -1366,6 +1437,21 @@ def normalize_effective_auth_config(
 
     if enable_doris_oauth_auth and enable_external_oauth_auth:
         raise AuthConfigError("Doris OAuth and external OAuth cannot be enabled together")
+
+    if enable_token_auth:
+        _validate_static_token_bootstrap(config)
+
+    if (
+        config.security.enable_http_token_management
+        and config.security.require_admin_auth
+    ):
+        try:
+            validate_high_entropy_secret(
+                config.security.token_management_admin_token,
+                setting="TOKEN_MANAGEMENT_ADMIN_TOKEN",
+            )
+        except ValueError as exc:
+            raise AuthConfigError(str(exc)) from exc
 
     transport = str(inputs.transport.value or "stdio")
     requested = int(inputs.workers.value if inputs.workers.value is not None else 1)

@@ -50,6 +50,8 @@ under **Unreleased** until a new version is selected and published.
 - Corrected resource and prompt error semantics and tool `isError` results.
 - Removed admin-token query authentication and dashboard URL propagation;
   management endpoints now accept admin credentials only in headers.
+- Removed shipped static credentials and the legacy default secret; static and
+  management token modes now require explicit high-entropy credentials.
 - Released Doris connections on SQL profile, data freshness, and access
   analysis paths.
 - Improved Doris 4 role metadata compatibility and query recovery behavior.

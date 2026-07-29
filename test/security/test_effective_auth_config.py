@@ -9,6 +9,8 @@ from doris_mcp_server.utils.config import (
 )
 from doris_mcp_server.utils.security import AuthenticationProvider
 
+STATIC_TOKEN = "V4nK8qR2mT7xP5cL9sD3hF6jY1uB0eG4iW8aN2zQ"
+
 
 def test_default_auth_methods_remain_disabled():
     config = DorisConfig()
@@ -35,10 +37,12 @@ def test_explicit_oauth_false_conflicts_with_oauth_enabled_true():
         normalize_effective_auth_config(config)
 
 
-def test_legacy_auth_type_only_applies_when_explicit():
+def test_legacy_auth_type_only_applies_when_explicit(tmp_path, monkeypatch):
     config = DorisConfig()
+    config.security.token_file_path = str(tmp_path / "tokens.json")
     config.security.auth_type = "token"
     _mark_source(config, "auth_type", "env")
+    monkeypatch.setenv("TOKEN_TEST", STATIC_TOKEN)
 
     effective = normalize_effective_auth_config(config)
 

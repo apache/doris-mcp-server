@@ -135,11 +135,12 @@ Access the **Web-Based Token Management Dashboard** for enterprise-grade token a
 - **Admin Authentication**: Requires `TOKEN_MANAGEMENT_ADMIN_TOKEN` for access
 - **Configuration Prerequisites**:
   ```bash
-  # Required environment variables
-  ENABLE_HTTP_TOKEN_MANAGEMENT=true
-  ENABLE_TOKEN_AUTH=true
-  TOKEN_MANAGEMENT_ADMIN_TOKEN=your_secure_admin_token
-  TOKEN_MANAGEMENT_ALLOWED_IPS=127.0.0.1,::1
+  # Generate separate high-entropy credentials; do not commit them.
+  export TOKEN_ADMIN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  export TOKEN_MANAGEMENT_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  export ENABLE_HTTP_TOKEN_MANAGEMENT=true
+  export ENABLE_TOKEN_AUTH=true
+  export TOKEN_MANAGEMENT_ALLOWED_IPS=127.0.0.1,::1
   ```
 
 #### **Interface Access**
@@ -149,7 +150,7 @@ tokens are rejected and must not be placed in URLs, browser history, or access
 logs.
 
 ```bash
-curl -H "Authorization: Bearer your_secure_admin_token" \
+curl -H "Authorization: Bearer $TOKEN_MANAGEMENT_ADMIN_TOKEN" \
   http://127.0.0.1:3000/token/stats
 ```
 
@@ -200,9 +201,10 @@ export DORIS_USER="root"
 export DORIS_PASSWORD="your_password"
 
 # Token Management Interface (Security-Critical)
+export TOKEN_ADMIN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export TOKEN_MANAGEMENT_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export ENABLE_HTTP_TOKEN_MANAGEMENT=true
 export ENABLE_TOKEN_AUTH=true
-export TOKEN_MANAGEMENT_ADMIN_TOKEN="your_secure_admin_token"
 export TOKEN_MANAGEMENT_ALLOWED_IPS="127.0.0.1,::1"
 
 # Then start with simplified command
@@ -271,12 +273,10 @@ cp .env.example .env
     *   `DORIS_OAUTH_BASE_URL`: Public base URL used by Doris-backed OAuth discovery and token endpoints
     *   `TOKEN_FILE_PATH`: Path to tokens.json file for token management (default: tokens.json)
     *   `TOKEN_HOT_RELOAD`: Enable hot reloading of token configuration (default: true)
-    *   `DEFAULT_ADMIN_TOKEN`: Default admin token (customizable via env)
-    *   `DEFAULT_ANALYST_TOKEN`: Default analyst token (customizable via env)
-    *   `DEFAULT_READONLY_TOKEN`: Default readonly token (customizable via env)
+    *   `TOKEN_<ID>`: Explicit static bearer token; each active token must be a
+        securely generated value of at least 32 characters
 *   **Legacy Security Configuration**:
     *   `AUTH_TYPE`: Legacy authentication type (token/basic/oauth, deprecated - use individual switches)
-    *   `TOKEN_SECRET`: Legacy token secret key (use token-based auth instead)
     *   `ENABLE_SECURITY_CHECK`: Enable/disable SQL security validation (default: true)
     *   `BLOCKED_KEYWORDS`: Comma-separated list of blocked SQL keywords
     *   `ENABLE_MASKING`: Enable data masking (default: true)
@@ -600,6 +600,9 @@ The Doris MCP Server includes a comprehensive enterprise-grade security framewor
 Configure the new authentication system with granular control:
 
 ```bash
+# Generate a deployment-specific token before enabling static authentication.
+export TOKEN_ADMIN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
 # Individual Authentication Control (New in v0.6.0)
 ENABLE_TOKEN_AUTH=true          # Enable token-based authentication
 ENABLE_JWT_AUTH=false           # Enable JWT authentication  
@@ -609,15 +612,13 @@ ENABLE_OAUTH_AUTH=false         # Enable OAuth authentication
 TOKEN_FILE_PATH=tokens.json     # Token configuration file
 TOKEN_HOT_RELOAD=true          # Enable hot reloading
 
-# Default Tokens (Customizable via environment)
-DEFAULT_ADMIN_TOKEN=doris_admin_token_123456
-DEFAULT_ANALYST_TOKEN=doris_analyst_token_123456
-DEFAULT_READONLY_TOKEN=doris_readonly_token_123456
-
 # Legacy Configuration (Deprecated)
 # AUTH_TYPE=token               # Use individual switches instead
-# TOKEN_SECRET=your_secret_key  # Use token-based auth instead
 ```
+
+The repository ships no usable static token or legacy secret. Startup fails
+when static token authentication is enabled without at least one active,
+high-entropy `TOKEN_<ID>` value or an equivalent entry in `TOKEN_FILE_PATH`.
 
 ### Doris-Backed OAuth Authentication
 
@@ -926,9 +927,9 @@ custom_rule = {
 #### Environment Variables
 
 ```bash
-# .env file
-AUTH_TYPE=token
-TOKEN_SECRET=your_jwt_secret_key
+# Generate this outside source control, then inject it into the process.
+export TOKEN_SECURITY_ADMIN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export ENABLE_TOKEN_AUTH=true
 ENABLE_MASKING=true
 MAX_RESULT_ROWS=10000
 BLOCKED_SQL_OPERATIONS=DROP,DELETE,TRUNCATE,ALTER
@@ -1393,10 +1394,6 @@ DORIS_BE_WEBSERVER_PORT=8040
 ```bash
 # Enable data masking
 ENABLE_MASKING=true
-# Set authentication type
-AUTH_TYPE=token
-# Configure token secret
-TOKEN_SECRET=your_secret_key
 # Set maximum result rows
 MAX_RESULT_ROWS=10000
 ```
@@ -1677,7 +1674,7 @@ cat logs/doris_mcp_server_critical.log
      "tokens": [
        {
          "token_id": "tenant-alpha",
-         "token": "tenant_alpha_secure_token_123",
+         "token": "<generated-deployment-token-at-least-32-characters>",
          "description": "Tenant Alpha database access",
          "expires_hours": null,
          "is_active": true,
@@ -1708,8 +1705,8 @@ cat logs/doris_mcp_server_critical.log
 5. **Multi-Tenant Usage**:
    ```bash
    # Different tokens access different databases automatically
-   curl -H "Authorization: Bearer tenant_alpha_secure_token_123" http://localhost:3000/mcp
-   curl -H "Authorization: Bearer tenant_beta_secure_token_456" http://localhost:3000/mcp
+   curl -H "Authorization: Bearer $TOKEN_TENANT_ALPHA" http://localhost:3000/mcp
+   curl -H "Authorization: Bearer $TOKEN_TENANT_BETA" http://localhost:3000/mcp
    ```
 
 ### Q: How is Doris-backed OAuth different from external OAuth/OIDC?
@@ -1781,13 +1778,13 @@ tail -f logs/doris_mcp_server_info.log | grep "hot reload"
 # ✓ Admin authentication enabled in configuration
 
 # Enable HTTP token management (disabled by default)
+export TOKEN_MANAGEMENT_ADMIN_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export ENABLE_HTTP_TOKEN_MANAGEMENT=true
-export TOKEN_MANAGEMENT_ADMIN_TOKEN=your_secure_admin_token
 export REQUIRE_ADMIN_AUTH=true
 export TOKEN_MANAGEMENT_ALLOWED_IPS=127.0.0.1,::1
 
 # Access with proper authentication
-curl -H "Authorization: Bearer your_secure_admin_token" http://127.0.0.1:3000/token/stats
+curl -H "Authorization: Bearer $TOKEN_MANAGEMENT_ADMIN_TOKEN" http://127.0.0.1:3000/token/stats
 
 # Demo page (local access only, with authentication)
 # Access: http://127.0.0.1:3000/token/demo
@@ -1803,7 +1800,7 @@ curl -H "Authorization: Bearer your_secure_admin_token" http://127.0.0.1:3000/to
      "tokens": [
        {
          "token_id": "dev-token",
-         "token": "dev_secure_token_123",
+         "token": "<generated-development-token-at-least-32-characters>",
          "description": "Development environment access",
          "expires_hours": 24,
          "is_active": true

@@ -27,7 +27,7 @@ from doris_mcp_server.auth.token_handlers import TokenHandlers
 from doris_mcp_server.auth.token_security_middleware import TokenSecurityMiddleware
 from doris_mcp_server.utils.config import DorisConfig
 
-ADMIN_TOKEN = "test-admin-token"
+ADMIN_TOKEN = "J8pR4mX2vN7qL5sT9kW3cF6hY1uD8aB0eG4iC2oP"
 
 
 def _config() -> DorisConfig:

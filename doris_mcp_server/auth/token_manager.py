@@ -34,6 +34,10 @@ from typing import Dict, List, Optional, Any
 from pathlib import Path
 
 from ..utils.logger import get_logger
+from ..utils.secret_policy import (
+    is_static_token_environment_variable,
+    validate_high_entropy_secret,
+)
 from ..utils.security import RESERVED_DORIS_OAUTH_TOKEN_PREFIX, SecurityLevel
 
 
@@ -103,11 +107,22 @@ class TokenManager:
         self._file_last_modified = 0
         self._hot_reload_task = None
         
-        # Initialize with default tokens if none exist
-        self._initialize_default_tokens()
-        
         # Load tokens from configuration
         self._load_tokens()
+
+        effective_auth = getattr(config, "effective_auth", None)
+        token_auth_enabled = getattr(
+            effective_auth,
+            "enable_token_auth",
+            getattr(config.security, "enable_token_auth", False),
+        )
+        if token_auth_enabled and not any(
+            token_info.is_active for token_info in self._tokens.values()
+        ):
+            raise ValueError(
+                "Token authentication is enabled but no active static token is configured. "
+                "Set a high-entropy TOKEN_<ID> environment variable or provide one in tokens.json."
+            )
         
         # Start hot reload monitoring
         if self.enable_hot_reload:
@@ -121,64 +136,6 @@ class TokenManager:
                 f"Static tokens cannot use reserved Doris OAuth prefix "
                 f"'{RESERVED_DORIS_OAUTH_TOKEN_PREFIX}'"
             )
-    
-    def _initialize_default_tokens(self):
-        """Initialize default tokens for basic authentication (configurable via environment)"""
-        # Default token configurations (can be overridden by environment variables)
-        default_tokens = [
-            {
-                'token_id': 'admin-token',
-                'token': os.getenv('DEFAULT_ADMIN_TOKEN', 'doris_admin_token_123456'),
-                'description': os.getenv('DEFAULT_ADMIN_DESCRIPTION', 'Default admin API access token'),
-                'expires_hours': None  # Never expires
-            },
-            {
-                'token_id': 'analyst-token', 
-                'token': os.getenv('DEFAULT_ANALYST_TOKEN', 'doris_analyst_token_123456'),
-                'description': os.getenv('DEFAULT_ANALYST_DESCRIPTION', 'Default data analysis API access token'),
-                'expires_hours': None  # Never expires
-            },
-            {
-                'token_id': 'readonly-token',
-                'token': os.getenv('DEFAULT_READONLY_TOKEN', 'doris_readonly_token_123456'),
-                'description': os.getenv('DEFAULT_READONLY_DESCRIPTION', 'Default read-only API access token'),
-                'expires_hours': None  # Never expires
-            }
-        ]
-        
-        
-        # Only add default tokens if no custom tokens are defined via environment variables
-        # Check if any TOKEN_* environment variables exist (excluding system and legacy configs)
-        excluded_prefixes = ('DEFAULT_', 'TOKEN_FILE_PATH', 'TOKEN_HASH_')
-        excluded_vars = {'TOKEN_SECRET', 'TOKEN_EXPIRY'}
-        
-        custom_tokens_exist = any(
-            key.startswith('TOKEN_') and 
-            not key.startswith(excluded_prefixes) and 
-            not key.endswith(('_EXPIRES_HOURS', '_DESCRIPTION')) and
-            key not in excluded_vars
-            for key in os.environ.keys()
-        )
-        
-        # Also check if token file exists and has content
-        token_file_exists = False
-        if os.path.exists(self.token_file_path):
-            try:
-                with open(self.token_file_path, 'r') as f:
-                    content = f.read().strip()
-                    if content and content != '{}':
-                        token_file_exists = True
-            except:
-                pass
-        
-        # Add default tokens only if no custom configuration exists
-        if not custom_tokens_exist and not token_file_exists:
-            for token_config in default_tokens:
-                self._add_token_from_config(token_config)
-            
-            self.logger.info(f"Initialized {len(default_tokens)} default tokens (no custom config found)")
-        else:
-            self.logger.info("Skipped default tokens initialization (custom tokens detected)")
     
     def _add_token_from_config(self, token_config: Dict[str, Any]):
         """Add token from configuration with optional database binding"""
@@ -216,6 +173,10 @@ class TokenManager:
             # Hash the token
             raw_token = token_config['token']
             self._validate_static_token_prefix(raw_token)
+            validate_high_entropy_secret(
+                raw_token,
+                setting=f"static token '{token_info.token_id}'",
+            )
             token_hash = self._hash_token(raw_token)
             
             # Store token
@@ -251,17 +212,8 @@ class TokenManager:
         token_prefixes = set()
         
         # Find all TOKEN_ environment variables (exclude legacy and system variables)
-        excluded_token_vars = {
-            'TOKEN_SECRET',           # Legacy token secret
-            'TOKEN_EXPIRY',           # Legacy token expiry
-            'TOKEN_FILE_PATH',        # System config
-            'TOKEN_HASH_ALGORITHM'    # System config
-        }
-        
         for key in os.environ:
-            if (key.startswith('TOKEN_') and 
-                not key.endswith(('_EXPIRES_HOURS', '_DESCRIPTION')) and
-                key not in excluded_token_vars):
+            if is_static_token_environment_variable(key):
                 token_id = key[6:]  # Remove 'TOKEN_' prefix
                 token_prefixes.add(token_id)
         
@@ -398,6 +350,10 @@ class TokenManager:
             else:
                 raw_token = self.generate_token()
             self._validate_static_token_prefix(raw_token)
+            validate_high_entropy_secret(
+                raw_token,
+                setting=f"static token '{token_id}'",
+            )
             
             # Calculate expiration
             expires_at = None
@@ -815,9 +771,6 @@ class TokenManager:
                         # Clear and reload
                         self._tokens.clear()
                         self._token_ids.clear()
-                        
-                        # Reinitialize default tokens
-                        self._initialize_default_tokens()
                         
                         # Load from file
                         self._load_tokens_from_file()
