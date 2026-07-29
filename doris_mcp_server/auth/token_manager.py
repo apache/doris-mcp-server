@@ -27,10 +27,13 @@ import json
 import os
 import secrets
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Any
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional
+
+from filelock import FileLock
 
 from ..utils.logger import get_logger
 from ..utils.secret_policy import (
@@ -97,9 +100,19 @@ class TokenManager:
         self._tokens: Dict[str, TokenInfo] = {}  # token_hash -> TokenInfo
         self._token_ids: Dict[str, str] = {}     # token_id -> token_hash
         self._digest_algorithms: set[str] = set()
+        self._revoked_tokens: Dict[str, Dict[str, str]] = {}
         
         # Configuration
         self.token_file_path = getattr(config.security, 'token_file_path', 'tokens.json')
+        self._token_file = Path(self.token_file_path)
+        self._token_lock_file = self._token_file.with_name(
+            f"{self._token_file.name}.lock"
+        )
+        self._token_file_lock = FileLock(
+            str(self._token_lock_file),
+            timeout=30,
+            mode=0o600,
+        )
         self.enable_token_expiry = getattr(config.security, 'enable_token_expiry', True)
         self.default_token_expiry_hours = getattr(config.security, 'default_token_expiry_hours', 24 * 30)  # 30 days
         self.token_hash_algorithm = normalize_token_hash_algorithm(
@@ -110,6 +123,7 @@ class TokenManager:
         self.enable_hot_reload = True
         self.hot_reload_interval = 10  # Check every 10 seconds
         self._file_last_modified = 0.0
+        self._file_signature: Optional[tuple[int, int, int, int]] = None
         self._hot_reload_task: Optional[asyncio.Task[None]] = None
         
         # Load tokens from configuration
@@ -141,6 +155,70 @@ class TokenManager:
                 f"Static tokens cannot use reserved Doris OAuth prefix "
                 f"'{RESERVED_DORIS_OAUTH_TOKEN_PREFIX}'"
             )
+
+    @contextmanager
+    def _shared_state_lock(self) -> Iterator[None]:
+        """Serialize read-modify-write operations across worker processes."""
+        with self._token_file_lock:
+            os.chmod(self._token_lock_file, 0o600)
+            yield
+
+    def _current_file_signature(self) -> Optional[tuple[int, int, int, int]]:
+        """Return a signature that also changes after an atomic replacement."""
+        try:
+            file_stat = self._token_file.stat()
+        except FileNotFoundError:
+            return None
+        return (
+            file_stat.st_dev,
+            file_stat.st_ino,
+            file_stat.st_size,
+            file_stat.st_mtime_ns,
+        )
+
+    def _reload_tokens_from_sources(self) -> None:
+        """Replace local state from the environment and shared token file."""
+        previous_state = (
+            self._tokens,
+            self._token_ids,
+            self._digest_algorithms,
+            self._revoked_tokens,
+            self._file_signature,
+            self._file_last_modified,
+        )
+        self._tokens = {}
+        self._token_ids = {}
+        self._digest_algorithms = set()
+        self._revoked_tokens = {}
+        try:
+            self._load_tokens_from_env()
+            if self._token_file.exists():
+                self._load_tokens_from_file()
+            self._update_file_modified_time()
+        except Exception:
+            (
+                self._tokens,
+                self._token_ids,
+                self._digest_algorithms,
+                self._revoked_tokens,
+                self._file_signature,
+                self._file_last_modified,
+            ) = previous_state
+            raise
+
+    def _synchronize_shared_state(self) -> bool:
+        """Reload immediately when another worker atomically changes the file."""
+        if self._current_file_signature() == self._file_signature:
+            return False
+        with self._shared_state_lock():
+            if self._current_file_signature() == self._file_signature:
+                return False
+            self._reload_tokens_from_sources()
+        self.logger.info(
+            "Synchronized %s static tokens from shared state",
+            len(self._tokens),
+        )
+        return True
 
     @staticmethod
     def _parse_datetime(value: Any, *, setting: str) -> Optional[datetime]:
@@ -247,6 +325,15 @@ class TokenManager:
                 token_hash = self._hash_token(raw_token)
             self._digest_algorithms.add(token_hash.partition(":")[0])
             
+            # A later source wins cleanly when the same token ID is rotated.
+            previous_hash = self._token_ids.get(token_info.token_id)
+            if (
+                previous_hash
+                and previous_hash != token_hash
+                and previous_hash in self._tokens
+            ):
+                del self._tokens[previous_hash]
+
             # Store token
             self._tokens[token_hash] = token_info
             self._token_ids[token_info.token_id] = token_hash
@@ -261,13 +348,12 @@ class TokenManager:
     
     def _load_tokens(self) -> None:
         """Load tokens from configuration sources"""
-        # 1. Load from environment variables
-        self._load_tokens_from_env()
-        
-        # 2. Load from token file if exists
-        if os.path.exists(self.token_file_path):
-            self._load_tokens_from_file()
-        
+        if self._token_file.exists():
+            with self._shared_state_lock():
+                self._reload_tokens_from_sources()
+        else:
+            self._reload_tokens_from_sources()
+
         self.logger.info(f"Token loading completed, total tokens: {len(self._tokens)}")
     
     def _load_tokens_from_env(self) -> None:
@@ -333,8 +419,18 @@ class TokenManager:
                 return
             if not isinstance(tokens_list, list):
                 raise ValueError("Static token file must contain a tokens array")
+            revoked_tokens = (
+                tokens_data.get("revoked_tokens", [])
+                if isinstance(tokens_data, dict)
+                else []
+            )
+            if not isinstance(revoked_tokens, list):
+                raise ValueError(
+                    "Static token file revoked_tokens must be an array"
+                )
 
             persisted_tokens = []
+            persisted_revocations = []
             needs_migration = (
                 not isinstance(tokens_data, dict)
                 or tokens_data.get("version") != "2.0"
@@ -350,8 +446,28 @@ class TokenManager:
                 )
                 needs_migration = needs_migration or had_raw_token
 
+            for revoked_token in revoked_tokens:
+                sanitized = self._sanitize_revoked_token(revoked_token)
+                token_hash = sanitized["token_digest"]
+                self._revoked_tokens[token_hash] = sanitized
+                self._digest_algorithms.add(token_hash.partition(":")[0])
+                persisted_revocations.append(sanitized)
+
+                revoked_token_info = self._tokens.get(token_hash)
+                if revoked_token_info is not None:
+                    del self._tokens[token_hash]
+                if (
+                    revoked_token_info is not None
+                    and self._token_ids.get(revoked_token_info.token_id)
+                    == token_hash
+                ):
+                    self._token_ids.pop(revoked_token_info.token_id, None)
+
             if needs_migration:
-                migrated_data = self._token_file_document(persisted_tokens)
+                migrated_data = self._token_file_document(
+                    persisted_tokens,
+                    persisted_revocations,
+                )
                 try:
                     self._atomic_write_token_file(
                         Path(self.token_file_path),
@@ -376,13 +492,29 @@ class TokenManager:
     
     def _hash_token(self, token: str, algorithm: Optional[str] = None) -> str:
         """Hash token for secure storage"""
-        return build_token_digest(token, algorithm or self.token_hash_algorithm)
+        return str(
+            build_token_digest(
+                token,
+                algorithm or self.token_hash_algorithm,
+            )
+        )
+
+    def _candidate_token_digests(self, token: str) -> List[str]:
+        algorithms = self._digest_algorithms | {self.token_hash_algorithm}
+        return [
+            self._hash_token(token, algorithm)
+            for algorithm in sorted(algorithms)
+        ]
 
     def _lookup_token(self, token: str) -> tuple[str, Optional[TokenInfo]]:
         """Look up a raw token against every digest algorithm in the store."""
-        algorithms = self._digest_algorithms or {self.token_hash_algorithm}
-        for algorithm in sorted(algorithms):
-            token_hash = self._hash_token(token, algorithm)
+        candidate_digests = self._candidate_token_digests(token)
+        if any(
+            token_hash in self._revoked_tokens
+            for token_hash in candidate_digests
+        ):
+            return "", None
+        for token_hash in candidate_digests:
             token_info = self._tokens.get(token_hash)
             if token_info is not None:
                 return token_hash, token_info
@@ -391,6 +523,8 @@ class TokenManager:
     async def validate_token(self, token: str) -> TokenValidationResult:
         """Validate token and return user information"""
         try:
+            self._synchronize_shared_state()
+
             # Find token info
             _token_hash, token_info = self._lookup_token(token)
             if not token_info:
@@ -442,10 +576,6 @@ class TokenManager:
     ) -> str:
         """Create a new token"""
         try:
-            # Check if token_id already exists
-            if token_id in self._token_ids:
-                raise ValueError(f"Token ID '{token_id}' already exists")
-            
             # Generate or use provided token
             if custom_token:
                 raw_token = custom_token
@@ -471,27 +601,35 @@ class TokenManager:
                 description=description,
                 database_config=database_config
             )
-            
-            # Hash and store token
-            token_hash = self._hash_token(raw_token)
-            if token_hash in self._tokens:
-                raise ValueError("Token value already exists")
-            self._tokens[token_hash] = token_info
-            self._token_ids[token_id] = token_hash
-            self._digest_algorithms.add(self.token_hash_algorithm)
-            
-            self.logger.info(f"Created new token '{token_id}'")
-            
-            # Save token to file
-            try:
+
+            with self._shared_state_lock():
+                self._reload_tokens_from_sources()
+                if token_id in self._token_ids:
+                    raise ValueError(
+                        f"Token ID '{token_id}' already exists"
+                    )
+
+                candidate_digests = self._candidate_token_digests(raw_token)
+                if any(
+                    digest in self._revoked_tokens
+                    for digest in candidate_digests
+                ):
+                    raise ValueError(
+                        "A revoked token value cannot be reused"
+                    )
+                if any(
+                    digest in self._tokens
+                    for digest in candidate_digests
+                ):
+                    raise ValueError("Token value already exists")
+
+                token_hash = self._hash_token(raw_token)
                 self._save_token_to_file(token_id, token_hash, token_info)
-            except Exception:
-                self._tokens.pop(token_hash, None)
-                self._token_ids.pop(token_id, None)
-                self._digest_algorithms = {
-                    digest.partition(":")[0] for digest in self._tokens
-                }
-                raise
+                self._tokens[token_hash] = token_info
+                self._token_ids[token_id] = token_hash
+                self._digest_algorithms.add(self.token_hash_algorithm)
+
+            self.logger.info(f"Created new token '{token_id}'")
             
             return raw_token
             
@@ -502,18 +640,25 @@ class TokenManager:
     async def revoke_token(self, token_id: str) -> bool:
         """Revoke a token by token ID"""
         try:
-            if token_id not in self._token_ids:
-                self.logger.warning(f"Token ID '{token_id}' not found")
-                return False
-            
-            # Persist the revocation before changing live state. Otherwise a
-            # failed file write would let the token reappear after restart.
-            token_hash = self._token_ids[token_id]
-            self._remove_token_from_file(token_id)
+            with self._shared_state_lock():
+                self._reload_tokens_from_sources()
+                if token_id not in self._token_ids:
+                    self.logger.warning(
+                        f"Token ID '{token_id}' not found"
+                    )
+                    return False
 
-            if token_hash in self._tokens:
-                del self._tokens[token_hash]
-            del self._token_ids[token_id]
+                # Persist before changing live state. The shared revocation
+                # record also disables environment-provisioned credentials.
+                token_hash = self._token_ids[token_id]
+                revocation = self._remove_token_from_file(
+                    token_id,
+                    token_hash,
+                )
+                self._tokens.pop(token_hash, None)
+                self._token_ids.pop(token_id, None)
+                self._revoked_tokens[token_hash] = revocation
+                self._digest_algorithms.add(token_hash.partition(":")[0])
             
             self.logger.info(f"Revoked token '{token_id}'")
             return True
@@ -525,15 +670,20 @@ class TokenManager:
     def _save_tokens_to_file(self) -> None:
         """Save current tokens to JSON file"""
         try:
-            tokens_list = [
-                self._token_info_to_config(token_hash, token_info)
-                for token_hash, token_info in self._tokens.items()
-            ]
-            file_content = self._token_file_document(tokens_list)
-            self._atomic_write_token_file(
-                Path(self.token_file_path),
-                file_content,
-            )
+            with self._shared_state_lock():
+                self._reload_tokens_from_sources()
+                tokens_list = [
+                    self._token_info_to_config(token_hash, token_info)
+                    for token_hash, token_info in self._tokens.items()
+                ]
+                file_content = self._token_file_document(
+                    tokens_list,
+                    list(self._revoked_tokens.values()),
+                )
+                self._atomic_write_token_file(
+                    Path(self.token_file_path),
+                    file_content,
+                )
             self.logger.info(f"Saved {len(tokens_list)} tokens to file: {self.token_file_path}")
             
         except Exception as e:
@@ -548,7 +698,7 @@ class TokenManager:
         """Save one new token as a digest-only record."""
         try:
             # Load existing file
-            existing_data: Dict[str, Any] = {"tokens": []}
+            existing_data: Any = {"tokens": []}
             if os.path.exists(self.token_file_path):
                 try:
                     with open(self.token_file_path, 'r', encoding='utf-8') as f:
@@ -557,10 +707,19 @@ class TokenManager:
                     raise ValueError(
                         f"Could not load existing token file: {e}"
                     ) from e
+            if isinstance(existing_data, list):
+                existing_data = {"tokens": existing_data}
+            if not isinstance(existing_data, dict):
+                raise ValueError("Static token file must contain an object")
             
             # Ensure tokens list exists
             if 'tokens' not in existing_data or not isinstance(existing_data['tokens'], list):
                 existing_data['tokens'] = []
+            revoked_tokens = existing_data.get("revoked_tokens", [])
+            if not isinstance(revoked_tokens, list):
+                raise ValueError(
+                    "Static token file revoked_tokens must be an array"
+                )
             
             # Check if token already exists in file
             token_exists = False
@@ -586,9 +745,16 @@ class TokenManager:
                 self._sanitize_persisted_token(token_config)
                 for token_config in existing_data['tokens']
             ]
+            revoked_tokens = [
+                self._sanitize_revoked_token(revoked_token)
+                for revoked_token in revoked_tokens
+            ]
 
             # Update metadata
-            existing_data = self._token_file_document(existing_data['tokens'])
+            existing_data = self._token_file_document(
+                existing_data['tokens'],
+                revoked_tokens,
+            )
             self._atomic_write_token_file(
                 Path(self.token_file_path),
                 existing_data,
@@ -599,16 +765,30 @@ class TokenManager:
             self.logger.error(f"Failed to save token '{token_id}' to file: {e}")
             raise
     
-    def _token_file_document(self, tokens: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _token_file_document(
+        self,
+        tokens: List[Dict[str, Any]],
+        revoked_tokens: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
         """Build the versioned digest-only token file document."""
         return {
             "version": "2.0",
-            "description": "Doris MCP Server digest-only token configuration file",
+            "description": (
+                "Doris MCP Server digest-only shared token state"
+            ),
             "updated_at": datetime.utcnow().isoformat() + "Z",
             "tokens": tokens,
+            "revoked_tokens": sorted(
+                revoked_tokens or [],
+                key=lambda entry: (
+                    entry["revoked_at"],
+                    entry["token_id"],
+                ),
+            ),
             "notes": [
                 "Bearer token plaintext is returned only when a token is created.",
                 "token_digest is self-describing and may use sha256 or sha512.",
+                "revoked_tokens is shared by every worker and prevents token reuse.",
                 "Do not replace token_digest with a plaintext token.",
             ],
         }
@@ -691,6 +871,39 @@ class TokenManager:
             )
         return sanitized
 
+    def _sanitize_revoked_token(
+        self,
+        revoked_token: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """Validate and whitelist a shared revocation record."""
+        if not isinstance(revoked_token, dict):
+            raise ValueError("Static token revocation entries must be objects")
+        token_id = str(revoked_token.get("token_id") or "").strip()
+        if not token_id:
+            raise ValueError("Static token revocation requires token_id")
+        raw_digest = revoked_token.get("token_digest")
+        if not isinstance(raw_digest, str):
+            raise ValueError(
+                f"revoked static token '{token_id}' token_digest is required"
+            )
+        token_digest = normalize_token_digest(
+            raw_digest,
+            setting=f"revoked static token '{token_id}' token_digest",
+        )
+        revoked_at = self._parse_datetime(
+            revoked_token.get("revoked_at"),
+            setting=f"revoked static token '{token_id}' revoked_at",
+        )
+        if revoked_at is None:
+            raise ValueError(
+                f"revoked static token '{token_id}' revoked_at is required"
+            )
+        return {
+            "token_id": token_id,
+            "token_digest": token_digest,
+            "revoked_at": revoked_at.isoformat() + "Z",
+        }
+
     def _token_info_to_config(
         self,
         token_hash: str,
@@ -732,35 +945,72 @@ class TokenManager:
         
         return token_config
     
-    def _remove_token_from_file(self, token_id: str) -> None:
-        """Remove a token from the JSON file"""
+    def _remove_token_from_file(
+        self,
+        token_id: str,
+        token_hash: str,
+    ) -> Dict[str, str]:
+        """Remove a live record and persist a digest-only revocation."""
         try:
-            if not os.path.exists(self.token_file_path):
-                return
-            
-            # Load existing file
-            with open(self.token_file_path, 'r', encoding='utf-8') as f:
-                existing_data = json.load(f)
-            
-            if 'tokens' not in existing_data or not isinstance(existing_data['tokens'], list):
-                return
-            
-            # Remove the token
-            original_count = len(existing_data['tokens'])
-            existing_data['tokens'] = [
-                self._sanitize_persisted_token(token)
-                for token in existing_data['tokens']
-                if token.get('token_id') != token_id
-            ]
-            
-            if len(existing_data['tokens']) < original_count:
-                # Update metadata
-                existing_data = self._token_file_document(existing_data['tokens'])
-                self._atomic_write_token_file(
-                    Path(self.token_file_path),
-                    existing_data,
+            existing_data: Any = {"tokens": [], "revoked_tokens": []}
+            if self._token_file.exists():
+                with self._token_file.open("r", encoding="utf-8") as token_file:
+                    existing_data = json.load(token_file)
+            if isinstance(existing_data, list):
+                existing_data = {"tokens": existing_data}
+            if not isinstance(existing_data, dict):
+                raise ValueError("Static token file must contain an object")
+
+            tokens = existing_data.get("tokens", [])
+            revoked_tokens = existing_data.get("revoked_tokens", [])
+            if not isinstance(tokens, list):
+                raise ValueError(
+                    "Static token file must contain a tokens array"
                 )
-                self.logger.info(f"Removed token '{token_id}' from file: {self.token_file_path}")
+            if not isinstance(revoked_tokens, list):
+                raise ValueError(
+                    "Static token file revoked_tokens must be an array"
+                )
+
+            sanitized_tokens = []
+            for token in tokens:
+                sanitized = self._sanitize_persisted_token(token)
+                if (
+                    sanitized["token_id"] != token_id
+                    and sanitized["token_digest"] != token_hash
+                ):
+                    sanitized_tokens.append(sanitized)
+
+            sanitized_revocations = [
+                self._sanitize_revoked_token(revoked_token)
+                for revoked_token in revoked_tokens
+            ]
+            revocation = self._sanitize_revoked_token(
+                {
+                    "token_id": token_id,
+                    "token_digest": token_hash,
+                    "revoked_at": datetime.utcnow().isoformat() + "Z",
+                }
+            )
+            sanitized_revocations = [
+                item
+                for item in sanitized_revocations
+                if item["token_digest"] != token_hash
+            ]
+            sanitized_revocations.append(revocation)
+
+            self._atomic_write_token_file(
+                Path(self.token_file_path),
+                self._token_file_document(
+                    sanitized_tokens,
+                    sanitized_revocations,
+                ),
+            )
+            self.logger.info(
+                f"Persisted revocation for '{token_id}' in "
+                f"{self.token_file_path}"
+            )
+            return revocation
             
         except Exception as e:
             self.logger.error(f"Failed to remove token '{token_id}' from file: {e}")
@@ -768,6 +1018,7 @@ class TokenManager:
     
     async def list_tokens(self) -> List[Dict[str, Any]]:
         """List all tokens (without sensitive data)"""
+        self._synchronize_shared_state()
         tokens = []
         
         for token_hash, token_info in self._tokens.items():
@@ -804,20 +1055,24 @@ class TokenManager:
         """Remove expired tokens and return count"""
         if not self.enable_token_expiry:
             return 0
-        
-        now = datetime.utcnow()
-        expired_tokens = []
-        
-        # Find expired tokens
-        for token_hash, token_info in self._tokens.items():
-            if token_info.expires_at and now > token_info.expires_at:
-                expired_tokens.append((token_hash, token_info.token_id))
-        
-        # Remove expired tokens
-        for token_hash, token_id in expired_tokens:
-            del self._tokens[token_hash]
-            if token_id in self._token_ids:
-                del self._token_ids[token_id]
+
+        with self._shared_state_lock():
+            self._reload_tokens_from_sources()
+            now = datetime.utcnow()
+            expired_tokens = [
+                (token_hash, token_info.token_id)
+                for token_hash, token_info in self._tokens.items()
+                if token_info.expires_at and now > token_info.expires_at
+            ]
+
+            for token_hash, token_id in expired_tokens:
+                revocation = self._remove_token_from_file(
+                    token_id,
+                    token_hash,
+                )
+                self._tokens.pop(token_hash, None)
+                self._token_ids.pop(token_id, None)
+                self._revoked_tokens[token_hash] = revocation
         
         if expired_tokens:
             self.logger.info(f"Cleaned up {len(expired_tokens)} expired tokens")
@@ -828,14 +1083,19 @@ class TokenManager:
         """Save current tokens to JSON file"""
         try:
             target_path = Path(file_path or self.token_file_path)
-            tokens_list = [
-                self._token_info_to_config(token_hash, token_info)
-                for token_hash, token_info in self._tokens.items()
-            ]
-            self._atomic_write_token_file(
-                target_path,
-                self._token_file_document(tokens_list),
-            )
+            with self._shared_state_lock():
+                self._reload_tokens_from_sources()
+                tokens_list = [
+                    self._token_info_to_config(token_hash, token_info)
+                    for token_hash, token_info in self._tokens.items()
+                ]
+                self._atomic_write_token_file(
+                    target_path,
+                    self._token_file_document(
+                        tokens_list,
+                        list(self._revoked_tokens.values()),
+                    ),
+                )
             self.logger.info(f"Saved {len(tokens_list)} tokens to file: {target_path}")
             return True
             
@@ -853,6 +1113,7 @@ class TokenManager:
             DatabaseConfig if token exists and has database binding, None otherwise
         """
         try:
+            self._synchronize_shared_state()
             _token_hash, token_info = self._lookup_token(token)
             
             if not token_info or not token_info.is_active:
@@ -870,6 +1131,7 @@ class TokenManager:
     
     def get_token_stats(self) -> Dict[str, Any]:
         """Get token statistics"""
+        self._synchronize_shared_state()
         now = datetime.utcnow()
         total_tokens = len(self._tokens)
         active_tokens = sum(1 for info in self._tokens.values() if info.is_active)
@@ -893,10 +1155,9 @@ class TokenManager:
         """Start hot reload monitoring task"""
         if self._hot_reload_task:
             return  # Already running
-        
-        # Update initial file modification time
-        self._update_file_modified_time()
-        
+
+        # _load_tokens() already captured a signature for the exact state held
+        # in memory. Re-statting here could hide a change made in between.
         # Start monitoring task
         self._hot_reload_task = asyncio.create_task(self._hot_reload_monitor())
         self.logger.info(f"Started hot reload monitoring for {self.token_file_path}")
@@ -911,8 +1172,11 @@ class TokenManager:
     def _update_file_modified_time(self) -> None:
         """Update the last modified time of tokens file"""
         try:
-            if os.path.exists(self.token_file_path):
-                self._file_last_modified = os.path.getmtime(self.token_file_path)
+            self._file_signature = self._current_file_signature()
+            if self._file_signature is None:
+                self._file_last_modified = 0.0
+            else:
+                self._file_last_modified = self._token_file.stat().st_mtime
         except Exception as e:
             self.logger.debug(f"Failed to get file modification time: {e}")
     
@@ -921,41 +1185,7 @@ class TokenManager:
         while True:
             try:
                 await asyncio.sleep(self.hot_reload_interval)
-                
-                if not os.path.exists(self.token_file_path):
-                    continue
-                
-                # Check if file was modified
-                current_mtime = os.path.getmtime(self.token_file_path)
-                if current_mtime > self._file_last_modified:
-                    self.logger.info(f"Detected changes in {self.token_file_path}, reloading tokens...")
-                    
-                    try:
-                        # Backup current tokens
-                        old_tokens = self._tokens.copy()
-                        old_token_ids = self._token_ids.copy()
-                        old_digest_algorithms = self._digest_algorithms.copy()
-                        
-                        # Clear and reload
-                        self._tokens.clear()
-                        self._token_ids.clear()
-                        self._digest_algorithms.clear()
-                        
-                        # Environment credentials remain effective across file reloads.
-                        self._load_tokens_from_env()
-                        self._load_tokens_from_file()
-                        
-                        # Update modification time
-                        self._update_file_modified_time()
-                        
-                        self.logger.info(f"Hot reload completed, {len(self._tokens)} tokens loaded")
-                        
-                    except Exception as reload_error:
-                        # Restore backup on failure
-                        self.logger.error(f"Hot reload failed, restoring previous tokens: {reload_error}")
-                        self._tokens = old_tokens
-                        self._token_ids = old_token_ids
-                        self._digest_algorithms = old_digest_algorithms
+                self._synchronize_shared_state()
                 
             except asyncio.CancelledError:
                 self.logger.info("Hot reload monitor stopped")
