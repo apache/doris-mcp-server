@@ -76,6 +76,14 @@ class DorisToolsManager:
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
         
         logger.info("DorisToolsManager initialized with business logic processors, v0.5.0 analytics tools, and ADBC query tools")
+
+    async def start(self) -> None:
+        """Start runtime resources owned by the tools manager."""
+        await self.query_executor.start()
+
+    async def close(self) -> None:
+        """Stop runtime resources owned by the tools manager."""
+        await self.query_executor.close()
     
     async def register_tools_with_mcp(self, mcp):
         """Register all tools to MCP server"""

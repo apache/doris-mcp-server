@@ -20,13 +20,14 @@ Authentication Middleware Module
 Provides middleware for JWT authentication in HTTP and MCP contexts
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from ..utils.auth_credentials import (
     BearerCredentials,
     normalize_bearer_credentials,
 )
 from ..utils.logger import get_logger
+from ..utils.datetime_utils import utc_now
 from ..utils.security import AuthContext, SecurityLevel
 from .jwt_manager import JWTManager
 
@@ -110,8 +111,8 @@ class AuthMiddleware:
                 permissions=payload.get('permissions', []),
                 security_level=SecurityLevel(payload.get('security_level', 'internal')),
                 session_id=payload.get('jti'),  # Use JWT ID as session ID
-                login_time=datetime.fromtimestamp(payload.get('iat', 0)),
-                last_activity=datetime.utcnow(),
+                login_time=datetime.fromtimestamp(payload.get('iat', 0), UTC),
+                last_activity=utc_now(),
                 token="",
                 auth_method="jwt",
                 pool_key="global",

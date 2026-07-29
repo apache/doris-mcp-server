@@ -34,7 +34,6 @@ Usage:
     pytest test/security/test_sql_injection_api.py -v --no-cov
 """
 
-import asyncio
 import json
 import os
 
@@ -811,15 +810,6 @@ class TestPerformanceToolsInjectionAPI:
             return True
         result_str = json.dumps(result).lower()
         return any(kw in result_str for kw in ["error", "blocked", "invalid", "security", "injection"])
-
-
-# Pytest configuration for async tests
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create event loop for async tests"""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 if __name__ == "__main__":

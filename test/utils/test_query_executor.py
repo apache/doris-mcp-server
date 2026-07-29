@@ -20,7 +20,7 @@ Query executor tests
 """
 
 import pytest
-from datetime import datetime
+from datetime import UTC, datetime
 from unittest.mock import Mock, AsyncMock, patch
 
 from doris_mcp_server.utils.query_executor import CachedQuery, DorisQueryExecutor, QueryRequest
@@ -66,6 +66,22 @@ class TestDorisQueryExecutor:
         # Create a mock connection manager
         mock_connection_manager = Mock()
         return DorisQueryExecutor(mock_connection_manager, mock_config)
+
+    @pytest.mark.asyncio
+    async def test_background_cleanup_has_explicit_lifecycle(self, query_executor):
+        assert query_executor._background_tasks == []
+
+        await query_executor.start()
+        cleanup_task = query_executor._background_tasks[0]
+        await query_executor.start()
+
+        assert query_executor._background_tasks == [cleanup_task]
+        assert cleanup_task.done() is False
+
+        await query_executor.close()
+
+        assert cleanup_task.done() is True
+        assert query_executor._background_tasks == []
 
     @pytest.mark.asyncio
     async def test_execute_query_success(self, query_executor):
@@ -324,7 +340,7 @@ class TestDorisQueryExecutor:
         query_executor.query_cache.get = AsyncMock(
             return_value=CachedQuery(
                 result=cached_result,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
                 ttl=300,
             )
         )

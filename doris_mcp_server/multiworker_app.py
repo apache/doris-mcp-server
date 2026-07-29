@@ -51,6 +51,7 @@ _worker_server = None
 _worker_session_manager = None
 _worker_connection_manager = None
 _worker_security_manager = None
+_worker_tools_manager = None
 _worker_session_manager_context = None
 _worker_initialized = False
 _worker_effective_auth = None
@@ -58,7 +59,7 @@ _doris_oauth_handlers = None
 
 async def initialize_worker():
     """Initialize MCP server and managers for this worker process"""
-    global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_security_manager, _worker_session_manager_context, _worker_initialized, _oauth_handlers, _token_handlers, _worker_effective_auth, _doris_oauth_handlers
+    global _worker_server, _worker_session_manager, _worker_connection_manager, _worker_security_manager, _worker_tools_manager, _worker_session_manager_context, _worker_initialized, _oauth_handlers, _token_handlers, _worker_effective_auth, _doris_oauth_handlers
     
     if _worker_initialized:
         return
@@ -110,12 +111,13 @@ async def initialize_worker():
         
         # Create managers
         resources_manager = DorisResourcesManager(_worker_connection_manager)
-        tools_manager = DorisToolsManager(_worker_connection_manager)
+        _worker_tools_manager = DorisToolsManager(_worker_connection_manager)
+        await _worker_tools_manager.start()
         prompts_manager = DorisPromptsManager(_worker_connection_manager)
 
         _worker_server = create_doris_mcp_server(
             resources_manager=resources_manager,
-            tools_manager=tools_manager,
+            tools_manager=_worker_tools_manager,
             prompts_manager=prompts_manager,
             name=config.server_name,
             version=config.server_version,
@@ -385,6 +387,13 @@ async def lifespan(app):
                 logger.info(f"Worker {os.getpid()} session manager context closed")
             except Exception as e:
                 logger.error(f"Error closing worker session manager context: {e}")
+
+        if _worker_tools_manager:
+            try:
+                await _worker_tools_manager.close()
+                logger.info(f"Worker {os.getpid()} tools manager closed")
+            except Exception as e:
+                logger.error(f"Error closing worker tools manager: {e}")
         
         if _worker_connection_manager:
             try:

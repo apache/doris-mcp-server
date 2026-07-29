@@ -25,6 +25,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, Optional, List
 
+from ..utils.datetime_utils import utc_now
+
 
 class OAuthProvider(Enum):
     """OAuth provider enumeration"""
@@ -53,7 +55,7 @@ class OAuthState:
     
     def __post_init__(self):
         if self.created_at is None:
-            self.created_at = datetime.utcnow()
+            self.created_at = utc_now()
 
 
 @dataclass
@@ -69,7 +71,7 @@ class OAuthTokens:
     
     def __post_init__(self):
         if self.created_at is None:
-            self.created_at = datetime.utcnow()
+            self.created_at = utc_now()
 
 
 @dataclass

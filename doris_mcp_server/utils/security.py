@@ -39,6 +39,7 @@ from .config import (
     get_effective_auth_config,
 )
 from .logger import get_logger
+from .datetime_utils import utc_now
 
 # Global ContextVar for auth_context - must be a single instance shared across all modules
 # This allows token-bound database configuration to work correctly in concurrent requests
@@ -67,7 +68,7 @@ class AuthContext:
     security_level: 'SecurityLevel' = field(default_factory=lambda: SecurityLevel.INTERNAL)  # Security level
     client_ip: str = "unknown"  # Client IP address
     session_id: str = ""  # Session identifier
-    login_time: datetime = field(default_factory=datetime.utcnow)
+    login_time: datetime = field(default_factory=utc_now)
     last_activity: datetime | None = None
     token: str = ""  # Raw token for token-bound database configuration
     auth_method: str = ""  # anonymous, token, jwt, external_oauth, doris_oauth
@@ -784,7 +785,7 @@ class AuthenticationProvider:
                 security_level=SecurityLevel.INTERNAL,
                 client_ip=credentials.client_ip,
                 session_id=credentials.session_id or f"session_{token_info.token_id}",
-                login_time=datetime.utcnow(),
+                login_time=utc_now(),
                 last_activity=token_info.last_used,
                 token=token,  # Store raw token for token-bound database configuration
                 auth_method="token",

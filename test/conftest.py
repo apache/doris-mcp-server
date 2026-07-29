@@ -19,7 +19,6 @@
 Pytest configuration and fixtures for Doris MCP Server tests
 """
 
-import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -35,14 +34,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture

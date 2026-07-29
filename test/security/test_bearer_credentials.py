@@ -16,7 +16,7 @@
 # under the License.
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -174,7 +174,7 @@ async def test_security_manager_preserves_external_oauth_challenge_error():
 async def test_static_token_provider_uses_canonical_credentials():
     token_info = SimpleNamespace(
         token_id="static-id",
-        last_used=datetime.utcnow(),
+        last_used=datetime.now(UTC),
     )
 
     class TokenManager:

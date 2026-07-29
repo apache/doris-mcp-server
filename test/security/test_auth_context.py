@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 
@@ -40,7 +40,7 @@ async def test_jwt_auth_context_does_not_store_raw_token():
                     "roles": ["reader"],
                     "permissions": ["read_data"],
                     "security_level": "internal",
-                    "iat": int(datetime.utcnow().timestamp()),
+                    "iat": int(datetime.now(UTC).timestamp()),
                 }
             }
 

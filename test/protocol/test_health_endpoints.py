@@ -47,26 +47,26 @@ def _free_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def _stop_process(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is not None:
+async def _stop_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
         return
     process.terminate()
     try:
-        await asyncio.wait_for(process.wait(), timeout=10)
-    except TimeoutError:
+        await asyncio.to_thread(process.wait, 10)
+    except subprocess.TimeoutExpired:
         process.kill()
-        await process.wait()
+        await asyncio.to_thread(process.wait)
 
 
 async def _wait_for_live(
-    process: asyncio.subprocess.Process,
+    process: subprocess.Popen[bytes],
     port: int,
     log_file,
 ) -> None:
     deadline = time.monotonic() + 15
     async with httpx.AsyncClient(timeout=0.5) as client:
         while time.monotonic() < deadline:
-            if process.returncode is not None:
+            if process.poll() is not None:
                 log_file.seek(0)
                 pytest.fail(
                     "HTTP process exited before liveness became available:\n"
@@ -204,18 +204,20 @@ async def test_http_process_stays_live_when_doris_is_unavailable(
     )
 
     with tempfile.TemporaryFile() as log_file:
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "doris_mcp_server",
-            "--transport",
-            "http",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(server_port),
-            "--workers",
-            str(workers),
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "doris_mcp_server",
+                "--transport",
+                "http",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(server_port),
+                "--workers",
+                str(workers),
+            ],
             cwd=PROJECT_ROOT,
             env=environment,
             stdout=log_file,
@@ -245,6 +247,6 @@ async def test_http_process_stays_live_when_doris_is_unavailable(
                 tools = await client.list_tools(cache_mode="bypass")
                 assert tools.tools
 
-            assert process.returncode is None
+            assert process.poll() is None
         finally:
             await _stop_process(process)

@@ -38,6 +38,7 @@ from typing import Any, Dict, Optional
 import aiomysql
 from aiomysql import Connection, Pool
 
+from .datetime_utils import utc_now
 from .logger import get_logger
 
 
@@ -136,8 +137,8 @@ class DorisConnection:
     ):
         self.connection = connection
         self.session_id = session_id
-        self.created_at = datetime.utcnow()
-        self.last_used = datetime.utcnow()
+        self.created_at = utc_now()
+        self.last_used = utc_now()
         self.query_count = 0
         self.is_healthy = True
         self.security_manager = security_manager
@@ -189,7 +190,7 @@ class DorisConnection:
                     row_count = cursor.rowcount
 
                 execution_time = time.time() - start_time
-                self.last_used = datetime.utcnow()
+                self.last_used = utc_now()
                 self.query_count += 1
 
                 # Get column information
@@ -663,7 +664,7 @@ class DorisConnectionManager:
                 and meta
                 and meta.credential_fingerprint == fingerprint
             ):
-                meta.last_used = datetime.utcnow()
+                meta.last_used = utc_now()
                 self.logger.debug("Reusing Doris user pool for %s", normalized_user)
                 return
 
@@ -674,7 +675,7 @@ class DorisConnectionManager:
             old_meta = meta
             generation = (old_meta.generation + 1) if old_meta else 1
             owner_id = f"doris_user:{normalized_user}:gen:{generation}:{uuid.uuid4().hex}"
-            now = datetime.utcnow()
+            now = utc_now()
             new_meta = DorisUserPoolMeta(
                 user=normalized_user,
                 pool_key=self._doris_user_route_key(normalized_user),
@@ -720,7 +721,7 @@ class DorisConnectionManager:
                 raise DorisUserPoolMissingError(f"Doris user pool missing for {normalized_user}")
 
             raw_conn = await asyncio.wait_for(pool.acquire(), timeout=self.connect_timeout)
-            meta.last_used = datetime.utcnow()
+            meta.last_used = utc_now()
             return DorisConnection(
                 raw_conn,
                 session_id,
@@ -779,7 +780,7 @@ class DorisConnectionManager:
         """Close Doris-user pools that are not in active_users and are optionally idle."""
         active_users = active_users or set()
         normalized_active_users = {u for u in active_users if isinstance(u, str)}
-        now = datetime.utcnow()
+        now = utc_now()
         users_to_remove: list[str] = []
 
         async with self._doris_user_pools_lock:
@@ -1686,7 +1687,7 @@ class DorisConnectionManager:
             
             if health_ok:
                 self.logger.debug("✅ Pool health check passed")
-                self.metrics.last_health_check = datetime.utcnow()
+                self.metrics.last_health_check = utc_now()
             else:
                 self.logger.warning("❌ Pool health check failed, attempting recovery")
                 await self._recover_pool()
@@ -2143,7 +2144,7 @@ class DorisConnectionManager:
     async def diagnose_connection_health(self) -> Dict[str, Any]:
         """Diagnose connection pool health - Simplified Strategy"""
         diagnosis = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "pool_status": "unknown",
             "pool_info": {},
             "recommendations": []
@@ -2230,7 +2231,7 @@ class ConnectionPoolMonitor:
         pool_utilization = 1.0 - (pool_status["free_connections"] / pool_status["pool_size"]) if pool_status["pool_size"] > 0 else 0.0
         
         report = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now().isoformat(),
             "pool_status": pool_status,
             "pool_utilization": pool_utilization,
             "recommendations": [],

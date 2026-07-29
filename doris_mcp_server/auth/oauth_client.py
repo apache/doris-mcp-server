@@ -45,6 +45,7 @@ from .oauth_token_validation import (
     OAuthAccessTokenContext,
 )
 from ..utils.logger import get_logger
+from ..utils.datetime_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -107,8 +108,8 @@ class OAuthStateManager:
             pkce_verifier=pkce_verifier,
             pkce_challenge=pkce_challenge,
             redirect_uri=redirect_uri,
-            created_at=datetime.utcnow(),
-            expires_at=datetime.utcnow() + timedelta(seconds=self.state_expiry)
+            created_at=utc_now(),
+            expires_at=utc_now() + timedelta(seconds=self.state_expiry)
         )
         
         self._states[state] = oauth_state
@@ -125,7 +126,7 @@ class OAuthStateManager:
             OAuth state object or None if not found/expired
         """
         oauth_state = self._states.get(state)
-        if oauth_state and oauth_state.expires_at > datetime.utcnow():
+        if oauth_state and oauth_state.expires_at > utc_now():
             return oauth_state
         elif oauth_state:
             # Remove expired state
@@ -153,7 +154,7 @@ class OAuthStateManager:
         while True:
             try:
                 await asyncio.sleep(300)  # Clean up every 5 minutes
-                current_time = datetime.utcnow()
+                current_time = utc_now()
                 expired_states = [
                     state for state, oauth_state in self._states.items()
                     if oauth_state.expires_at <= current_time
@@ -332,7 +333,7 @@ class OAuthClient:
         try:
             # Check cache first
             if (self._discovery_cache and self._discovery_cache_time and 
-                datetime.utcnow() - self._discovery_cache_time < timedelta(hours=1)):
+                utc_now() - self._discovery_cache_time < timedelta(hours=1)):
                 return self._discovery_cache
             
             logger.info(f"Discovering OIDC endpoints: {self.provider_config.discovery_url}")
@@ -376,7 +377,7 @@ class OAuthClient:
             
             # Cache discovery result
             self._discovery_cache = discovery
-            self._discovery_cache_time = datetime.utcnow()
+            self._discovery_cache_time = utc_now()
             
             logger.info("OIDC endpoint discovery completed successfully")
             return discovery

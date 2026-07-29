@@ -272,7 +272,8 @@ class TestEndToEndIntegration:
             # Accept either success result or error (due to mock environment)
             assert "result" in result_data or "error" in result_data
 
-    def test_server_initialization(self, doris_server):
+    @pytest.mark.asyncio
+    async def test_server_initialization(self, doris_server):
         """Test server initialization"""
         # Verify all components are initialized
         assert doris_server.config is not None
@@ -280,6 +281,5 @@ class TestEndToEndIntegration:
         assert doris_server.security_manager is not None
         
         # Verify tools are available - use list_tools instead
-        import asyncio
-        tools = asyncio.run(doris_server.tools_manager.list_tools())
+        tools = await doris_server.tools_manager.list_tools()
         assert len(tools) > 0 

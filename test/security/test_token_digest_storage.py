@@ -18,7 +18,7 @@
 import json
 import os
 import stat
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -145,8 +145,8 @@ async def test_legacy_plaintext_file_is_atomically_migrated_without_expiry_exten
     try:
         result = await reloaded.validate_token(STATIC_TOKEN)
         assert result.is_valid is True
-        assert result.token_info.created_at == datetime(2026, 7, 1)
-        assert result.token_info.expires_at == datetime(2026, 7, 31)
+        assert result.token_info.created_at == datetime(2026, 7, 1, tzinfo=UTC)
+        assert result.token_info.expires_at == datetime(2026, 7, 31, tzinfo=UTC)
     finally:
         reloaded.stop_hot_reload()
 

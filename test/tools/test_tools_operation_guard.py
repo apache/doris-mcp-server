@@ -15,7 +15,6 @@ from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
 from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
 from doris_mcp_server.utils.db import QueryResult
-from doris_mcp_server.utils.query_executor import DorisQueryExecutor
 from doris_mcp_server.utils.schema_extractor import MetadataExtractor
 from doris_mcp_server.utils.security import (
     AuthContext,
@@ -318,8 +317,7 @@ async def test_doris_oauth_exec_query_dispatches_when_query_gate_enabled():
 
 
 @pytest.mark.asyncio
-async def test_doris_oauth_exec_query_real_tool_path_uses_doris_user_route(tmp_path, monkeypatch):
-    monkeypatch.setattr(DorisQueryExecutor, "_start_background_tasks", lambda self: None)
+async def test_doris_oauth_exec_query_real_tool_path_uses_doris_user_route(tmp_path):
     manager, connection_manager = _real_tool_manager_for_routing(tmp_path)
     token = set_current_auth_context(
         doris_context(
@@ -345,8 +343,9 @@ async def test_doris_oauth_exec_query_real_tool_path_uses_doris_user_route(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_doris_oauth_exec_query_with_db_catalog_uses_one_routed_connection(tmp_path, monkeypatch):
-    monkeypatch.setattr(DorisQueryExecutor, "_start_background_tasks", lambda self: None)
+async def test_doris_oauth_exec_query_with_db_catalog_uses_one_routed_connection(
+    tmp_path,
+):
     manager, connection_manager = _real_tool_manager_for_routing(tmp_path)
     token = set_current_auth_context(
         doris_context(

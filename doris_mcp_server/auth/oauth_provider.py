@@ -21,8 +21,6 @@ Integrates OAuth 2.0/OIDC authentication with the existing authentication framew
 """
 
 from typing import Dict, Any, Optional, Tuple
-from datetime import datetime
-
 from .oauth_client import OAuthClient
 from .oauth_token_validation import (
     OAuthAccessTokenContext,
@@ -31,6 +29,7 @@ from .oauth_token_validation import (
 from .oauth_types import OAuthTokens, OAuthUserInfo, OAuthState
 from ..utils.security import AuthContext, SecurityLevel
 from ..utils.logger import get_logger
+from ..utils.datetime_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -240,7 +239,8 @@ class OAuthAuthenticationProvider:
         permissions = await self._map_permissions(user_info.roles)
         
         # Generate session ID
-        session_id = f"oauth_{user_info.sub}_{datetime.utcnow().timestamp()}"
+        now = utc_now()
+        session_id = f"oauth_{user_info.sub}_{now.timestamp()}"
         
         return AuthContext(
             token_id=token_context.token_id or f"oauth_{user_info.sub}",
@@ -249,8 +249,8 @@ class OAuthAuthenticationProvider:
             permissions=permissions,
             security_level=security_level,
             session_id=session_id,
-            login_time=datetime.utcnow(),
-            last_activity=datetime.utcnow(),
+            login_time=now,
+            last_activity=now,
             token="",  # OAuth doesn't have raw token, use empty string
             auth_method="external_oauth",
             oauth_client_id=token_context.client_id,

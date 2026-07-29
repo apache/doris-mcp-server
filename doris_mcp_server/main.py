@@ -126,6 +126,7 @@ class DorisServer:
             # For stdio mode, we must establish a working database connection
             # Use the dedicated stdio mode initialization method
             await self.connection_manager.initialize_for_stdio_mode()
+            await self.tools_manager.start()
 
             from mcp.server.stdio import stdio_server
             
@@ -204,6 +205,7 @@ class DorisServer:
                         "to initialize successfully in Phase 3"
                     )
                 self.logger.info("HTTP mode running without global database pool, will use token-bound configurations")
+            await self.tools_manager.start()
 
             # Use the SDK v2 dual-era Streamable HTTP manager.
             import contextlib
@@ -474,6 +476,8 @@ class DorisServer:
         """Shutdown server"""
         self.logger.info("Shutting down Doris MCP Server")
         try:
+            await self.tools_manager.close()
+
             # Shutdown security manager first (includes JWT cleanup)
             await self.security_manager.shutdown()
             self.logger.info("Security manager shutdown completed")

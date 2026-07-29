@@ -25,12 +25,13 @@ import time
 import secrets
 from pathlib import Path
 from typing import Optional, Tuple, Union
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 from cryptography.hazmat.backends import default_backend
 
 from ..utils.logger import get_logger
+from ..utils.datetime_utils import utc_now
 
 logger = get_logger(__name__)
 
@@ -96,7 +97,7 @@ class KeyManager:
             self._secret_key = await self.generate_symmetric_key()
             logger.info("Generated new symmetric key")
         
-        self._key_generated_at = datetime.utcnow()
+        self._key_generated_at = utc_now()
     
     async def _initialize_asymmetric_keys(self):
         """Initialize asymmetric key pair (RS256/ES256)"""
@@ -141,7 +142,10 @@ class KeyManager:
             )
             
             # Get key generation time (using file modification time)
-            self._key_generated_at = datetime.fromtimestamp(private_path.stat().st_mtime)
+            self._key_generated_at = datetime.fromtimestamp(
+                private_path.stat().st_mtime,
+                UTC,
+            )
             
             return True
             
@@ -168,7 +172,7 @@ class KeyManager:
                 public_key_env.encode(), backend=default_backend()
             )
             
-            self._key_generated_at = datetime.utcnow()
+            self._key_generated_at = utc_now()
             return True
             
         except Exception as e:
@@ -225,7 +229,7 @@ class KeyManager:
             # Store keys
             self._private_key = private_key
             self._public_key = public_key
-            self._key_generated_at = datetime.utcnow()
+            self._key_generated_at = utc_now()
             
             # If file paths are configured, save to files
             if self.private_key_path and self.public_key_path:
@@ -288,7 +292,7 @@ class KeyManager:
             return True
         
         expiry_time = self._key_generated_at + timedelta(seconds=self.key_rotation_interval)
-        return datetime.utcnow() > expiry_time
+        return utc_now() > expiry_time
     
     async def rotate_keys(self) -> bool:
         """Rotate keys"""
@@ -298,7 +302,7 @@ class KeyManager:
             if self.algorithm == "HS256":
                 # Generate new symmetric key
                 self._secret_key = await self.generate_symmetric_key()
-                self._key_generated_at = datetime.utcnow()
+                self._key_generated_at = utc_now()
             else:
                 # Generate new asymmetric key pair
                 await self.generate_key_pair()

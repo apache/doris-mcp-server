@@ -744,9 +744,11 @@ async def test_http_prompt_errors_are_typed_and_server_recovers():
 
 
 @pytest.mark.asyncio
-async def test_http_sql_profile_without_catalog_uses_production_analyzer_path():
+async def test_http_sql_profile_without_catalog_uses_production_analyzer_path(
+    tmp_path,
+):
     app = create_test_server(
-        tools_manager=ProfileToolManager(),
+        tools_manager=ProfileToolManager(str(tmp_path)),
     ).streamable_http_app(
         json_response=True,
         stateless_http=True,
@@ -786,9 +788,9 @@ async def test_http_sql_profile_without_catalog_uses_production_analyzer_path():
 
 
 @pytest.mark.asyncio
-async def test_http_unknown_freshness_uses_default_threshold():
+async def test_http_unknown_freshness_uses_default_threshold(tmp_path):
     app = create_test_server(
-        tools_manager=ProfileToolManager(),
+        tools_manager=ProfileToolManager(str(tmp_path)),
     ).streamable_http_app(
         json_response=True,
         stateless_http=True,
@@ -823,9 +825,9 @@ async def test_http_unknown_freshness_uses_default_threshold():
 
 
 @pytest.mark.asyncio
-async def test_http_doris4_role_metadata_uses_public_grants_command():
+async def test_http_doris4_role_metadata_uses_public_grants_command(tmp_path):
     app = create_test_server(
-        tools_manager=ProfileToolManager(),
+        tools_manager=ProfileToolManager(str(tmp_path)),
     ).streamable_http_app(
         json_response=True,
         stateless_http=True,
@@ -855,9 +857,9 @@ async def test_http_doris4_role_metadata_uses_public_grants_command():
 
 
 @pytest.mark.asyncio
-async def test_http_rejects_injected_sql_identifier_and_recovers():
+async def test_http_rejects_injected_sql_identifier_and_recovers(tmp_path):
     app = create_test_server(
-        tools_manager=ProfileToolManager(),
+        tools_manager=ProfileToolManager(str(tmp_path)),
     ).streamable_http_app(
         json_response=True,
         stateless_http=True,
@@ -902,9 +904,9 @@ async def test_http_rejects_injected_sql_identifier_and_recovers():
 
 
 @pytest.mark.asyncio
-async def test_http_monitoring_rejects_metadata_endpoint_and_recovers():
+async def test_http_monitoring_rejects_metadata_endpoint_and_recovers(tmp_path):
     app = create_test_server(
-        tools_manager=ProfileToolManager(),
+        tools_manager=ProfileToolManager(str(tmp_path)),
     ).streamable_http_app(
         json_response=True,
         stateless_http=True,

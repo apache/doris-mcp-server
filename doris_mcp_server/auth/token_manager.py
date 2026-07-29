@@ -29,13 +29,14 @@ import secrets
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from filelock import FileLock
 
 from ..utils.logger import get_logger
+from ..utils.datetime_utils import as_utc, format_rfc3339, utc_now
 from ..utils.secret_policy import (
     build_token_digest,
     is_static_token_environment_variable,
@@ -64,7 +65,7 @@ class TokenInfo:
     """Token information structure with optional database binding"""
     
     token_id: str  # Unique token identifier for audit and management
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
     expires_at: Optional[datetime] = None
     last_used: Optional[datetime] = None
     description: str = ""  # Optional description for token purpose
@@ -222,7 +223,7 @@ class TokenManager:
 
     @staticmethod
     def _parse_datetime(value: Any, *, setting: str) -> Optional[datetime]:
-        """Parse an RFC 3339 timestamp into the manager's naive UTC form."""
+        """Parse an RFC 3339 timestamp into timezone-aware UTC."""
         if value in (None, ""):
             return None
         if not isinstance(value, str):
@@ -232,9 +233,7 @@ class TokenManager:
             parsed = datetime.fromisoformat(normalized)
         except ValueError as exc:
             raise ValueError(f"{setting} must be an RFC 3339 timestamp") from exc
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-        return parsed
+        return as_utc(parsed)
 
     def _add_token_from_config(
         self,
@@ -249,7 +248,7 @@ class TokenManager:
             created_at = self._parse_datetime(
                 token_config.get('created_at'),
                 setting=f"static token '{token_id}' created_at",
-            ) or datetime.utcnow()
+            ) or utc_now()
 
             # Calculate expiration time
             if 'expires_at' in token_config:
@@ -541,14 +540,14 @@ class TokenManager:
                 )
             
             # Check expiration
-            if token_info.expires_at and datetime.utcnow() > token_info.expires_at:
+            if token_info.expires_at and utc_now() > token_info.expires_at:
                 return TokenValidationResult(
                     is_valid=False,
                     error_message="Token has expired"
                 )
             
             # Update last used time
-            token_info.last_used = datetime.utcnow()
+            token_info.last_used = utc_now()
             
             return TokenValidationResult(
                 is_valid=True,
@@ -593,9 +592,9 @@ class TokenManager:
             # Calculate expiration
             expires_at = None
             if expires_hours is not None:
-                expires_at = datetime.utcnow() + timedelta(hours=expires_hours)
+                expires_at = utc_now() + timedelta(hours=expires_hours)
             elif self.enable_token_expiry:
-                expires_at = datetime.utcnow() + timedelta(hours=self.default_token_expiry_hours)
+                expires_at = utc_now() + timedelta(hours=self.default_token_expiry_hours)
             
             # Create token info
             token_info = TokenInfo(
@@ -779,7 +778,7 @@ class TokenManager:
             "description": (
                 "Doris MCP Server digest-only shared token state"
             ),
-            "updated_at": datetime.utcnow().isoformat() + "Z",
+            "updated_at": format_rfc3339(utc_now()),
             "tokens": tokens,
             "revoked_tokens": sorted(
                 revoked_tokens or [],
@@ -904,7 +903,7 @@ class TokenManager:
         return {
             "token_id": token_id,
             "token_digest": token_digest,
-            "revoked_at": revoked_at.isoformat() + "Z",
+            "revoked_at": format_rfc3339(revoked_at),
         }
 
     def _token_info_to_config(
@@ -919,14 +918,14 @@ class TokenManager:
                 token_hash,
                 setting=f"static token '{token_info.token_id}' token_digest",
             ),
-            "created_at": token_info.created_at.isoformat() + "Z",
+            "created_at": format_rfc3339(token_info.created_at),
             "expires_at": (
-                token_info.expires_at.isoformat() + "Z"
+                format_rfc3339(token_info.expires_at)
                 if token_info.expires_at
                 else None
             ),
             "last_used": (
-                token_info.last_used.isoformat() + "Z"
+                format_rfc3339(token_info.last_used)
                 if token_info.last_used
                 else None
             ),
@@ -992,7 +991,7 @@ class TokenManager:
                 {
                     "token_id": token_id,
                     "token_digest": token_hash,
-                    "revoked_at": datetime.utcnow().isoformat() + "Z",
+                    "revoked_at": format_rfc3339(utc_now()),
                 }
             )
             sanitized_revocations = [
@@ -1032,7 +1031,11 @@ class TokenManager:
                 'last_used': token_info.last_used.isoformat() if token_info.last_used else None,
                 'is_active': token_info.is_active,
                 'description': token_info.description,
-                'is_expired': token_info.expires_at and datetime.utcnow() > token_info.expires_at if token_info.expires_at else False
+                'is_expired': (
+                    utc_now() > token_info.expires_at
+                    if token_info.expires_at
+                    else False
+                ),
             }
             
             # Add database binding info (without sensitive data)
@@ -1061,7 +1064,7 @@ class TokenManager:
 
         with self._shared_state_lock():
             self._reload_tokens_from_sources()
-            now = datetime.utcnow()
+            now = utc_now()
             expired_tokens = [
                 (token_hash, token_info.token_id)
                 for token_hash, token_info in self._tokens.items()
@@ -1123,7 +1126,7 @@ class TokenManager:
                 return None
                 
             # Check expiration
-            if token_info.expires_at and datetime.utcnow() > token_info.expires_at:
+            if token_info.expires_at and utc_now() > token_info.expires_at:
                 return None
                 
             return token_info.database_config
@@ -1135,7 +1138,7 @@ class TokenManager:
     def get_token_stats(self) -> Dict[str, Any]:
         """Get token statistics"""
         self._synchronize_shared_state()
-        now = datetime.utcnow()
+        now = utc_now()
         total_tokens = len(self._tokens)
         active_tokens = sum(1 for info in self._tokens.values() if info.is_active)
         expired_tokens = sum(1 for info in self._tokens.values() 
@@ -1151,7 +1154,11 @@ class TokenManager:
             'expiry_enabled': self.enable_token_expiry,
             'default_expiry_hours': self.default_token_expiry_hours,
             'hot_reload_enabled': self.enable_hot_reload,
-            'last_file_check': datetime.fromtimestamp(self._file_last_modified).isoformat() if self._file_last_modified else None
+            'last_file_check': (
+                datetime.fromtimestamp(self._file_last_modified, UTC).isoformat()
+                if self._file_last_modified
+                else None
+            ),
         }
     
     def _start_hot_reload(self) -> None:

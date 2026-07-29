@@ -75,10 +75,9 @@ class ProfileConnection:
 
 
 class ProfileConnectionManager:
-    def __init__(self) -> None:
-        self._temp_dir = tempfile.TemporaryDirectory(prefix="doris-mcp-profile-")
+    def __init__(self, temp_files_dir: str) -> None:
         self.config = SimpleNamespace(
-            temp_files_dir=self._temp_dir.name,
+            temp_files_dir=temp_files_dir,
             performance=SimpleNamespace(max_response_content_size=20_000),
         )
         self.connection = ProfileConnection()
@@ -210,8 +209,8 @@ class RoleSecurityAnalyticsTools(SecurityAnalyticsTools):
 
 
 class OneToolManager:
-    def __init__(self) -> None:
-        connection_manager = ProfileConnectionManager()
+    def __init__(self, temp_files_dir: str) -> None:
+        connection_manager = ProfileConnectionManager(temp_files_dir)
         self.profile_analyzer = ProfileAnalyzer(connection_manager)
         self.freshness_router = object.__new__(DorisToolsManager)
         self.freshness_router.data_governance_tools = FreshnessGovernanceTools(
@@ -394,26 +393,27 @@ class EmptyPromptsManager:
 
 
 async def main() -> None:
-    server = create_doris_mcp_server(
-        resources_manager=EmptyResourcesManager(),
-        tools_manager=OneToolManager(),
-        prompts_manager=EmptyPromptsManager(),
-        name="doris-mcp-stdio-capability-test",
-        version=__version__,
-        logger=logging.getLogger(__name__),
-        required_client_capabilities={
-            "tools/list": ClientCapabilities(
-                extensions={REQUIRED_EXTENSION: {}},
-            )
-        },
-    )
-
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
+    with tempfile.TemporaryDirectory(prefix="doris-mcp-profile-") as temp_files_dir:
+        server = create_doris_mcp_server(
+            resources_manager=EmptyResourcesManager(),
+            tools_manager=OneToolManager(temp_files_dir),
+            prompts_manager=EmptyPromptsManager(),
+            name="doris-mcp-stdio-capability-test",
+            version=__version__,
+            logger=logging.getLogger(__name__),
+            required_client_capabilities={
+                "tools/list": ClientCapabilities(
+                    extensions={REQUIRED_EXTENSION: {}},
+                )
+            },
         )
+
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
 
 
 if __name__ == "__main__":

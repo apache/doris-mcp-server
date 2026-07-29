@@ -36,6 +36,7 @@ from decimal import Decimal
 import sqlparse
 
 from .db import DorisConnectionManager, QueryResult, get_first_sql_keyword
+from .datetime_utils import utc_now
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -71,12 +72,12 @@ class CachedQuery:
         """Check if cache is expired"""
         if self.ttl <= 0:
             return False
-        return (datetime.utcnow() - self.created_at).total_seconds() > self.ttl
+        return (utc_now() - self.created_at).total_seconds() > self.ttl
 
     def access(self):
         """Record access"""
         self.access_count += 1
-        self.last_accessed = datetime.utcnow()
+        self.last_accessed = utc_now()
 
 
 @dataclass
@@ -146,7 +147,7 @@ class QueryCache:
             await self._evict_oldest()
 
         cached_query = CachedQuery(
-            result=result, created_at=datetime.utcnow(), ttl=ttl or self.default_ttl
+            result=result, created_at=utc_now(), ttl=ttl or self.default_ttl
         )
 
         self.cache[cache_key] = cached_query
@@ -349,8 +350,7 @@ class DorisQueryExecutor:
         ) if hasattr(self.config, 'performance') else 50
 
         # Background tasks
-        self._background_tasks = []
-        self._start_background_tasks()
+        self._background_tasks: list[asyncio.Task[None]] = []
 
     def _create_default_config(self):
         """Create default configuration"""
@@ -366,16 +366,14 @@ class DorisQueryExecutor:
 
         return DefaultConfig()
 
-    def _start_background_tasks(self):
-        """Start background tasks"""
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No event loop running (e.g., in tests), skip background tasks
-            self.logger.debug("No event loop running, skipping background tasks")
+    async def start(self) -> None:
+        """Start owned background tasks within an explicit runtime lifecycle."""
+        if any(not task.done() for task in self._background_tasks):
             return
-
-        cleanup_task = loop.create_task(self._cache_cleanup_loop())
+        self._background_tasks = [
+            task for task in self._background_tasks if not task.done()
+        ]
+        cleanup_task = asyncio.create_task(self._cache_cleanup_loop())
         self._background_tasks.append(cleanup_task)
 
     async def _cache_cleanup_loop(self):
@@ -1030,10 +1028,9 @@ class DorisQueryExecutor:
         # Cancel background tasks
         for task in self._background_tasks:
             task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
 
         # Clear cache
         await self.query_cache.clear_all()
@@ -1054,7 +1051,7 @@ class QueryPerformanceMonitor:
     ):
         """Record query performance"""
         record = {
-            "timestamp": datetime.utcnow(),
+            "timestamp": utc_now(),
             "sql": query_request.sql,
             "user_id": query_request.user_id,
             "session_id": query_request.session_id,
@@ -1073,7 +1070,7 @@ class QueryPerformanceMonitor:
         self, time_range_minutes: int = 60
     ) -> dict[str, Any]:
         """Get performance report"""
-        cutoff_time = datetime.utcnow() - timedelta(minutes=time_range_minutes)
+        cutoff_time = utc_now() - timedelta(minutes=time_range_minutes)
 
         recent_records = [
             record
