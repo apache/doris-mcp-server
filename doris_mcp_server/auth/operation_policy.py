@@ -338,6 +338,8 @@ OPERATION_POLICIES: dict[str, OperationPolicy] = {
     "get_prompt": OperationPolicy("get_prompt", "prompt:get", "deny", "mysql", "medium"),
     "http:/": OperationPolicy("http:/", None, "allow"),
     "http:/health": OperationPolicy("http:/health", None, "allow"),
+    "http:/live": OperationPolicy("http:/live", None, "allow"),
+    "http:/ready": OperationPolicy("http:/ready", None, "allow"),
     "http:/auth/login": OperationPolicy("http:/auth/login", None, "deny", "external_oauth", "medium"),
     "http:/auth/callback": OperationPolicy("http:/auth/callback", None, "deny", "external_oauth", "medium"),
     "http:/auth/provider": OperationPolicy("http:/auth/provider", None, "deny", "external_oauth", "medium"),

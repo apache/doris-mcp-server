@@ -189,7 +189,8 @@ doris-mcp-server --help
 doris-mcp-client --help
 
 # Test HTTP mode (in another terminal)
-curl http://localhost:3000/health
+curl --fail http://localhost:3000/live
+curl --fail http://localhost:3000/ready
 ```
 
 ### Environment Variables (Optional)
@@ -383,7 +384,14 @@ docker run -d -p <port>:<port> -v /*your-host*/doris-mcp-server/.env:/app/.env -
 **Service Endpoints:**
 
 *   **Streamable HTTP**: `http://<host>:<port>/mcp` (MCP messages use `POST`; do not depend on `GET` or `DELETE` compatibility behavior)
-*   **Health Check**: `http://<host>:<port>/health`
+*   **Liveness**: `http://<host>:<port>/live` — process and protocol service are running; does not depend on Doris
+*   **Readiness**: `http://<host>:<port>/ready` — returns 200 only when a bounded Doris `SELECT 1` probe succeeds; otherwise returns 503
+*   **Legacy Health Check**: `http://<host>:<port>/health` — backward-compatible liveness alias; do not use it to decide whether to route database work
+
+The readiness probe has a fixed short timeout and exposes only stable status
+fields, not connection errors or credentials. Stdio mode has no HTTP health
+surface; supervise the process and use the MCP initialization/discovery
+handshake for transport-level availability.
 
 > **Note**: The server uses Streamable HTTP for web-based communication, providing unified request/response and streaming capabilities.
 
@@ -1568,8 +1576,9 @@ Recommendations:
 
 2. **Check network connectivity**:
    ```bash
-   # Test database connection
-   curl http://localhost:3000/health
+   # /live verifies the process; /ready also verifies Doris
+   curl --fail http://localhost:3000/live
+   curl --fail http://localhost:3000/ready
    ```
 
 3. **Optimize connection pool configuration**:
@@ -1615,8 +1624,9 @@ tail -f logs/doris_mcp_server_info.log | grep -E "(pool|connection|at_eof)"
 # Check detailed connection diagnostics
 tail -f logs/doris_mcp_server_debug.log | grep "connection health"
 
-# View connection pool metrics
-curl http://localhost:8000/health  # If running in HTTP mode
+# Check process liveness and Doris readiness
+curl --fail http://localhost:8000/live
+curl --fail http://localhost:8000/ready
 ```
 
 #### Configuration for Optimal Connection Performance:

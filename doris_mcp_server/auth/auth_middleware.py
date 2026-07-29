@@ -152,7 +152,13 @@ class AuthMiddleware:
         Returns:
             ASGI middleware function
         """
-        skip_paths = skip_paths or ['/health', '/docs', '/openapi.json']
+        skip_paths = skip_paths or [
+            '/health',
+            '/live',
+            '/ready',
+            '/docs',
+            '/openapi.json',
+        ]
         
         async def middleware(scope, receive, send):
             """HTTP authentication middleware"""
@@ -163,7 +169,10 @@ class AuthMiddleware:
             path = scope.get('path', '')
             
             # Check if authentication should be skipped
-            if any(path.startswith(skip) for skip in skip_paths):
+            if any(
+                path == skip or path.startswith(f"{skip}/")
+                for skip in skip_paths
+            ):
                 return await self.app(scope, receive, send)
             
             # Extract authentication information
