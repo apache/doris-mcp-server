@@ -37,6 +37,8 @@ under **Unreleased** until a new version is selected and published.
   errors, and deterministic product identity.
 - Permission-bound cursor pagination for resources, tools, and prompts on
   Streamable HTTP and stdio.
+- HMAC-authenticated explicit state handles with principal, scope, resource,
+  expiry, and shared-worker key binding instead of protocol-session state.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed

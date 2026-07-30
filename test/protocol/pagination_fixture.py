@@ -118,7 +118,12 @@ class PaginationPromptsManager:
         )
 
 
-def create_pagination_server(*, page_size: int = 2):
+def create_pagination_server(
+    *,
+    page_size: int = 2,
+    state_handle_secret: str | None = None,
+    state_handle_ttl_seconds: int = 300,
+):
     resources = PaginationResourcesManager()
     tools = PaginationToolsManager()
     prompts = PaginationPromptsManager()
@@ -130,6 +135,8 @@ def create_pagination_server(*, page_size: int = 2):
         version=__version__,
         logger=logging.getLogger(__name__),
         list_page_size=page_size,
+        state_handle_secret=state_handle_secret,
+        state_handle_ttl_seconds=state_handle_ttl_seconds,
     )
     return server, PaginationManagers(
         resources=resources,

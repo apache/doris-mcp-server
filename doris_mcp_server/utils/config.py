@@ -24,6 +24,7 @@ import json
 import logging
 import multiprocessing
 import os
+import secrets
 from dataclasses import dataclass, field
 from ipaddress import ip_address
 from pathlib import Path
@@ -601,6 +602,11 @@ class DorisConfig:
     mcp_allowed_origins: list[str] = field(default_factory=list)
     enable_legacy_http_adapter: bool = False
     mcp_list_page_size: int = 100
+    mcp_state_handle_secret: str = field(
+        default_factory=lambda: secrets.token_urlsafe(32),
+        repr=False,
+    )
+    mcp_state_handle_ttl_seconds: int = 300
     transport: str = "stdio"
     workers: int = 1
 
@@ -1152,6 +1158,18 @@ class DorisConfig:
                 config.mcp_list_page_size,
             )
             _mark_source(config, "mcp_list_page_size", "env")
+        if "MCP_STATE_HANDLE_SECRET" in os.environ:
+            config.mcp_state_handle_secret = os.getenv(
+                "MCP_STATE_HANDLE_SECRET",
+                "",
+            )
+            _mark_source(config, "mcp_state_handle_secret", "env")
+        if "MCP_STATE_HANDLE_TTL_SECONDS" in os.environ:
+            config.mcp_state_handle_ttl_seconds = _env_int(
+                "MCP_STATE_HANDLE_TTL_SECONDS",
+                config.mcp_state_handle_ttl_seconds,
+            )
+            _mark_source(config, "mcp_state_handle_ttl_seconds", "env")
         config.temp_files_dir = os.getenv("TEMP_FILES_DIR", config.temp_files_dir)
 
         return config
@@ -1170,6 +1188,7 @@ class DorisConfig:
             "mcp_allowed_origins",
             "enable_legacy_http_adapter",
             "mcp_list_page_size",
+            "mcp_state_handle_ttl_seconds",
             "temp_files_dir",
             "transport",
             "workers",
@@ -1245,6 +1264,7 @@ class DorisConfig:
             "mcp_allowed_origins": self.mcp_allowed_origins,
             "enable_legacy_http_adapter": self.enable_legacy_http_adapter,
             "mcp_list_page_size": self.mcp_list_page_size,
+            "mcp_state_handle_ttl_seconds": self.mcp_state_handle_ttl_seconds,
             "temp_files_dir": self.temp_files_dir,
             "database": {
                 "host": self.database.host,
@@ -1441,6 +1461,12 @@ class DorisConfig:
 
         if not 1 <= self.mcp_list_page_size <= 1000:
             errors.append("MCP list page size must be in the range 1-1000")
+
+        if len(self.mcp_state_handle_secret.encode("utf-8")) < 32:
+            errors.append("MCP state handle secret must contain at least 32 bytes")
+
+        if not 1 <= self.mcp_state_handle_ttl_seconds <= 3600:
+            errors.append("MCP state handle TTL must be in the range 1-3600 seconds")
 
         # Validate security configuration
         if self.security.auth_type not in ["token", "basic", "oauth", "jwt"]:
