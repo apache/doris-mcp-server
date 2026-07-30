@@ -57,6 +57,7 @@ def test_configuration_cannot_override_product_version(monkeypatch):
 
 def test_release_docs_and_commands_match_product_version():
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    normalized_readme = " ".join(readme.split())
     changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
     pyproject = tomllib.loads(
@@ -65,6 +66,15 @@ def test_release_docs_and_commands_match_product_version():
 
     assert f"pip install doris-mcp-server=={__version__}" in readme
     assert f"## [{__version__}]" in changelog
+    assert (
+        "MCP `2026-07-28` protocol compatibility on `master` is **Generally "
+        "Available (GA)**"
+    ) in normalized_readme
+    assert "This GA statement is scoped to protocol compatibility" in readme
+    assert (
+        "Development Status :: 4 - Beta"
+        in pyproject["project"]["classifiers"]
+    )
     assert "the two commands are not interchangeable" in readme
     assert pyproject["project"]["scripts"] == {
         "doris-mcp-server": "doris_mcp_server.main:main_sync",
