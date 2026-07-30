@@ -92,3 +92,19 @@ def test_readme_language_switcher_is_bidirectional():
 
     assert "[English](README.md) | [简体中文](README.zh-CN.md)" in readme
     assert "[English](README.md) | 简体中文" in chinese_readme
+
+
+def test_fine_grained_access_control_guide_is_linked_and_complete():
+    guide_path = PROJECT_ROOT / "docs" / "doris-fine-grained-access-control.md"
+    guide = guide_path.read_text(encoding="utf-8")
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    chinese_readme = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+    link = "docs/doris-fine-grained-access-control.md"
+
+    assert f"]({link})" in readme
+    assert f"]({link})" in chinese_readme
+    assert "GRANT SELECT_PRIV(" in guide
+    assert "CREATE ROW POLICY" in guide
+    assert "root` and `admin" in guide
+    assert "Doris-backed OAuth" in guide
+    assert "Token-bound database configuration" in guide

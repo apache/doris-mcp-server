@@ -306,7 +306,32 @@ export OAUTH_USERINFO_URL=https://issuer.example.com/userinfo
 MCP 的角色、scope、安全级别、SQL 检查和数据脱敏属于应用层控制，不能替代
 Doris 数据权限。生产环境必须使用 Doris 用户、角色、GRANT、视图和行级策略
 落实最小权限。即使 OAuth 角色映射允许调用 `exec_query`，最终能读取的数据仍应
-由 Doris 拒绝或允许。
+由 Doris 拒绝或允许。完整 SQL、MCP 身份路由方式和验收清单见
+[Doris 细粒度访问控制指南](docs/doris-fine-grained-access-control.md)。
+
+最小配置示例：
+
+```sql
+CREATE ROLE mcp_orders_east_reader;
+CREATE USER 'mcp_orders_east'@'10.%'
+IDENTIFIED BY '<generated-high-entropy-password>';
+GRANT 'mcp_orders_east_reader' TO 'mcp_orders_east'@'10.%';
+
+GRANT SELECT_PRIV(order_id, region_id, order_total, created_at)
+ON internal.sales.orders
+TO ROLE 'mcp_orders_east_reader';
+
+CREATE ROW POLICY mcp_orders_east_only
+ON sales.orders
+AS RESTRICTIVE
+TO ROLE mcp_orders_east_reader
+USING (region_id = 'east');
+```
+
+列权限目前只支持 `SELECT_PRIV`。同一用户或角色不能再保留表级、库级或全局
+`SELECT_PRIV`，否则更宽的授权会使列限制失效。Row Policy、列权限和 Ranger
+脱敏都不能使用默认的 `root`、`admin` 用户验收；必须使用真实的受限业务用户，
+并通过 Token 绑定连接或 Doris OAuth 让 MCP 请求使用该用户的连接池。
 
 不要在日志、URL、Issue 或 Pull Request 中暴露：
 
