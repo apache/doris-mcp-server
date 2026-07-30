@@ -66,6 +66,11 @@ jobs:
         run: uv sync --frozen --group dev
       - name: Run full test suite
         run: uv run pytest -q -W error
+      - name: Enforce domain coverage floors
+        run: |
+          uv run coverage json -o "$RUNNER_TEMP/coverage.json"
+          uv run python test/deployment/check_coverage_domains.py \
+            "$RUNNER_TEMP/coverage.json"
 
   package:
     name: Build and wheel smoke

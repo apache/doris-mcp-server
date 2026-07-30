@@ -76,6 +76,8 @@ under **Unreleased** until a new version is selected and published.
 - Persisted static bearer tokens as self-describing SHA-256/SHA-512 digests,
   with atomic owner-only writes and one-way migration from legacy plaintext
   token files.
+- Added coverage gates for the protocol, authentication, and core manager
+  domains at 80%, alongside a 55% whole-repository floor.
 
 ### Fixed
 
