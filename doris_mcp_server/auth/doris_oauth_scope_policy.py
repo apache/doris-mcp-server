@@ -4,6 +4,11 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
+from ..tools.tool_registry import (
+    DORIS_OAUTH_EXPLAIN_TOOL_SET,
+    DORIS_OAUTH_METADATA_TOOL_NAMES,
+    DORIS_OAUTH_QUERY_TOOL_SET,
+)
 from .doris_oauth_types import TokenEndpointError
 
 if TYPE_CHECKING:
@@ -12,15 +17,7 @@ if TYPE_CHECKING:
 BASE_DORIS_OAUTH_SCOPES = frozenset({"tool:list"})
 RESOURCE_SCOPES = frozenset({"resource:list", "resource:read"})
 
-DORIS_OAUTH_METADATA_TOOLS = (
-    "get_db_list",
-    "get_db_table_list",
-    "get_table_schema",
-    "get_table_comment",
-    "get_table_column_comments",
-    "get_table_indexes",
-    "get_catalog_list",
-)
+DORIS_OAUTH_METADATA_TOOLS = DORIS_OAUTH_METADATA_TOOL_NAMES
 
 METADATA_DB_SCOPES = frozenset(
     {
@@ -28,12 +25,20 @@ METADATA_DB_SCOPES = frozenset(
     }
 )
 
-QUERY_DB_SCOPES = frozenset({"tool:call:exec_query"})
-EXPLAIN_DB_SCOPES = frozenset({"tool:call:get_sql_explain"})
+QUERY_DB_SCOPES = frozenset(
+    f"tool:call:{tool_name}" for tool_name in DORIS_OAUTH_QUERY_TOOL_SET
+)
+EXPLAIN_DB_SCOPES = frozenset(
+    f"tool:call:{tool_name}" for tool_name in DORIS_OAUTH_EXPLAIN_TOOL_SET
+)
 PENDING_DB_SCOPES = METADATA_DB_SCOPES | QUERY_DB_SCOPES | EXPLAIN_DB_SCOPES
 TOOL_SCOPE_ALIASES = {
     tool_name: f"tool:call:{tool_name}"
-    for tool_name in (*DORIS_OAUTH_METADATA_TOOLS, "exec_query", "get_sql_explain")
+    for tool_name in (
+        *DORIS_OAUTH_METADATA_TOOLS,
+        *DORIS_OAUTH_QUERY_TOOL_SET,
+        *DORIS_OAUTH_EXPLAIN_TOOL_SET,
+    )
 }
 
 FORBIDDEN_DORIS_OAUTH_SCOPES = frozenset(
@@ -99,16 +104,24 @@ class DorisOAuthScopePolicy:
 
         if getattr(security_config, "doris_oauth_query_tools_enabled", False):
             tool_names = self._configured_tool_names(
-                getattr(security_config, "doris_oauth_query_tool_allowlist", ("exec_query",))
+                getattr(
+                    security_config,
+                    "doris_oauth_query_tool_allowlist",
+                    tuple(DORIS_OAUTH_QUERY_TOOL_SET),
+                )
             )
-            if "exec_query" in tool_names:
+            if DORIS_OAUTH_QUERY_TOOL_SET.intersection(tool_names):
                 allowed.update(QUERY_DB_SCOPES)
 
         if getattr(security_config, "doris_oauth_explain_tools_enabled", False):
             tool_names = self._configured_tool_names(
-                getattr(security_config, "doris_oauth_explain_tool_allowlist", ("get_sql_explain",))
+                getattr(
+                    security_config,
+                    "doris_oauth_explain_tool_allowlist",
+                    tuple(DORIS_OAUTH_EXPLAIN_TOOL_SET),
+                )
             )
-            if "get_sql_explain" in tool_names:
+            if DORIS_OAUTH_EXPLAIN_TOOL_SET.intersection(tool_names):
                 allowed.update(EXPLAIN_DB_SCOPES)
 
         return allowed

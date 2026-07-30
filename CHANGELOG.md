@@ -54,6 +54,9 @@ under **Unreleased** until a new version is selected and published.
   capability-honest.
 - Added bounded JSON Schema 2020-12 validation for tool definitions, arguments,
   and declared structured outputs without external reference fetching.
+- Consolidated tool schemas, execution handlers, Doris OAuth policy, safe
+  audit metadata, compatibility aliases, and generated documentation in one
+  validated Tool Definition Registry.
 - Positioned Dynamic Client Registration as a compatibility fallback behind
   preconfigured clients and Client ID Metadata Documents.
 - Persisted static bearer tokens as self-describing SHA-256/SHA-512 digests,

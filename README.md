@@ -342,39 +342,12 @@ cp .env.example .env
 
 ### Available MCP Tools
 
-The following table lists the main tools currently available for invocation via an MCP client:
+The canonical catalog is generated from the same `ToolDefinitionRegistry` used
+for MCP JSON Schemas, execution dispatch, authorization policy, and audit
+metadata. See [docs/tool-registry.md](docs/tool-registry.md). The checked-in
+catalog is verified against the runtime registry by the test suite.
 
-| Tool Name                   | Description                                                  | Parameters                                                   |
-|-----------------------------|--------------------------------------------------------------|--------------------------------------------------------------|
-| `exec_query`                | Execute SQL query and return results.                       | `sql` (string, Required), `db_name` (string, Optional), `catalog_name` (string, Optional), `max_rows` (integer, Optional), `timeout` (integer, Optional) |
-| `get_table_schema`          | Get detailed table structure information.                   | `table_name` (string, Required), `db_name` (string, Optional), `catalog_name` (string, Optional) |
-| `get_db_table_list`         | Get list of all table names in specified database.         | `db_name` (string, Optional), `catalog_name` (string, Optional) |
-| `get_db_list`               | Get list of all database names.                             | `catalog_name` (string, Optional)                           |
-| `get_table_comment`         | Get table comment information.                              | `table_name` (string, Required), `db_name` (string, Optional), `catalog_name` (string, Optional) |
-| `get_table_column_comments` | Get comment information for all columns in table.          | `table_name` (string, Required), `db_name` (string, Optional), `catalog_name` (string, Optional) |
-| `get_table_indexes`         | Get index information for specified table.                  | `table_name` (string, Required), `db_name` (string, Optional), `catalog_name` (string, Optional) |
-| `get_recent_audit_logs`     | Get audit log records for recent period.                    | `days` (integer, Optional), `limit` (integer, Optional)     |
-| `get_catalog_list`          | Get list of all catalog names.                              | `random_string` (string, Required)                          |
-| `get_sql_explain`           | Get SQL execution plan with configurable content truncation and file export for LLM analysis.               | `sql` (string, Required), `verbose` (boolean, Optional), `db_name` (string, Optional), `catalog_name` (string, Optional) |
-| `get_sql_profile`           | Get SQL execution profile with content management and file export for LLM optimization workflows.                  | `sql` (string, Required), `db_name` (string, Optional), `catalog_name` (string, Optional), `timeout` (integer, Optional) |
-| `get_table_data_size`       | Get table data size information via FE HTTP API.           | `db_name` (string, Optional), `table_name` (string, Optional), `single_replica` (boolean, Optional) |
-| `get_monitoring_metrics_info` | Get Doris monitoring metrics definitions and descriptions. | `role` (string, Optional), `monitor_type` (string, Optional), `priority` (string, Optional) |
-| `get_monitoring_metrics_data` | Get actual Doris monitoring metrics data from nodes with flexible BE discovery.      | `role` (string, Optional), `monitor_type` (string, Optional), `priority` (string, Optional) |
-| `get_realtime_memory_stats` | Get real-time memory statistics via BE Memory Tracker with auto/manual BE discovery.     | `tracker_type` (string, Optional), `include_details` (boolean, Optional) |
-| `get_historical_memory_stats` | Get historical memory statistics via BE Bvar interface with flexible BE configuration.   | `tracker_names` (array, Optional), `time_range` (string, Optional) |
-| `analyze_data_quality` | Comprehensive data quality analysis combining completeness and distribution analysis. | `table_name` (string, Required), `analysis_scope` (string, Optional), `sample_size` (integer, Optional), `business_rules` (array, Optional) |
-| `trace_column_lineage` | End-to-end column lineage tracking through SQL analysis and dependency mapping. | `target_columns` (array, Required), `analysis_depth` (integer, Optional), `include_transformations` (boolean, Optional) |
-| `monitor_data_freshness` | Real-time data staleness monitoring with configurable freshness thresholds. | `table_names` (array, Optional), `freshness_threshold_hours` (integer, Optional), `include_update_patterns` (boolean, Optional) |
-| `analyze_data_access_patterns` | User behavior analysis and security anomaly detection with access pattern monitoring. | `days` (integer, Optional), `include_system_users` (boolean, Optional), `min_query_threshold` (integer, Optional) |
-| `analyze_data_flow_dependencies` | Data flow impact analysis and dependency mapping between tables and views. | `target_table` (string, Optional), `analysis_depth` (integer, Optional), `include_views` (boolean, Optional) |
-| `analyze_slow_queries_topn` | Performance bottleneck identification with top-N slow query analysis and patterns. | `days` (integer, Optional), `top_n` (integer, Optional), `min_execution_time_ms` (integer, Optional), `include_patterns` (boolean, Optional) |
-| `analyze_resource_growth_curves` | Capacity planning with resource growth analysis and trend forecasting. | `days` (integer, Optional), `resource_types` (array, Optional), `include_predictions` (boolean, Optional) |
-| `exec_adbc_query` | High-performance SQL execution using ADBC (Arrow Flight SQL) protocol. | `sql` (string, Required), `max_rows` (integer, Optional), `timeout` (integer, Optional), `return_format` (string, Optional) |
-| `get_adbc_connection_info` | ADBC connection diagnostics and status monitoring for Arrow Flight SQL. | No parameters required |
-
-**Note:** All metadata tools support catalog federation for multi-catalog environments. Enhanced monitoring tools provide comprehensive memory tracking and metrics collection capabilities. **New in v0.5.0**: 7 advanced analytics tools for enterprise data governance and 2 ADBC tools for high-performance data transfer with 3-10x performance improvements for large datasets.
-
-**Doris-backed OAuth note:** The table above describes global server capabilities. Doris-backed OAuth uses configuration gates for its operation surface. MCP resources are available with resource metadata caching disabled. Reviewed metadata tools are callable when `DORIS_OAUTH_DB_TOOLS_ENABLED=true`; `exec_query` and `get_sql_explain` are callable when their Doris OAuth query/explain gates are enabled. These MySQL-channel operations run through the logged-in Doris user pool, so Doris RBAC is the final data authorization backend. Prompts, ADBC, FE HTTP profile/monitoring, audit/governance, and performance analytics remain closed until they have per-user routing or an explicit service-account/admin design.
+**Doris-backed OAuth note:** The generated catalog describes global server capabilities. Doris-backed OAuth uses configuration gates for its operation surface. MCP resources are available with resource metadata caching disabled. Reviewed metadata tools are callable when `DORIS_OAUTH_DB_TOOLS_ENABLED=true`; `exec_query` and `get_sql_explain` are callable when their Doris OAuth query/explain gates are enabled. These MySQL-channel operations run through the logged-in Doris user pool, so Doris RBAC is the final data authorization backend. Prompts, ADBC, FE HTTP profile/monitoring, audit/governance, and performance analytics remain closed until they have per-user routing or an explicit service-account/admin design.
 
 ### 4. Run the Service
 
@@ -1440,14 +1413,20 @@ The server provides comprehensive utility modules for common database operations
 
 ### 2. Implement Tool Logic
 
-Add your new tool to the `DorisToolsManager` class in `doris_mcp_server/tools/tools_manager.py`. The tools manager provides a centralized approach to tool registration and execution with unified interfaces.
+Add a private handler to `DorisToolsManager` in
+`doris_mcp_server/tools/tools_manager.py`. Handler names follow
+`_<tool_name>_tool`; the registry resolves this name and validates that the
+handler exists during manager construction.
 
 **Example:** Adding a new analysis tool:
 
 ```python
 # In doris_mcp_server/tools/tools_manager.py
 
-async def your_new_analysis_tool(self, arguments: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def _your_new_analysis_tool(
+    self,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
     """
     Your new analysis tool implementation
     
@@ -1455,7 +1434,7 @@ async def your_new_analysis_tool(self, arguments: Dict[str, Any]) -> List[Dict[s
         arguments: Tool arguments from MCP client
         
     Returns:
-        List of MCP response messages
+        JSON-serializable tool result
     """
     try:
         # Use existing utilities
@@ -1464,30 +1443,24 @@ async def your_new_analysis_tool(self, arguments: Dict[str, Any]) -> List[Dict[s
             max_rows=arguments.get("max_rows", 100)
         )
         
-        return [{
-            "type": "text",
-            "text": json.dumps(result, ensure_ascii=False, indent=2)
-        }]
+        return result
         
     except Exception as e:
         logger.error(f"Tool execution failed: {str(e)}", exc_info=True)
-        return [{
-            "type": "text", 
-            "text": f"Error: {str(e)}"
-        }]
+        return {"success": False, "error": "Analysis failed"}
 ```
 
-### 3. Register the Tool
+### 3. Add the Registry Definition
 
-Add your tool to the `_register_tools` method in the same class:
+Add one `Tool` schema to `DorisToolsManager._build_tool_registry`, then classify
+its policy once in `doris_mcp_server/tools/tool_registry.py`. Do not add a
+decorator wrapper or an `if/elif` dispatch branch:
 
 ```python
-# In the _register_tools method of DorisToolsManager
-
-@self.mcp.tool(
+Tool(
     name="your_new_analysis_tool",
     description="Description of your new analysis tool",
-    inputSchema={
+    input_schema={
         "type": "object",
         "properties": {
             "parameter1": {
@@ -1500,12 +1473,16 @@ Add your tool to the `_register_tools` method in the same class:
                 "default": 100
             }
         },
-        "required": ["parameter1"]
-    }
+        "required": ["parameter1"],
+    },
 )
-async def your_new_analysis_tool_wrapper(arguments: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return await self.your_new_analysis_tool(arguments)
 ```
+
+The registry derives the execution handler, safe audit fields, and generated
+documentation from that definition. Add the name to exactly one policy class:
+metadata, query, explain, or restricted. Run the registry tests and refresh
+`docs/tool-registry.md` from `ToolDefinitionRegistry.render_markdown()`; the
+test suite rejects documentation drift.
 
 ### 4. Advanced Features
 

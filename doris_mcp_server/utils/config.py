@@ -33,6 +33,12 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from .._version import __version__
+from ..tools.tool_registry import (
+    DORIS_OAUTH_EXPLAIN_TOOL_SET,
+    DORIS_OAUTH_METADATA_TOOL_NAMES,
+    DORIS_OAUTH_METADATA_TOOL_SET,
+    DORIS_OAUTH_QUERY_TOOL_SET,
+)
 from .logger import get_logger
 from .secret_policy import (
     is_static_token_environment_variable,
@@ -46,18 +52,9 @@ class AuthConfigError(ValueError):
     """Raised when authentication configuration is inconsistent."""
 
 
-DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT = [
-    "get_db_list",
-    "get_db_table_list",
-    "get_table_schema",
-    "get_table_comment",
-    "get_table_column_comments",
-    "get_table_indexes",
-    "get_catalog_list",
-]
-DORIS_OAUTH_METADATA_TOOL_SET = frozenset(DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT)
-DORIS_OAUTH_QUERY_TOOL_SET = frozenset({"exec_query"})
-DORIS_OAUTH_EXPLAIN_TOOL_SET = frozenset({"get_sql_explain"})
+DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT = list(
+    DORIS_OAUTH_METADATA_TOOL_NAMES
+)
 
 
 @dataclass(frozen=True)
