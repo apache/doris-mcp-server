@@ -49,6 +49,7 @@ from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
 )
+from test.protocol.schema_validation_server import create_schema_validation_server
 from test.protocol.stdio_capability_server import OneToolManager as ProfileToolManager
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
@@ -497,6 +498,102 @@ async def test_http_does_not_advertise_or_serve_subscriptions_without_change_sou
         )
         assert recovered.status_code == 200
         assert recovered.json()["result"]["resultType"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_http_enforces_bounded_2020_12_tool_schemas_and_recovers():
+    server = create_schema_validation_server()
+    app = server.streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        listed = await client.post(
+            "/mcp",
+            json=modern_request(1, "tools/list"),
+            headers=modern_headers("tools/list"),
+        )
+        assert listed.status_code == 200
+        tools = {
+            tool["name"]: tool
+            for tool in listed.json()["result"]["tools"]
+        }
+        assert tools["schema_guard"]["inputSchema"]["$schema"].endswith(
+            "/2020-12/schema"
+        )
+        assert "oneOf" in tools["schema_guard"]["inputSchema"]["$defs"]["selector"]
+
+        secret = "must-not-echo-schema-secret"
+        rejected = await client.post(
+            "/mcp",
+            json=modern_tool_request(
+                2,
+                "schema_guard",
+                {"selector": {"id": secret}},
+            ),
+            headers=modern_tool_headers("schema_guard"),
+        )
+        assert rejected.status_code == 400
+        assert rejected.json()["error"]["code"] == -32602
+        assert rejected.json()["error"]["message"] == (
+            "Tool arguments do not match input schema"
+        )
+        assert secret not in rejected.text
+        assert rejected.json()["error"]["data"]["violations"]
+
+        accepted = await client.post(
+            "/mcp",
+            json=modern_tool_request(
+                3,
+                "schema_guard",
+                {"selector": {"id": 7}},
+            ),
+            headers=modern_tool_headers("schema_guard"),
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["result"]["structuredContent"] == {
+            "accepted": True
+        }
+
+        array_output = await client.post(
+            "/mcp",
+            json=modern_tool_request(4, "array_output", {}),
+            headers=modern_tool_headers("array_output"),
+        )
+        assert array_output.status_code == 200
+        assert array_output.json()["result"]["structuredContent"] == [1, 2, 3]
+
+        bad_output = await client.post(
+            "/mcp",
+            json=modern_tool_request(5, "bad_output", {}),
+            headers=modern_tool_headers("bad_output"),
+        )
+        assert bad_output.status_code == 200
+        assert bad_output.json()["error"] == {
+            "code": -32603,
+            "message": "Internal server error",
+        }
+        assert "not-a-boolean" not in bad_output.text
+
+        recovered = await client.post(
+            "/mcp",
+            json=modern_tool_request(6, "echo", {"value": "alive"}),
+            headers=modern_tool_headers("echo"),
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["result"]["structuredContent"] == {
+            "value": "alive"
+        }
 
 
 @pytest.mark.asyncio
@@ -1144,6 +1241,70 @@ async def test_true_subprocess_stdio_does_not_advertise_or_serve_subscriptions()
 
         recovered = await modern.list_resources(cache_mode="bypass")
         assert recovered.result_type == "complete"
+
+
+@pytest.mark.asyncio
+async def test_true_subprocess_stdio_enforces_tool_schemas_for_both_eras():
+    server_script = Path(__file__).with_name("schema_validation_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(stdio_client(server_params)) as modern:
+        tools = {
+            tool.name: tool
+            for tool in (await modern.list_tools(cache_mode="bypass")).tools
+        }
+        assert tools["schema_guard"].input_schema["$schema"].endswith(
+            "/2020-12/schema"
+        )
+        secret = "must-not-echo-stdio-schema-secret"
+        with pytest.raises(MCPError) as invalid:
+            await modern.call_tool(
+                "schema_guard",
+                {"selector": {"id": secret}},
+            )
+        assert invalid.value.code == -32602
+        assert invalid.value.message == "Tool arguments do not match input schema"
+        assert secret not in repr(invalid.value.data)
+
+        accepted = await modern.call_tool(
+            "schema_guard",
+            {"selector": {"name": "orders"}},
+        )
+        assert accepted.structured_content == {"accepted": True}
+
+        array_output = await modern.call_tool("array_output", {})
+        assert array_output.structured_content == [1, 2, 3]
+
+        with pytest.raises(MCPError) as bad_output:
+            await modern.call_tool("bad_output", {})
+        assert bad_output.value.code == -32603
+        assert bad_output.value.message == "Internal server error"
+
+        recovered = await modern.call_tool("echo", {"value": "alive"})
+        assert recovered.structured_content == {"value": "alive"}
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        legacy_tools = {
+            tool.name: tool
+            for tool in (await legacy.list_tools()).tools
+        }
+        assert legacy_tools["array_output"].output_schema is None
+
+        with pytest.raises(MCPError) as invalid:
+            await legacy.call_tool(
+                "schema_guard",
+                {"selector": {"id": "wrong-type"}},
+            )
+        assert invalid.value.code == -32602
+
+        accepted = await legacy.call_tool(
+            "schema_guard",
+            {"selector": {"id": 9}},
+        )
+        assert accepted.structured_content == {"accepted": True}
 
 
 @pytest.mark.asyncio

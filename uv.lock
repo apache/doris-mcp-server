@@ -616,6 +616,7 @@ dependencies = [
     { name = "fastapi", version = "0.140.13", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
     { name = "filelock" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "numpy" },
     { name = "orjson" },
@@ -693,6 +694,7 @@ dev = [
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "ruff" },
+    { name = "types-jsonschema" },
 ]
 
 [package.metadata]
@@ -717,6 +719,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.26.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.13.0" },
     { name = "jaeger-client", marker = "extra == 'monitoring'", specifier = ">=4.8.0" },
+    { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
     { name = "mcp", specifier = ">=2.0.0,<2.1.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
     { name = "myst-parser", marker = "extra == 'dev'", specifier = ">=2.0.0" },
@@ -777,6 +780,7 @@ dev = [
     { name = "mypy", specifier = ">=1.16.0" },
     { name = "pandas-stubs", specifier = ">=2.2.0" },
     { name = "ruff", specifier = ">=0.11.13" },
+    { name = "types-jsonschema", specifier = ">=4.23.0" },
 ]
 
 [[package]]
@@ -2948,6 +2952,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c5/8c/7d682431efca5fd290017663ea4588bf6f2c6aad085c7f108c5dbc316e70/typer-0.16.0.tar.gz", hash = "sha256:af377ffaee1dbe37ae9440cb4e8f11686ea5ce4e9bae01b84ae7c63b87f1dd3b", size = 102625, upload-time = "2025-05-26T14:30:31.824Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/76/42/3efaf858001d2c2913de7f354563e3a3a2f0decae3efe98427125a8f441e/typer-0.16.0-py3-none-any.whl", hash = "sha256:1f79bed11d4d02d4310e3c1b7ba594183bcedb0ac73b27a9e5f28f6fb5b98855", size = 46317, upload-time = "2025-05-26T14:30:30.523Z" },
+]
+
+[[package]]
+name = "types-jsonschema"
+version = "4.26.0.20260518"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "referencing" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dd/46/73b6a5d61a61015c4248030a8cb07e5bdddb4041430fae9e585a68692578/types_jsonschema-4.26.0.20260518.tar.gz", hash = "sha256:e1dd53dc97a64f5eccdd6fa9839666e09bb500a8ebba2db6fdaf1789faea81a6", size = 16638, upload-time = "2026-05-18T06:06:44.106Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/07/d5/134f8a147dcecda10db7f60cfc6af0578a25a5c53c87b3907a64385e0184/types_jsonschema-4.26.0.20260518-py3-none-any.whl", hash = "sha256:30b30a518c7fe335df85c919fcbcc631b69c03d4a4b5b632fa916bea03065307", size = 16072, upload-time = "2026-05-18T06:06:43.264Z" },
 ]
 
 [[package]]

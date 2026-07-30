@@ -480,6 +480,18 @@ async def test_real_doris_protocol_lists_paginate_without_loss(
         assert unsupported.value.code == -32601
         assert unsupported.value.message == "Method not found"
 
+        with pytest.raises(MCPError) as invalid_arguments:
+            await client.call_tool(
+                "exec_query",
+                {"sql": ["SELECT 1"]},
+            )
+        assert invalid_arguments.value.code == -32602
+        assert invalid_arguments.value.message == (
+            "Tool arguments do not match input schema"
+        )
+        assert invalid_arguments.value.data["name"] == "exec_query"
+        assert invalid_arguments.value.data["violations"]
+
         for list_method, result_field, identifier in (
             (
                 client.list_resources,

@@ -575,6 +575,29 @@ enforce this boundary. See
 [the subscription decision record](docs/decisions/0001-subscriptions-require-change-events.md)
 for the conditions required before the capability can be enabled.
 
+### Tool JSON Schema Validation
+
+Tool `inputSchema` and `outputSchema` use JSON Schema 2020-12. The server
+validates every visible tool definition before advertising or executing it,
+then validates each call's arguments before invoking Doris. Invalid arguments
+return `Invalid Params` without echoing rejected values. Successful structured
+results are also checked whenever a tool declares `outputSchema`; a server-side
+schema mismatch is hidden behind `Internal error`.
+
+Schemas are self-contained. Only same-document `$ref` and `$dynamicRef`
+fragments are accepted; the server never fetches a schema over HTTP, from a
+file URI, or from a relative URI. Recursive references are rejected by the
+bounded validation policy. The default hard limits per schema are 64 KiB,
+2,048 nodes, depth 32, 64 composition branches, and 64 references. Each input
+or structured output is limited to 1 MiB, 10,000 nodes, depth 32, and 262,144
+characters per string. At most 16 validation violations are reported, and
+reports contain only instance paths and failed keywords.
+
+These checks run in the shared protocol handler, so Streamable HTTP, modern
+stdio, and legacy stdio use the same enforcement. MCP 2026-07-28 clients can
+also receive array, string, number, or boolean `structuredContent` when a
+matching `outputSchema` is declared.
+
 ### Migrating from MCP 2025-11-25
 
 1. Upgrade the client to a `2026-07-28`-capable MCP SDK.

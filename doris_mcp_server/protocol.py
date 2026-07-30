@@ -61,6 +61,13 @@ from .pagination import (
     PaginationPage,
     paginate,
 )
+from .schema_validation import (
+    DEFAULT_SCHEMA_LIMITS,
+    SchemaLimits,
+    ToolArgumentsValidationError,
+    ToolOutputValidationError,
+    ToolSchemaGuard,
+)
 from .utils.redaction import (
     redact_error_payload,
     redact_sensitive_text,
@@ -147,9 +154,7 @@ def _decode_structured_tool_result(payload: str) -> tuple[Any | None, bool]:
     except (TypeError, json.JSONDecodeError):
         return None, False
 
-    if not isinstance(decoded, dict):
-        return None, False
-    return decoded, "error" in decoded
+    return decoded, isinstance(decoded, dict) and "error" in decoded
 
 
 def _sanitize_manager_error_payload(
@@ -221,6 +226,24 @@ def _paginate_list_or_raise(
         ) from exc
 
 
+def _tools_for_protocol(
+    tools: Sequence[Tool],
+    protocol_version: str,
+) -> list[Tool]:
+    """Hide non-object output schemas from protocol eras that cannot encode them."""
+    if protocol_version == LATEST_PROTOCOL_VERSION:
+        return list(tools)
+    return [
+        (
+            tool.model_copy(update={"output_schema": None})
+            if tool.output_schema is not None
+            and tool.output_schema.get("type") != "object"
+            else tool
+        )
+        for tool in tools
+    ]
+
+
 def create_doris_mcp_server(
     *,
     resources_manager: ResourcesManager,
@@ -230,12 +253,14 @@ def create_doris_mcp_server(
     version: str,
     logger: logging.Logger,
     list_page_size: int = DEFAULT_LIST_PAGE_SIZE,
+    schema_limits: SchemaLimits = DEFAULT_SCHEMA_LIMITS,
     required_client_capabilities: Mapping[str, ClientCapabilities] | None = None,
     required_tool_capabilities: Mapping[str, ClientCapabilities] | None = None,
 ) -> Server:
     """Create the one low-level SDK v2 server used by every transport."""
     if not 1 <= list_page_size <= MAX_LIST_PAGE_SIZE:
         raise ValueError(f"list_page_size must be in the range 1-{MAX_LIST_PAGE_SIZE}")
+    schema_guard = ToolSchemaGuard(schema_limits)
 
     async def list_resources(
         ctx: ServerRequestContext,
@@ -294,9 +319,10 @@ def create_doris_mcp_server(
         ctx: ServerRequestContext,
         params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
-        del ctx
         authorize_operation(get_current_auth_context(), "list_tools")
         tools = await tools_manager.list_tools()
+        schema_guard.compile_catalog(tools)
+        tools = _tools_for_protocol(tools, ctx.protocol_version)
         page = _paginate_list_or_raise(
             tools,
             collection="tools",
@@ -314,8 +340,27 @@ def create_doris_mcp_server(
         ctx: ServerRequestContext,
         params: CallToolRequestParams,
     ) -> CallToolResult:
-        del ctx
         arguments = params.arguments or {}
+        tools = await tools_manager.list_tools()
+        compiled_schema = schema_guard.compile_catalog(tools).get(params.name)
+        if compiled_schema is not None:
+            try:
+                compiled_schema.validate_arguments(arguments)
+            except ToolArgumentsValidationError as exc:
+                data: dict[str, Any] = {
+                    "name": redact_sensitive_text(params.name),
+                    "violations": [
+                        violation.as_dict()
+                        for violation in exc.violations
+                    ],
+                }
+                if exc.truncated:
+                    data["truncated"] = True
+                raise MCPError(
+                    code=INVALID_PARAMS,
+                    message="Tool arguments do not match input schema",
+                    data=data,
+                ) from exc
         try:
             payload = await tools_manager.call_tool(params.name, arguments)
         except OperationAuthorizationError:
@@ -331,6 +376,20 @@ def create_doris_mcp_server(
         payload, structured_content, is_error = _sanitize_manager_error_payload(
             payload
         )
+        if compiled_schema is not None and not is_error:
+            try:
+                compiled_schema.validate_output(structured_content)
+            except ToolOutputValidationError:
+                logger.exception(
+                    "Tool %s returned structured content that violates outputSchema",
+                    params.name,
+                )
+                raise
+        if (
+            ctx.protocol_version != LATEST_PROTOCOL_VERSION
+            and not isinstance(structured_content, dict)
+        ):
+            structured_content = None
         return CallToolResult(
             content=[TextContent(type="text", text=payload)],
             structured_content=structured_content,
