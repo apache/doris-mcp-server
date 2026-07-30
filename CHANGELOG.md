@@ -69,6 +69,8 @@ under **Unreleased** until a new version is selected and published.
 - Consolidated tool schemas, execution handlers, Doris OAuth policy, safe
   audit metadata, compatibility aliases, and generated documentation in one
   validated Tool Definition Registry.
+- Separated immutable tool metadata into a standalone catalog while keeping
+  lifecycle, authorization, audit, and execution routing in the tools manager.
 - Positioned Dynamic Client Registration as a compatibility fallback behind
   preconfigured clients and Client ID Metadata Documents.
 - Persisted static bearer tokens as self-describing SHA-256/SHA-512 digests,
