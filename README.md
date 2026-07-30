@@ -1518,11 +1518,14 @@ async def _your_new_analysis_tool(
 
 ### 3. Add the Registry Definition
 
-Add one `Tool` schema to `DorisToolsManager._build_tool_registry`, then classify
-its policy once in `doris_mcp_server/tools/tool_registry.py`. Do not add a
-decorator wrapper or an `if/elif` dispatch branch:
+Add one `Tool` schema to
+`doris_mcp_server/tools/tool_catalog.py::build_tool_registry`, then classify its
+policy once in `doris_mcp_server/tools/tool_registry.py`. Do not add a decorator
+wrapper or an `if/elif` dispatch branch:
 
 ```python
+# In doris_mcp_server/tools/tool_catalog.py
+
 Tool(
     name="your_new_analysis_tool",
     description="Description of your new analysis tool",
