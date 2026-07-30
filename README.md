@@ -346,6 +346,8 @@ cp .env.example .env
     *   `ENABLE_MASKING`: Enable data masking (default: true)
     *   `MAX_RESULT_ROWS`: Deployment ceiling for returned query rows
         (default: 10000; absolute hard cap: 100000)
+    *   `DEFAULT_RESULT_ROWS`: Default row budget when `exec_query.max_rows`
+        is omitted (default: 100; cannot exceed `MAX_RESULT_ROWS`)
 *   **ADBC Configuration (New in v0.5.0)**:
     *   `ADBC_DEFAULT_MAX_ROWS`: Default maximum rows for ADBC queries
         (default: 10000; cannot exceed `MAX_RESULT_ROWS`)
