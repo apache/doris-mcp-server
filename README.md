@@ -1580,6 +1580,19 @@ async def test_new_tool():
     print(result)
 ```
 
+Run the release test gate with:
+
+```bash
+uv run pytest -q -W error
+uv run coverage json -o coverage.json
+uv run python test/deployment/check_coverage_domains.py coverage.json
+```
+
+The test suite enforces at least 55% coverage across the repository. The
+generated coverage report is also checked at an 80% floor for the protocol,
+authentication, and core manager domains, so high-risk runtime code cannot be
+hidden by unrelated coverage.
+
 ## MCP Client
 
 The project includes a unified MCP client (`doris_mcp_client/`) for testing and integration purposes. The client supports multiple connection modes and provides a convenient interface for interacting with the MCP server.

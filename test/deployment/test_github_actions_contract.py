@@ -16,12 +16,16 @@
 # under the License.
 
 import re
+import tomllib
 from pathlib import Path
 
 import yaml
 
+from test.deployment.check_coverage_domains import DOMAINS
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
+PYPROJECT_PATH = REPOSITORY_ROOT / "pyproject.toml"
 FULL_COMMIT_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 CHECKOUT_ACTION = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
 CONFORMANCE_COMMIT = "49103de6ed70804e940637bf3e9e29e4a3f54e64"
@@ -82,13 +86,15 @@ def test_quality_test_and_package_gates_cover_the_release_contract():
 
     assert "uv sync --frozen --group dev" in tests
     assert "uv run pytest -q -W error" in tests
+    assert "uv run coverage json" in tests
+    assert "test/deployment/check_coverage_domains.py" in tests
 
     assert "uv sync --frozen --group dev" in package
     assert "uv build" in package
-    assert "test \"$wheel_count\" = \"1\"" in package
+    assert 'test "$wheel_count" = "1"' in package
     assert 'cd "$smoke_root"' in package
-    assert "doris-mcp-server\" --version" in package
-    assert "doris-mcp-client\" --help" in package
+    assert 'doris-mcp-server" --version' in package
+    assert 'doris-mcp-client" --help' in package
     assert "import doris_mcp_client, doris_mcp_server" in package
 
 
@@ -98,8 +104,7 @@ def test_conformance_gate_is_official_pinned_and_has_no_failure_baseline():
     checkout = next(
         step
         for step in job["steps"]
-        if step.get("with", {}).get("repository")
-        == "modelcontextprotocol/conformance"
+        if step.get("with", {}).get("repository") == "modelcontextprotocol/conformance"
     )
 
     assert checkout["with"]["ref"] == CONFORMANCE_COMMIT
@@ -111,3 +116,11 @@ def test_conformance_gate_is_official_pinned_and_has_no_failure_baseline():
     assert "--scenario server-stateless" in commands
     assert "--url http://127.0.0.1:39124/mcp" in commands
     assert "expected-failures" not in commands
+
+
+def test_coverage_contract_has_full_repository_and_domain_floors() -> None:
+    pyproject = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+
+    assert pyproject["tool"]["coverage"]["report"]["fail_under"] == 55
+    assert set(DOMAINS) == {"protocol", "authentication", "core_managers"}
+    assert {domain.minimum for domain in DOMAINS.values()} == {80.0}
