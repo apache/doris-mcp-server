@@ -1263,7 +1263,11 @@ class DorisConnectionManager:
 
         except Exception as e:
             self.logger.error(
-                f"Session {session_id}: Failed to acquire connection from token pool: {e}"
+                "Session %s: Failed to acquire connection from token pool "
+                "(%s): %s",
+                session_id,
+                type(e).__name__,
+                str(e) or "<no message>",
             )
             raise
 
@@ -1368,7 +1372,7 @@ class DorisConnectionManager:
             self._token_pool_generations.clear()
 
     async def configure_for_token(self, token: str) -> tuple[bool, str]:
-        """Configure connection manager for token with new priority logic
+        """Validate the database route selected for a static token.
 
         Priority: Token-bound DB config > .env config > error
 
@@ -1381,61 +1385,45 @@ class DorisConnectionManager:
         Raises:
             RuntimeError: If no valid database configuration is available
         """
+        current_token_config = self._get_current_token_db_config(token)
+        uses_token_config = bool(
+            current_token_config
+            and not self._is_config_empty(current_token_config.get("host"))
+            and not self._is_config_empty(current_token_config.get("user"))
+        )
+        config_source = "token-bound" if uses_token_config else "global-env"
+
+        connection: DorisConnection | None = None
         try:
-            # Priority 1: Try token-bound database config first
-            if self.token_manager:
-                db_config = self.token_manager.get_database_config_by_token(token)
-                if db_config:
-                    # Convert DatabaseConfig to dictionary
-                    token_db_config: DatabasePoolConfig = {
-                        "host": db_config.host,
-                        "port": db_config.port,
-                        "user": db_config.user,
-                        "password": db_config.password,
-                        "database": db_config.database,
-                        "charset": db_config.charset,
-                    }
-
-                    # Check if token-bound config is valid
-                    if not self._is_config_empty(
-                        token_db_config["host"]
-                    ) and not self._is_config_empty(token_db_config["user"]):
-                        self.logger.info(
-                            f"Using token-bound database configuration for host: {token_db_config['host']}"
-                        )
-                        self.active_db_config = token_db_config
-                        self._update_db_params_from_config(self.active_db_config)
-
-                        # Create/recreate connection pool with token-bound config
-                        await self._ensure_pool_with_current_config()
-
-                        return True, "token-bound"
-
-            # Priority 2: Use global .env config if available
-            if self._has_valid_global_config():
-                self.logger.info("Using global .env database configuration")
-                self.active_db_config = self.original_db_config.copy()
-                self._update_db_params_from_config(self.active_db_config)
-
-                # Create/recreate connection pool with global config
-                await self._ensure_pool_with_current_config()
-
-                return True, "global-env"
-
-            # Priority 3: No valid configuration available
-            error_msg = (
-                "No valid database configuration available for this token. "
-                "Please contact administrator to:\n"
-                "1. Add database configuration to tokens.json for this token, OR\n"
-                "2. Configure valid global database settings in .env file\n"
-                "Required fields: DB_HOST, DB_USER"
+            # Validate the same dedicated route that query execution will use.
+            # Never mutate active_db_config or rebuild the shared global pool
+            # while authenticating a tenant token.
+            connection = await self.get_connection_for_token(
+                token,
+                f"token_validation_{self._get_token_hash(token)[:8]}",
             )
-            self.logger.error(error_msg)
-            raise RuntimeError(error_msg)
-
+            result = await asyncio.wait_for(
+                connection.execute(
+                    "SELECT 1 AS connection_check",
+                    mask_result=False,
+                    max_rows=1,
+                    max_bytes=256,
+                ),
+                timeout=self.connect_timeout,
+            )
+            if result.data != [{"connection_check": 1}]:
+                raise RuntimeError("Token database validation query returned no result")
+            return True, config_source
         except Exception as e:
-            self.logger.error(f"Failed to configure database for token: {e}")
+            self.logger.error(
+                "Failed to validate database route for token (%s): %s",
+                type(e).__name__,
+                str(e) or "<no message>",
+            )
             raise
+        finally:
+            if connection is not None:
+                await self.release_connection_for_token(token, connection)
 
     async def _ensure_pool_with_current_config(self) -> None:
         """Ensure connection pool exists with current configuration"""

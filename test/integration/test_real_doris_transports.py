@@ -45,10 +45,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import httpx2
 import pymysql
 import pytest
 from mcp import Client, MCPError, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import (
     SubscriptionFilter,
     SubscriptionsListenRequest,
@@ -57,6 +59,7 @@ from mcp.types import (
 )
 
 from doris_mcp_server import __version__
+from doris_mcp_server.utils.secret_policy import build_token_digest
 
 pytestmark = [
     pytest.mark.integration,
@@ -314,6 +317,28 @@ async def _http_client(
 
 
 @asynccontextmanager
+async def _authenticated_http_client(
+    environment: dict[str, str],
+    *,
+    bearer_token: str,
+    read_timeout_seconds: int = 15,
+) -> AsyncIterator[Client]:
+    async with _http_process(environment) as base_url:
+        async with httpx2.AsyncClient(
+            headers={"Authorization": f"Bearer {bearer_token}"},
+        ) as http_client:
+            transport = streamable_http_client(
+                f"{base_url}/mcp",
+                http_client=http_client,
+            )
+            async with Client(
+                transport,
+                read_timeout_seconds=read_timeout_seconds,
+            ) as client:
+                yield client
+
+
+@asynccontextmanager
 async def _stdio_client(
     environment: dict[str, str],
     *,
@@ -535,6 +560,89 @@ async def test_real_doris_result_boundaries_and_cancellation(
         assert time.monotonic() - recovery_started < 3
         assert recovered_result.is_error is False
         assert recovered_payload["data"] == [{"recovered": 1}]
+
+
+async def test_real_doris_token_pool_recovers_after_repeated_query_timeouts(
+    doris_sandbox: DorisSandbox,
+    tmp_path: Path,
+) -> None:
+    bearer_token = secrets.token_urlsafe(48)
+    token_file = tmp_path / "tokens.json"
+    token_file.write_text(
+        json.dumps(
+            {
+                "version": "2.0",
+                "tokens": [
+                    {
+                        "token_id": "real-timeout-regression",
+                        "token_digest": build_token_digest(
+                            bearer_token,
+                            "sha256",
+                        ),
+                        "created_at": "2026-07-30T00:00:00Z",
+                        "expires_at": None,
+                        "last_used": None,
+                        "description": "real token pool timeout regression",
+                        "is_active": True,
+                        "database_config": {
+                            "host": doris_sandbox.settings.host,
+                            "port": doris_sandbox.settings.port,
+                            "user": doris_sandbox.readonly_user,
+                            "password": doris_sandbox.readonly_password,
+                            "database": doris_sandbox.settings.database,
+                            "charset": "UTF8",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    token_file.chmod(0o600)
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    environment.update(
+        {
+            "ENABLE_TOKEN_AUTH": "true",
+            "TOKEN_FILE_PATH": str(token_file),
+            "TOKEN_DB_VALIDATION_TTL_SECONDS": "60",
+            "DORIS_MAX_CONNECTIONS": "1",
+            "QUERY_TIMEOUT": "5",
+        }
+    )
+
+    async with _authenticated_http_client(
+        environment,
+        bearer_token=bearer_token,
+        read_timeout_seconds=10,
+    ) as client:
+        for attempt in range(3):
+            timed_out, timed_out_payload = await _exec_query(
+                client,
+                "SELECT SLEEP(3) AS slept",
+                max_rows=1,
+                max_bytes=256,
+                timeout=1,
+            )
+            assert timed_out.is_error is True
+            assert timed_out_payload["error_type"] == "timeout"
+
+            recovery_started = time.monotonic()
+            recovered, recovered_payload = await _exec_query(
+                client,
+                "SELECT CURRENT_USER() AS current_user",
+                max_rows=1,
+                max_bytes=256,
+                timeout=5,
+            )
+            assert time.monotonic() - recovery_started < 3
+            assert recovered.is_error is False, f"recovery {attempt + 1} failed"
+            assert doris_sandbox.readonly_user in recovered_payload["data"][0][
+                "current_user"
+            ]
 
 
 async def _collect_list_pages(

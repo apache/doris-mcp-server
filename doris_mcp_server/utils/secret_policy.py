@@ -43,6 +43,7 @@ _RESERVED_TOKEN_ENV_NAMES = frozenset(
         "TOKEN_FILE_PATH",
         "TOKEN_HASH_ALGORITHM",
         "TOKEN_HOT_RELOAD",
+        "TOKEN_DB_VALIDATION_TTL_SECONDS",
         "TOKEN_SECRET",
     }
 )

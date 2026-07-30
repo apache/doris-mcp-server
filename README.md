@@ -797,7 +797,7 @@ The Doris MCP Server includes a comprehensive enterprise-grade security framewor
 *   **🔐 Multi-Authentication System**: Complete Token, JWT, and OAuth authentication with independent control switches
 *   **🔗 Token-Bound Database Configuration**: Revolutionary approach allowing tokens to carry their own database connection parameters
 *   **🔄 Hot Reload Security**: Zero-downtime security configuration updates with intelligent token revalidation
-*   **⚡ Immediate Validation**: Real-time database and authentication validation at connection time
+*   **⚡ Route-Safe Validation**: Token-bound Doris routes are validated through their dedicated pools, with a short success cache so pings do not reconnect on every request
 *   **🛡️ Role-Based Authorization**: Advanced RBAC with four-tier security classification
 *   **🚫 Enhanced SQL Security**: Advanced SQL injection protection with improved pattern detection
 *   **🎭 Intelligent Data Masking**: Automatic sensitive data masking with user-based permissions
@@ -819,6 +819,7 @@ ENABLE_OAUTH_AUTH=false         # Enable OAuth authentication
 # Token Management (New in v0.6.0)
 TOKEN_FILE_PATH=tokens.json     # Token configuration file
 TOKEN_HOT_RELOAD=true          # Enable hot reloading
+TOKEN_DB_VALIDATION_TTL_SECONDS=30  # Cache successful Doris route checks
 
 # Legacy Configuration (Deprecated)
 # AUTH_TYPE=token               # Use individual switches instead

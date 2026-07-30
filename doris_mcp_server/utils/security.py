@@ -22,7 +22,10 @@ Implements enterprise-level authentication, authorization, SQL security validati
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import re
+import time
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from contextvars import Token as ContextToken
@@ -191,6 +194,8 @@ class DorisSecurityManager:
 
         # Track initialization state
         self._initialized = False
+        self._token_database_validation_cache: dict[str, float] = {}
+        self._token_database_validation_locks: dict[str, asyncio.Lock] = {}
 
     async def initialize(self) -> None:
         """Initialize security manager components"""
@@ -215,6 +220,8 @@ class DorisSecurityManager:
         """Shutdown security manager components"""
         try:
             await self.auth_provider.shutdown()
+            self._token_database_validation_cache.clear()
+            self._token_database_validation_locks.clear()
             self._initialized = False
             self.logger.info("DorisSecurityManager shutdown completed")
 
@@ -484,10 +491,12 @@ class DorisSecurityManager:
         token: str,
         token_info: TokenInfo,
     ) -> None:
-        """Validate database configuration for token immediately during authentication
+        """Validate a token database route with a short successful-result cache.
 
-        This ensures database connectivity issues are caught at authentication time,
-        not during query execution, providing better user experience.
+        Authentication runs for every MCP request, including pings and capability
+        discovery. Reconnecting to Doris on each request creates avoidable pool
+        pressure, so successful validations are cached by token and database
+        configuration fingerprint. Failures are never cached.
 
         Args:
             token: Raw authentication token
@@ -496,29 +505,79 @@ class DorisSecurityManager:
         Raises:
             ValueError: If database configuration is invalid or connection fails
         """
-        try:
-            if not self.connection_manager:
-                self.logger.warning(
-                    "Connection manager not available for immediate database validation"
-                )
-                return
-
-            # Configure and test database connection for this token
-            success, config_source = await self.connection_manager.configure_for_token(
-                token
+        if not self.connection_manager:
+            self.logger.warning(
+                "Connection manager not available for immediate database validation"
             )
+            return
 
-            if success:
-                self.logger.info(
-                    f"Database configuration validated successfully for token {token_info.token_id} (source: {config_source})"
+        cache_key = self._token_database_validation_cache_key(token, token_info)
+        ttl_seconds = max(
+            0,
+            int(self.config.security.token_db_validation_ttl_seconds),
+        )
+        now = time.monotonic()
+        if self._token_database_validation_cache.get(cache_key, 0.0) > now:
+            self.logger.debug(
+                "Using cached database validation for token %s",
+                token_info.token_id,
+            )
+            return
+
+        lock = self._token_database_validation_locks.setdefault(
+            cache_key,
+            asyncio.Lock(),
+        )
+        async with lock:
+            now = time.monotonic()
+            if self._token_database_validation_cache.get(cache_key, 0.0) > now:
+                return
+            try:
+                success, config_source = (
+                    await self.connection_manager.configure_for_token(token)
                 )
-            else:
-                raise ValueError("Database configuration validation failed")
+                if not success:
+                    raise ValueError("Database configuration validation failed")
+                if ttl_seconds:
+                    self._token_database_validation_cache[cache_key] = (
+                        time.monotonic() + ttl_seconds
+                    )
+                self.logger.info(
+                    "Database configuration validated successfully for token %s "
+                    "(source: %s)",
+                    token_info.token_id,
+                    config_source,
+                )
+            except Exception as e:
+                self._token_database_validation_cache.pop(cache_key, None)
+                error_msg = (
+                    "Database configuration validation failed for token "
+                    f"{token_info.token_id}: {str(e) or type(e).__name__}"
+                )
+                self.logger.error(error_msg)
+                raise ValueError(error_msg) from e
 
-        except Exception as e:
-            error_msg = f"Database configuration validation failed for token {token_info.token_id}: {str(e)}"
-            self.logger.error(error_msg)
-            raise ValueError(error_msg)
+    @staticmethod
+    def _token_database_validation_cache_key(
+        token: str,
+        token_info: TokenInfo,
+    ) -> str:
+        """Return a non-secret cache key that changes with bound DB credentials."""
+        database_config = token_info.database_config
+        route = (
+            getattr(database_config, "host", ""),
+            getattr(database_config, "port", ""),
+            getattr(database_config, "user", ""),
+            getattr(database_config, "password", ""),
+            getattr(database_config, "database", ""),
+            getattr(database_config, "charset", ""),
+        )
+        digest = hashlib.sha256()
+        digest.update(token.encode("utf-8"))
+        for value in route:
+            digest.update(b"\0")
+            digest.update(str(value).encode("utf-8"))
+        return digest.hexdigest()
 
 
 class AuthenticationProvider:
