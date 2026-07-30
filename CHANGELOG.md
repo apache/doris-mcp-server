@@ -42,6 +42,9 @@ under **Unreleased** until a new version is selected and published.
 - W3C `traceparent`, `tracestate`, and `baggage` propagation from request
   `_meta`, with value-safe validation, credential-like baggage redaction,
   per-request isolation, and no trace metadata in model-facing results.
+- Explicitly installed and allowlisted custom tool providers for existing
+  business APIs, with lifecycle management, schema validation, safe audit
+  metadata, and bounded process-local rate limits.
 - Bounded query result streaming with deployment and absolute ceilings for
   rows, serialized bytes, and execution time, plus cancellation-safe database
   connection disposal.

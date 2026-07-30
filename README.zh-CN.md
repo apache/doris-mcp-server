@@ -174,6 +174,7 @@ curl --fail http://127.0.0.1:3000/ready
 | `MCP_STATE_HANDLE_SECRET` | 多副本共享的状态句柄签名密钥 | 启动时生成 |
 | `MCP_ALLOWED_HOSTS` | HTTP Host 白名单 | 回环地址 |
 | `ENABLE_LEGACY_HTTP_ADAPTER` | 启用 `/mcp/legacy` 迁移端点 | `false` |
+| `MCP_TOOL_PROVIDERS` | 已安装自定义工具 Provider 的显式白名单 | 空 |
 
 多副本经负载均衡提供分页时，应配置同一个高强度
 `MCP_STATE_HANDLE_SECRET`。分页 Cursor 是带签名的状态句柄，客户端不应解析或
@@ -445,6 +446,11 @@ uv run bandit -q -c pyproject.toml -r doris_mcp_server
 3. 输入和输出 JSON Schema；
 4. 权限与审计元数据；
 5. 单元测试及必要的真实 Doris 集成测试。
+
+已有业务 API 不必直接合入本仓库。可以把它封装为安装在服务运行环境中的
+自定义工具 Provider，再通过 `MCP_TOOL_PROVIDERS` 显式启用。入口协议、生命周期、
+进程内 QPS 限制、FastGPT 接入方式和生产安全边界见
+[自定义工具 Provider 指南](docs/custom-tool-providers.md)。
 
 详细流程见[英文开发指南](README.md#developing-new-tools)。
 

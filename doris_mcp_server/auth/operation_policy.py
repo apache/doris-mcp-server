@@ -418,8 +418,18 @@ def authorize_operation(auth_context: Any | None, operation: str) -> None:
 
 
 def filter_tools_for_auth_context(auth_context: Any | None, tools: list[Any]) -> list[Any]:
-    """Filter visible tools for Doris OAuth users."""
-    if auth_context is None or auth_context.auth_method != "doris_oauth":
+    """Filter tools that do not have a reviewed policy for the OAuth mode."""
+    if auth_context is None:
+        return tools
+
+    if auth_context.auth_method == "external_oauth":
+        return [
+            tool
+            for tool in tools
+            if policy_definition_for_tool(getattr(tool, "name", "")) is not None
+        ]
+
+    if auth_context.auth_method != "doris_oauth":
         return tools
 
     filtered = []

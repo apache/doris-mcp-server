@@ -43,6 +43,33 @@ def test_mcp_list_page_size_is_configurable_and_bounded(monkeypatch):
     assert "MCP list page size must be in the range 1-1000" in configured.validate()
 
 
+def test_custom_tool_provider_allowlist_is_explicit_and_validated(monkeypatch):
+    monkeypatch.delenv("MCP_TOOL_PROVIDERS", raising=False)
+    assert DorisConfig.from_env().mcp_tool_providers == []
+
+    monkeypatch.setenv("MCP_TOOL_PROVIDERS", "orders_api, customer-tools")
+    configured = DorisConfig.from_env()
+    assert configured.mcp_tool_providers == ["orders_api", "customer-tools"]
+    assert configured.to_dict()["mcp_tool_providers"] == [
+        "orders_api",
+        "customer-tools",
+    ]
+    assert configured.validate() == []
+
+    configured.mcp_tool_providers = ["orders_api", "orders_api"]
+    assert (
+        "Duplicate custom tool provider in allowlist: orders_api"
+        in configured.validate()
+    )
+    configured.mcp_tool_providers = ["bad/provider"]
+    assert any(
+        error.startswith("Custom tool provider names must contain")
+        for error in configured.validate()
+    )
+    configured.mcp_tool_providers = "orders_api"  # type: ignore[assignment]
+    assert "MCP tool providers must be a list" in configured.validate()
+
+
 def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
     monkeypatch,
 ):
@@ -82,6 +109,7 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.mcp_allowed_origins = ["https://client.example.test"]
     config.enable_legacy_http_adapter = True
     config.mcp_list_page_size = 17
+    config.mcp_tool_providers = ["orders_api", "customer-tools"]
     config.mcp_state_handle_secret = "parent-shared-state-handle-secret-value"
     config.mcp_state_handle_ttl_seconds = 45
 
@@ -111,6 +139,7 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.mcp_allowed_origins == ["https://client.example.test"]
     assert child_config.enable_legacy_http_adapter is True
     assert child_config.mcp_list_page_size == 17
+    assert child_config.mcp_tool_providers == ["orders_api", "customer-tools"]
     assert (
         child_config.mcp_state_handle_secret
         == "parent-shared-state-handle-secret-value"

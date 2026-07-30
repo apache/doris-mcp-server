@@ -19,11 +19,13 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, Protocol, cast
 
 from mcp.types import Tool
+
+from .tool_provider import CustomTool, ToolRateLimit
 
 ToolPolicyClass = Literal["metadata", "query", "explain", "restricted"]
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -127,8 +129,17 @@ class ToolDefinition:
     audit: ToolAuditDefinition
     advertised: bool = True
     argument_overrides: tuple[tuple[str, Any], ...] = ()
+    provider_name: str | None = None
+    direct_handler: ToolHandler | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    rate_limit: ToolRateLimit | None = None
 
     def bind_handler(self, owner: ToolHandlerOwner) -> ToolHandler:
+        if self.direct_handler is not None:
+            return self.direct_handler
         handler = getattr(owner, self.handler_name, None)
         if not callable(handler):
             raise ToolRegistryError(
@@ -229,6 +240,7 @@ class ToolDefinitionRegistry:
         cls,
         tools: Iterable[Tool],
         owner: ToolHandlerOwner,
+        custom_tools: Iterable[tuple[str, CustomTool]] = (),
     ) -> ToolDefinitionRegistry:
         tools_by_name: dict[str, Tool] = {}
         definitions: list[ToolDefinition] = []
@@ -269,6 +281,28 @@ class ToolDefinitionRegistry:
                     ),
                     advertised=False,
                     argument_overrides=overrides,
+                )
+            )
+
+        for provider_name, custom_tool in custom_tools:
+            tool = custom_tool.tool
+            policy = ToolPolicyDefinition(
+                "restricted",
+                "custom_provider",
+                custom_tool.risk,
+                "UNSUPPORTED_FOR_OAUTH",
+            )
+            definitions.append(
+                ToolDefinition(
+                    name=tool.name,
+                    canonical_name=tool.name,
+                    tool=tool,
+                    handler_name=f"provider:{provider_name}",
+                    policy=policy,
+                    audit=_audit_for_tool(tool.name, tool, policy),
+                    provider_name=provider_name,
+                    direct_handler=custom_tool.handler,
+                    rate_limit=custom_tool.rate_limit,
                 )
             )
 

@@ -84,6 +84,7 @@ def _multiworker_environment(
             config.enable_legacy_http_adapter
         ).lower(),
         "MCP_LIST_PAGE_SIZE": str(config.mcp_list_page_size),
+        "MCP_TOOL_PROVIDERS": ",".join(config.mcp_tool_providers),
         "MCP_STATE_HANDLE_SECRET": config.mcp_state_handle_secret,
         "MCP_STATE_HANDLE_TTL_SECONDS": str(config.mcp_state_handle_ttl_seconds),
         "SERVER_NAME": config.server_name,

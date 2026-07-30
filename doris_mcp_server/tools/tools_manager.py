@@ -20,7 +20,9 @@ Responsible for tool registration, management, scheduling and routing, does not 
 """
 
 import json
+import math
 import time
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
@@ -47,6 +49,7 @@ from ..utils.schema_extractor import MetadataExtractor
 from ..utils.security import get_current_auth_context
 from ..utils.security_analytics_tools import SecurityAnalyticsTools
 from .tool_catalog import build_tool_registry
+from .tool_provider import CustomToolProvider, ToolProviderRuntime
 from .tool_registry import ToolDefinition, ToolDefinitionRegistry
 
 logger = get_logger(__name__)
@@ -55,10 +58,15 @@ logger = get_logger(__name__)
 class DorisToolsManager:
     """Apache Doris Tools Manager"""
 
-    def __init__(self, connection_manager: DorisConnectionManager) -> None:
+    def __init__(
+        self,
+        connection_manager: DorisConnectionManager,
+        *,
+        tool_providers: Iterable[CustomToolProvider] | None = None,
+    ) -> None:
         self.connection_manager = connection_manager
-
-        # Initialize business logic processors
+        config = getattr(connection_manager, "config", None)
+        self._tool_provider_runtime = ToolProviderRuntime.create(config, tool_providers)
         self.query_executor = DorisQueryExecutor(connection_manager)
         self.table_analyzer = TableAnalyzer(connection_manager)
         self.sql_analyzer = SQLAnalyzer(connection_manager)
@@ -83,15 +91,23 @@ class DorisToolsManager:
         self._tool_registry = self._build_tool_registry()
 
         logger.info(
-            "DorisToolsManager initialized with business logic processors, v0.5.0 analytics tools, and ADBC query tools"
+            "DorisToolsManager initialized with business logic processors, v0.5.0 "
+            "analytics tools, ADBC query tools, and %d custom tool providers",
+            self._tool_provider_runtime.provider_count,
         )
 
     async def start(self) -> None:
         """Start runtime resources owned by the tools manager."""
         await self.query_executor.start()
+        try:
+            await self._tool_provider_runtime.start()
+        except Exception:
+            await self.query_executor.close()
+            raise
 
     async def close(self) -> None:
         """Stop runtime resources owned by the tools manager."""
+        await self._tool_provider_runtime.close()
         await self.query_executor.close()
 
     @staticmethod
@@ -117,6 +133,8 @@ class DorisToolsManager:
 
     def _build_tool_registry(self) -> ToolDefinitionRegistry:
         """Build the registry from the standalone immutable catalog."""
+        provider_runtime = getattr(self, "_tool_provider_runtime", None)
+        custom_tools = provider_runtime.custom_tools() if provider_runtime else ()
         return build_tool_registry(
             self,
             getattr(
@@ -124,6 +142,7 @@ class DorisToolsManager:
                 "config",
                 None,
             ),
+            custom_tools=custom_tools,
         )
 
     @property
@@ -151,13 +170,40 @@ class DorisToolsManager:
         start_time = time.time()
         try:
             definition = self.tool_registry.resolve(name)
+            if definition.rate_limit is not None:
+                retry_after = await self._tool_provider_runtime.retry_after(
+                    tool_name=definition.name,
+                    auth_context=get_current_auth_context(),
+                    limit=definition.rate_limit,
+                )
+                if retry_after is not None:
+                    execution_time = time.time() - start_time
+                    self._audit_tool_call(
+                        definition,
+                        arguments=arguments,
+                        status="rate_limited",
+                        execution_time=execution_time,
+                    )
+                    return json.dumps(
+                        {
+                            "error": "Tool rate limit exceeded",
+                            "error_code": "TOOL_RATE_LIMITED",
+                            "retry_after_seconds": max(
+                                1,
+                                math.ceil(retry_after),
+                            ),
+                            "timestamp": datetime.now().isoformat(),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
             handler = definition.bind_handler(self)
             prepared_arguments = definition.prepare_arguments(arguments)
             result = await handler(prepared_arguments)
             execution_time = time.time() - start_time
 
             # Add execution information
-            if isinstance(result, dict):
+            if isinstance(result, dict) and definition.provider_name is None:
                 result["_execution_info"] = {
                     "tool_name": name,
                     "canonical_tool_name": definition.canonical_name,
