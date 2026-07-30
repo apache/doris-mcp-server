@@ -388,12 +388,17 @@ cp .env.example .env
 
 ### Available MCP Tools
 
-The canonical catalog is generated from the same `ToolDefinitionRegistry` used
-for MCP JSON Schemas, execution dispatch, authorization policy, and audit
-metadata. See [docs/tool-registry.md](docs/tool-registry.md). The checked-in
-catalog is verified against the runtime registry by the test suite.
+MCP `tools/list` exposes eight stable read-only domain tools. Call a domain
+with an empty object to progressively discover its exact authorized child
+tools, schemas, version support, availability, evidence, and risk annotations.
+See [docs/tool-registry.md](docs/tool-registry.md). The checked-in catalog is
+generated from the same validated domain definitions used at runtime.
 
-**Doris-backed OAuth note:** The generated catalog describes global server capabilities. Doris-backed OAuth uses configuration gates for its operation surface. MCP resources are available with resource metadata caching disabled. Reviewed metadata tools are callable when `DORIS_OAUTH_DB_TOOLS_ENABLED=true`; `exec_query` and `get_sql_explain` are callable when their Doris OAuth query/explain gates are enabled. These MySQL-channel operations run through the logged-in Doris user pool, so Doris RBAC is the final data authorization backend. Prompts, ADBC, FE HTTP profile/monitoring, audit/governance, and performance analytics remain closed until they have per-user routing or an explicit service-account/admin design.
+`tool:list` authorizes domain-manifest discovery for OAuth sessions; it does
+not authorize child execution. Children without discovery permission are
+omitted, while authorized but unavailable children remain visible with
+`callable=false`. Doris RBAC remains the final data authorization backend for
+all Doris object access.
 
 ### 4. Run the Service
 
@@ -1594,11 +1599,10 @@ Tool(
 )
 ```
 
-The registry derives the execution handler, safe audit fields, and generated
-documentation from that definition. Add the name to exactly one policy class:
-metadata, query, explain, or restricted. Run the registry tests and refresh
-`docs/tool-registry.md` from `ToolDefinitionRegistry.render_markdown()`; the
-test suite rejects documentation drift.
+Custom providers are internal capability sources and do not create additional
+top-level MCP tools. Integrate each provider capability into one formal domain
+child with a support contract, authorization policy, input/output schemas, and
+a deterministic handler binding. The test suite rejects public catalog drift.
 
 ### 4. Advanced Features
 

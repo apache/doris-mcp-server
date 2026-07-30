@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import inspect
 import json
-from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -38,8 +37,6 @@ from doris_mcp_server.tools.tool_registry import (
     policy_definition_for_tool,
 )
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -183,13 +180,14 @@ def test_registry_rejects_duplicate_unknown_and_missing_handler_definitions(
         )
 
 
-def test_checked_in_tool_catalog_is_generated_from_registry(
+def test_internal_migration_registry_rendering_is_deterministic(
     tools_manager: DorisToolsManager,
 ) -> None:
-    checked_in = (REPO_ROOT / "docs" / "tool-registry.md").read_text(
-        encoding="utf-8"
-    )
-    assert checked_in == tools_manager.tool_registry.render_markdown()
+    first = tools_manager.tool_registry.render_markdown()
+    second = tools_manager.tool_registry.render_markdown()
+
+    assert first == second
+    assert first.startswith("# Doris MCP Tool Registry")
 
 
 def test_tools_manager_has_no_parallel_decorator_or_dispatch_registry() -> None:

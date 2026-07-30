@@ -218,6 +218,15 @@ def _tool_policy(tool_name: str, auth_context: Any = None) -> OperationPolicy:
             error_code="UNKNOWN_OPERATION",
         )
 
+    if registry_policy.policy_class == "domain":
+        return OperationPolicy(
+            name=f"tool:{tool_name}",
+            required_scope="tool:list",
+            doris_oauth_policy="allow",
+            channel="manifest",
+            risk="metadata",
+        )
+
     if registry_policy.policy_class == "metadata":
         if not _metadata_tools_enabled(auth_context):
             return _denied_tool_policy(
@@ -352,7 +361,8 @@ def _has_scope(auth_context: Any, required_scope: str | None) -> bool:
 def _external_oauth_required_scope(operation: str) -> str:
     if operation.startswith("tool:"):
         tool_name = operation.split(":", 1)[1]
-        if policy_definition_for_tool(tool_name) is None:
+        policy = policy_definition_for_tool(tool_name)
+        if policy is None:
             raise OperationAuthorizationError(
                 f"Unknown MCP operation: {operation}",
                 status_code=403,
@@ -360,6 +370,8 @@ def _external_oauth_required_scope(operation: str) -> str:
                 required_scope=f"tool:call:{tool_name}",
                 operation=operation,
             )
+        if policy.policy_class == "domain":
+            return "tool:list"
         return f"tool:call:{tool_name}"
 
     required_scope = EXTERNAL_OAUTH_OPERATION_SCOPES.get(operation)

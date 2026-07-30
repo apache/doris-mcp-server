@@ -25,6 +25,9 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from doris_mcp_server.schema_validation import ToolSchemaGuard
+from doris_mcp_server.tools.doris_feature_matrix import (
+    EXPECTED_DOMAIN_CHILDREN,
+)
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
 
@@ -76,12 +79,8 @@ class TestDorisToolsManager:
         """Test getting available tools"""
         tools = await tools_manager.list_tools()
 
-        # Should have core tools
         tool_names = [tool.name for tool in tools]
-        assert "exec_query" in tool_names
-        assert "get_db_list" in tool_names
-        assert "get_db_table_list" in tool_names
-        assert "get_table_schema" in tool_names
+        assert tool_names == list(EXPECTED_DOMAIN_CHILDREN)
 
     @pytest.mark.asyncio
     async def test_exec_query_tool(self, tools_manager):

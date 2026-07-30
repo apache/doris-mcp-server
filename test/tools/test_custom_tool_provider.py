@@ -32,6 +32,9 @@ from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
 )
+from doris_mcp_server.tools.doris_feature_matrix import (
+    EXPECTED_DOMAIN_CHILDREN,
+)
 from doris_mcp_server.tools.tool_provider import (
     CustomTool,
     LocalToolRateLimiter,
@@ -104,7 +107,7 @@ class RecordingProvider:
 
 
 @pytest.mark.asyncio
-async def test_provider_tool_is_listed_dispatched_audited_and_lifecycle_managed():
+async def test_provider_tool_is_internal_dispatched_audited_and_lifecycle_managed():
     provider = RecordingProvider()
     manager = DorisToolsManager(
         _connection_manager(),
@@ -123,7 +126,8 @@ async def test_provider_tool_is_listed_dispatched_audited_and_lifecycle_managed(
     )
     await manager.close()
 
-    assert "lookup_business_order" in {tool.name for tool in listed}
+    assert {tool.name for tool in listed} == set(EXPECTED_DOMAIN_CHILDREN)
+    assert "lookup_business_order" not in {tool.name for tool in listed}
     provider.handler.assert_awaited_once_with({"order_id": "order-42"})
     assert payload["ok"] is True
     assert payload["source"] == "business-api"
@@ -373,7 +377,7 @@ def _modern_headers(method: str, *, name: str | None = None) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_uses_real_streamable_http_list_validation_and_call():
+async def test_custom_tool_does_not_bypass_real_http_domain_discovery():
     provider = RecordingProvider()
     manager = DorisToolsManager(
         _connection_manager(),
@@ -413,29 +417,17 @@ async def test_custom_tool_uses_real_streamable_http_list_validation_and_call():
             json=_modern_request(1, "tools/list"),
             headers=_modern_headers("tools/list"),
         )
-        invalid = await client.post(
+        discovered = await client.post(
             "/mcp",
             json=_modern_request(
                 2,
                 "tools/call",
-                name="lookup_business_order",
+                name="doris_catalog",
+                arguments={},
             ),
             headers=_modern_headers(
                 "tools/call",
-                name="lookup_business_order",
-            ),
-        )
-        called = await client.post(
-            "/mcp",
-            json=_modern_request(
-                3,
-                "tools/call",
-                name="lookup_business_order",
-                arguments={"order_id": "order-42"},
-            ),
-            headers=_modern_headers(
-                "tools/call",
-                name="lookup_business_order",
+                name="doris_catalog",
             ),
         )
 
@@ -443,14 +435,10 @@ async def test_custom_tool_uses_real_streamable_http_list_validation_and_call():
     listed_tools = {
         tool["name"]: tool for tool in listed.json()["result"]["tools"]
     }
-    assert "lookup_business_order" in listed_tools
-    assert listed_tools["lookup_business_order"]["inputSchema"]["required"] == [
-        "order_id"
-    ]
-    assert invalid.status_code == 400
-    assert invalid.json()["error"]["code"] == -32602
-    assert called.status_code == 200
-    structured = called.json()["result"]["structuredContent"]
-    assert structured["ok"] is True
-    assert structured["source"] == "business-api"
-    assert "_execution_info" not in structured
+    assert set(listed_tools) == set(EXPECTED_DOMAIN_CHILDREN)
+    assert "lookup_business_order" not in listed_tools
+    assert discovered.status_code == 200
+    structured = discovered.json()["result"]["structuredContent"]
+    assert structured["mode"] == "manifest"
+    assert structured["domain"] == "doris_catalog"
+    provider.handler.assert_not_awaited()

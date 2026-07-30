@@ -27,7 +27,13 @@ from mcp.types import Tool
 
 from .tool_provider import CustomTool, ToolRateLimit
 
-ToolPolicyClass = Literal["metadata", "query", "explain", "restricted"]
+ToolPolicyClass = Literal[
+    "domain",
+    "metadata",
+    "query",
+    "explain",
+    "restricted",
+]
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 DORIS_OAUTH_METADATA_TOOL_NAMES = (
@@ -154,6 +160,8 @@ class ToolDefinition:
 
 
 def _policy_for_name(name: str) -> ToolPolicyDefinition:
+    if _is_read_only_domain_tool(name):
+        return ToolPolicyDefinition("domain", "manifest", "metadata")
     if name in DORIS_OAUTH_METADATA_TOOL_SET:
         return ToolPolicyDefinition("metadata", "mysql_metadata", "metadata")
     if name in DORIS_OAUTH_QUERY_TOOL_SET:
@@ -381,10 +389,18 @@ class ToolDefinitionRegistry:
 def policy_definition_for_tool(name: str) -> ToolPolicyDefinition | None:
     """Return policy metadata for a registered canonical tool or legacy alias."""
     if (
-        name in DORIS_OAUTH_METADATA_TOOL_SET
+        _is_read_only_domain_tool(name)
+        or name in DORIS_OAUTH_METADATA_TOOL_SET
         or name in DORIS_OAUTH_QUERY_TOOL_SET
         or name in DORIS_OAUTH_EXPLAIN_TOOL_SET
         or name in RESTRICTED_TOOL_NAMES
     ):
         return _policy_for_name(name)
     return None
+
+
+def _is_read_only_domain_tool(name: str) -> bool:
+    """Resolve domain names lazily to keep the catalog as the sole authority."""
+    from .doris_feature_matrix import EXPECTED_DOMAIN_CHILDREN
+
+    return name in EXPECTED_DOMAIN_CHILDREN

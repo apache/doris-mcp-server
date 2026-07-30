@@ -40,6 +40,7 @@ from doris_mcp_server.tools.domain_models import (
     ExecutionEnvelope,
     ExecutionMetadata,
     JsonObject,
+    ManifestVersionSupport,
     StandardError,
     ToolContractAnnotations,
     UnavailableBehavior,
@@ -137,7 +138,9 @@ def _manifest_child() -> ChildManifestEntry:
         description="[AVAILABLE] List visible tables in one Doris database.",
         input_schema=child.input_schema,
         output_schema=child.output_schema,
-        version_support=child.support_contract,
+        version_support=ManifestVersionSupport.from_contract(
+            child.support_contract
+        ),
         availability=_availability(),
         annotations=child.annotations,
     )
@@ -227,6 +230,30 @@ def test_capability_variant_rejects_duplicate_requirements() -> None:
 def test_support_contract_rejects_duplicate_variant_ids() -> None:
     with pytest.raises(ValidationError, match="capability variant names"):
         _support_contract(_variant(), _variant())
+
+
+def test_manifest_version_support_is_a_compact_ordered_projection() -> None:
+    support = ManifestVersionSupport.from_contract(
+        _support_contract(
+            _variant(name="native"),
+            CapabilityVariant(
+                name="fallback",
+                supported_ranges=(">=3.0.0",),
+                excluded_ranges=("==4.0.6-rc1",),
+                required_probes=("audit_readable",),
+            ),
+        )
+    )
+
+    assert support.to_wire() == {
+        "rule_id": "catalog.list_tables.v1",
+        "supported_ranges": [
+            "project-supported Doris releases",
+            ">=3.0.0",
+        ],
+        "excluded_ranges": ["==4.0.6-rc1"],
+        "tested_versions": ["4.0.5-rc01"],
+    }
 
 
 def test_child_rejects_empty_handler_name() -> None:
@@ -382,18 +409,20 @@ def test_degraded_availability_may_be_callable_or_disabled() -> None:
 
 def test_domain_request_distinguishes_discovery_and_execution() -> None:
     discovery = DomainToolRequest()
-    empty_discovery = DomainToolRequest(arguments={})
     execution = DomainToolRequest(child_tool="list_tables")
 
     assert discovery.is_discovery is True
-    assert empty_discovery.is_discovery is True
     assert execution.is_discovery is False
     assert execution.execution_arguments == {}
 
 
 def test_domain_request_rejects_arguments_without_child() -> None:
-    with pytest.raises(ValidationError, match="arguments require child_tool"):
-        DomainToolRequest(arguments={"database": "analytics"})
+    for arguments in ({}, {"database": "analytics"}):
+        with pytest.raises(
+            ValidationError,
+            match="arguments require child_tool",
+        ):
+            DomainToolRequest(arguments=arguments)
 
 
 def test_request_arguments_and_result_data_are_deeply_immutable() -> None:

@@ -12,6 +12,9 @@ from doris_mcp_server.auth.operation_policy import (
     OperationAuthorizationError,
 )
 from doris_mcp_server.protocol import create_doris_mcp_server
+from doris_mcp_server.tools.doris_feature_matrix import (
+    EXPECTED_DOMAIN_CHILDREN,
+)
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
 from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
@@ -619,7 +622,9 @@ async def test_user_roles_fall_back_to_current_user_grants():
 
 
 @pytest.mark.asyncio
-async def test_doris_oauth_list_tools_uses_configured_default_scope_visibility(tmp_path):
+async def test_doris_oauth_list_tools_exposes_only_domain_discovery_scopes(
+    tmp_path,
+):
     manager, _connection_manager = _real_tool_manager_for_routing(tmp_path)
     token = set_current_auth_context(
         doris_context(
@@ -645,17 +650,7 @@ async def test_doris_oauth_list_tools_uses_configured_default_scope_visibility(t
         reset_auth_context(token)
 
     names = {tool.name for tool in tools}
-    assert {
-        "exec_query",
-        "get_sql_explain",
-        "get_db_list",
-        "get_db_table_list",
-        "get_table_schema",
-        "get_table_comment",
-        "get_table_column_comments",
-        "get_table_indexes",
-        "get_catalog_list",
-    } <= names
+    assert names == set(EXPECTED_DOMAIN_CHILDREN)
     assert names.isdisjoint(HIGH_RISK_TOOLS)
 
 
