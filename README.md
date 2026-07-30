@@ -28,8 +28,16 @@ branch also contains changes made after that tag; those changes are recorded
 under [Unreleased](CHANGELOG.md#unreleased) until the next version is selected
 and published.
 
-The project is currently classified as **Beta**. Review the
-[changelog](CHANGELOG.md), the
+MCP `2026-07-28` protocol compatibility on `master` is **Generally Available
+(GA)** for Streamable HTTP and stdio. The supported protocol contract has
+passed the full test suite with warnings treated as errors, the official
+stateless conformance suite, clean wheel installation, and real Apache Doris
+tests over both transports.
+
+This GA statement is scoped to protocol compatibility on the supported
+transports. The project package metadata remains **Beta**, and it does not
+expand the supported deployment shapes or remove the documented operational
+constraints. Review the [changelog](CHANGELOG.md), the
 [protocol support matrix](#protocol-and-transport-matrix), and the
 [deployment constraints](#deployment-constraints) before deploying it outside
 a controlled environment.
