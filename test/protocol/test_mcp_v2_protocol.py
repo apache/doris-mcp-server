@@ -51,6 +51,7 @@ from doris_mcp_server.protocol import (
 )
 from test.protocol.schema_validation_server import create_schema_validation_server
 from test.protocol.stdio_capability_server import OneToolManager as ProfileToolManager
+from test.protocol.tool_registry_server import create_registry_test_server
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
 PROFILE_TOOL_NAMES = sorted(
@@ -359,6 +360,64 @@ def modern_tool_headers(name: str) -> dict[str, str]:
         **modern_headers("tools/call"),
         "Mcp-Name": name,
     }
+
+
+@pytest.mark.asyncio
+async def test_http_uses_production_tool_registry_for_list_validation_and_dispatch():
+    server = create_registry_test_server()
+    app = server.streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        listed = await client.post(
+            "/mcp",
+            json=modern_request(1, "tools/list"),
+            headers=modern_headers("tools/list"),
+        )
+        assert listed.status_code == 200
+        tools = {
+            tool["name"]: tool
+            for tool in listed.json()["result"]["tools"]
+        }
+        assert len(tools) == 25
+        assert tools["exec_query"]["inputSchema"]["required"] == ["sql"]
+        assert "get_monitoring_metrics_info" not in tools
+
+        invalid = await client.post(
+            "/mcp",
+            json=modern_tool_request(2, "exec_query", {}),
+            headers=modern_tool_headers("exec_query"),
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["error"]["code"] == -32602
+
+        called = await client.post(
+            "/mcp",
+            json=modern_tool_request(
+                3,
+                "exec_query",
+                {"sql": "SELECT 1"},
+            ),
+            headers=modern_tool_headers("exec_query"),
+        )
+        assert called.status_code == 200
+        structured = called.json()["result"]["structuredContent"]
+        assert structured["registry_dispatch"] is True
+        assert structured["sql_length"] == len("SELECT 1")
+        assert structured["_execution_info"]["canonical_tool_name"] == (
+            "exec_query"
+        )
 
 
 @pytest.mark.asyncio
@@ -1241,6 +1300,43 @@ async def test_true_subprocess_stdio_does_not_advertise_or_serve_subscriptions()
 
         recovered = await modern.list_resources(cache_mode="bypass")
         assert recovered.result_type == "complete"
+
+
+@pytest.mark.asyncio
+async def test_true_subprocess_stdio_uses_production_tool_registry():
+    server_script = Path(__file__).with_name("tool_registry_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(stdio_client(server_params)) as modern:
+        tools = {
+            tool.name: tool
+            for tool in (await modern.list_tools(cache_mode="bypass")).tools
+        }
+        assert len(tools) == 25
+        assert tools["exec_query"].input_schema["required"] == ["sql"]
+        assert "get_monitoring_metrics_info" not in tools
+
+        with pytest.raises(MCPError) as invalid:
+            await modern.call_tool("exec_query", {})
+        assert invalid.value.code == -32602
+
+        called = await modern.call_tool("exec_query", {"sql": "SELECT 1"})
+        assert called.structured_content["registry_dispatch"] is True
+        assert called.structured_content["_execution_info"][
+            "canonical_tool_name"
+        ] == "exec_query"
+
+    async with Client(stdio_client(server_params), mode="legacy") as legacy:
+        tools = {
+            tool.name: tool
+            for tool in (await legacy.list_tools()).tools
+        }
+        assert len(tools) == 25
+        called = await legacy.call_tool("exec_query", {"sql": "SELECT 1"})
+        assert called.structured_content["registry_dispatch"] is True
 
 
 @pytest.mark.asyncio

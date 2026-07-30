@@ -20,6 +20,15 @@
 from dataclasses import dataclass
 from typing import Any
 
+from ..tools.tool_registry import (
+    DORIS_OAUTH_EXPLAIN_TOOL_SET,
+    DORIS_OAUTH_METADATA_TOOL_NAMES,
+    DORIS_OAUTH_METADATA_TOOL_SET,
+    DORIS_OAUTH_QUERY_TOOL_SET,
+    RESTRICTED_TOOL_NAMES,
+    policy_definition_for_tool,
+)
+
 
 @dataclass(frozen=True)
 class OperationPolicy:
@@ -62,29 +71,10 @@ class OperationAuthorizationError(Exception):
         return payload
 
 
-P4_DORIS_OAUTH_METADATA_TOOLS = frozenset(
-    {
-        "get_db_list",
-        "get_db_table_list",
-        "get_table_schema",
-        "get_table_comment",
-        "get_table_column_comments",
-        "get_table_indexes",
-        "get_catalog_list",
-    }
-)
-
-P4_DORIS_OAUTH_QUERY_TOOLS = frozenset({"exec_query"})
-P4_DORIS_OAUTH_EXPLAIN_TOOLS = frozenset({"get_sql_explain"})
-P4_DORIS_OAUTH_DEFAULT_METADATA_TOOL_ALLOWLIST = (
-        "get_db_list",
-        "get_db_table_list",
-        "get_table_schema",
-        "get_table_comment",
-        "get_table_column_comments",
-        "get_table_indexes",
-        "get_catalog_list",
-    )
+P4_DORIS_OAUTH_METADATA_TOOLS = DORIS_OAUTH_METADATA_TOOL_SET
+P4_DORIS_OAUTH_QUERY_TOOLS = DORIS_OAUTH_QUERY_TOOL_SET
+P4_DORIS_OAUTH_EXPLAIN_TOOLS = DORIS_OAUTH_EXPLAIN_TOOL_SET
+P4_DORIS_OAUTH_DEFAULT_METADATA_TOOL_ALLOWLIST = DORIS_OAUTH_METADATA_TOOL_NAMES
 
 # Phase 4 keeps DB-backed Doris OAuth tools fail-closed unless configuration and
 # exact tool scope both allow a reviewed metadata tool.
@@ -96,28 +86,7 @@ DORIS_OAUTH_QUERY_TOOL_ALLOWLIST = ("exec_query",)
 DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED = False
 DORIS_OAUTH_EXPLAIN_TOOL_ALLOWLIST = ("get_sql_explain",)
 
-HIGH_RISK_TOOLS = {
-    "get_recent_audit_logs",
-    "get_sql_profile",
-    "get_table_data_size",
-    "get_monitoring_metrics",
-    "get_memory_stats",
-    "get_monitoring_metrics_info",
-    "get_monitoring_metrics_data",
-    "get_realtime_memory_stats",
-    "get_historical_memory_stats",
-    "get_table_basic_info",
-    "analyze_columns",
-    "analyze_table_storage",
-    "trace_column_lineage",
-    "monitor_data_freshness",
-    "analyze_data_access_patterns",
-    "analyze_data_flow_dependencies",
-    "analyze_slow_queries_topn",
-    "analyze_resource_growth_curves",
-    "exec_adbc_query",
-    "get_adbc_connection_info",
-}
+HIGH_RISK_TOOLS = RESTRICTED_TOOL_NAMES
 
 
 def normalize_doris_oauth_metadata_tool_allowlist(tools: Any = None) -> tuple[str, ...]:
@@ -240,7 +209,16 @@ def _allowed_metadata_tool_policy(tool_name: str) -> OperationPolicy:
 
 
 def _tool_policy(tool_name: str, auth_context: Any = None) -> OperationPolicy:
-    if tool_name in P4_DORIS_OAUTH_METADATA_TOOLS:
+    registry_policy = policy_definition_for_tool(tool_name)
+    if registry_policy is None:
+        return _denied_tool_policy(
+            tool_name,
+            channel="unknown",
+            risk="unknown",
+            error_code="UNKNOWN_OPERATION",
+        )
+
+    if registry_policy.policy_class == "metadata":
         if not _metadata_tools_enabled(auth_context):
             return _denied_tool_policy(
                 tool_name,
@@ -266,7 +244,7 @@ def _tool_policy(tool_name: str, auth_context: Any = None) -> OperationPolicy:
             )
         return _allowed_metadata_tool_policy(tool_name)
 
-    if tool_name in P4_DORIS_OAUTH_QUERY_TOOLS:
+    if registry_policy.policy_class == "query":
         if not _query_tools_enabled(auth_context):
             return _denied_tool_policy(
                 tool_name,
@@ -289,7 +267,7 @@ def _tool_policy(tool_name: str, auth_context: Any = None) -> OperationPolicy:
             risk="query",
         )
 
-    if tool_name in P4_DORIS_OAUTH_EXPLAIN_TOOLS:
+    if registry_policy.policy_class == "explain":
         if not _explain_tools_enabled(auth_context):
             return _denied_tool_policy(
                 tool_name,
@@ -312,20 +290,16 @@ def _tool_policy(tool_name: str, auth_context: Any = None) -> OperationPolicy:
             risk="explain",
         )
 
-    if tool_name in HIGH_RISK_TOOLS:
+    if registry_policy.policy_class == "restricted":
         return _denied_tool_policy(
             tool_name,
-            channel="unsupported",
-            risk="high",
-            error_code="UNSUPPORTED_FOR_DORIS_OAUTH",
+            channel=registry_policy.channel,
+            risk=registry_policy.risk,
+            error_code=registry_policy.error_code
+            or "UNSUPPORTED_FOR_DORIS_OAUTH",
         )
 
-    return _denied_tool_policy(
-        tool_name,
-        channel="unknown",
-        risk="unknown",
-        error_code="UNKNOWN_OPERATION",
-    )
+    raise AssertionError(f"Unhandled registry policy: {registry_policy.policy_class}")
 
 
 OPERATION_POLICIES: dict[str, OperationPolicy] = {
