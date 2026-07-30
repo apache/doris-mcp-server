@@ -36,6 +36,13 @@ from .oauth_types import OAuthTokens, OAuthUserInfo
 
 logger = get_logger(__name__)
 
+_SECURITY_LEVEL_RANK = {
+    SecurityLevel.PUBLIC: 0,
+    SecurityLevel.INTERNAL: 1,
+    SecurityLevel.CONFIDENTIAL: 2,
+    SecurityLevel.SECRET: 3,
+}
+
 
 class OAuthAuthenticationProvider:
     """OAuth authentication provider for Doris MCP Server"""
@@ -275,26 +282,42 @@ class OAuthAuthenticationProvider:
         Returns:
             SecurityLevel for the user
         """
-        # Check if user has admin roles
-        admin_roles = {"admin", "administrator", "data_admin", "super_admin"}
-        if any(role.lower() in admin_roles for role in user_info.roles):
-            return SecurityLevel.SECRET
+        security_config = self.config.security
+        role_levels = {
+            str(role).strip().lower(): SecurityLevel(str(level).strip().lower())
+            for role, level in security_config.oauth_role_security_levels.items()
+        }
+        matched_levels = [
+            role_levels[role]
+            for role in {
+                configured_role.strip().lower()
+                for configured_role in user_info.roles
+            }
+            if role in role_levels
+        ]
 
-        # Check email domain for internal users
-        if user_info.email:
-            # You can configure trusted domains for internal access
-            trusted_domains = ["yourcompany.com", "internal.org"]  # Configure as needed
-            email_domain = user_info.email.split("@")[-1].lower()
-            if email_domain in trusted_domains:
-                return SecurityLevel.CONFIDENTIAL
+        if user_info.email and user_info.email_verified is True:
+            local_part, separator, email_domain = user_info.email.rpartition("@")
+            trusted_domains = {
+                domain.strip().lower().removeprefix("@")
+                for domain in security_config.oauth_trusted_domains
+            }
+            if (
+                separator
+                and local_part
+                and email_domain.lower() in trusted_domains
+            ):
+                matched_levels.append(
+                    SecurityLevel(
+                        security_config.oauth_trusted_domain_security_level.lower()
+                    )
+                )
 
-        # Check for special roles
-        elevated_roles = {"data_analyst", "developer", "manager"}
-        if any(role.lower() in elevated_roles for role in user_info.roles):
-            return SecurityLevel.CONFIDENTIAL
-
-        # Default to internal level for OAuth users
-        return SecurityLevel.INTERNAL
+        if matched_levels:
+            return max(matched_levels, key=_SECURITY_LEVEL_RANK.__getitem__)
+        return SecurityLevel(
+            security_config.oauth_default_security_level.strip().lower()
+        )
 
     async def _map_permissions(self, roles: list[str]) -> list[str]:
         """Map OAuth roles to application permissions
@@ -305,32 +328,25 @@ class OAuthAuthenticationProvider:
         Returns:
             List of application permissions
         """
-        permissions = set()
-
-        # Role to permission mapping
+        permissions: set[str] = set()
+        matched_role = False
         role_permissions = {
-            "admin": ["admin", "read_data", "write_data", "manage_users"],
-            "administrator": ["admin", "read_data", "write_data", "manage_users"],
-            "data_admin": ["admin", "read_data", "write_data"],
-            "super_admin": ["admin", "read_data", "write_data", "manage_users", "system_admin"],
-            "data_analyst": ["read_data", "query_database"],
-            "developer": ["read_data", "query_database", "debug"],
-            "viewer": ["read_data"],
-            "user": ["read_data"],
-            "oauth_user": ["read_data"]  # Default OAuth user permission
+            str(role).strip().lower(): configured_permissions
+            for role, configured_permissions in (
+                self.config.security.oauth_role_permissions.items()
+            )
         }
 
-        # Map roles to permissions
         for role in roles:
-            role_lower = role.lower()
+            role_lower = role.strip().lower()
             if role_lower in role_permissions:
+                matched_role = True
                 permissions.update(role_permissions[role_lower])
 
-        # Ensure OAuth users have at least basic permissions
-        if not permissions:
-            permissions.add("read_data")
+        if not matched_role:
+            permissions.update(self.config.security.oauth_default_permissions)
 
-        return list(permissions)
+        return sorted(permissions)
 
     def get_provider_info(self) -> dict[str, Any]:
         """Get OAuth provider information

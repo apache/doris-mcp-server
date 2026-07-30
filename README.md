@@ -1116,28 +1116,40 @@ The system supports four security levels with hierarchical access control:
 
 #### Role Configuration
 
-Configure user roles and permissions:
+External OAuth role mapping is configured through environment variables:
 
-```python
-# Example role configuration
-role_permissions = {
-    "data_analyst": {
-        "security_level": "internal",
-        "permissions": ["read_data", "execute_query"],
-        "allowed_tables": ["sales", "products", "orders"]
-    },
-    "data_admin": {
-        "security_level": "confidential", 
-        "permissions": ["read_data", "execute_query", "admin"],
-        "allowed_tables": ["*"]
-    },
-    "executive": {
-        "security_level": "secret",
-        "permissions": ["read_data", "execute_query", "admin"],
-        "allowed_tables": ["*"]
-    }
-}
+```env
+# Roles supplied when the provider returns no role claim
+OAUTH_DEFAULT_ROLES=oauth_user
+
+# Fallbacks for users whose roles do not occur in the JSON mappings
+OAUTH_DEFAULT_SECURITY_LEVEL=internal
+OAUTH_DEFAULT_PERMISSIONS=read_data
+
+# Exact domains only. Domain elevation is applied only when the provider
+# returns email_verified=true.
+OAUTH_TRUSTED_DOMAINS=example.com,internal.example.com
+OAUTH_TRUSTED_DOMAIN_SECURITY_LEVEL=confidential
+
+# Each JSON value replaces the complete built-in mapping.
+OAUTH_ROLE_SECURITY_LEVELS_JSON={"analyst":"internal","executive":"secret"}
+OAUTH_ROLE_PERMISSIONS_JSON={"analyst":["read_data","query_database"],"executive":["read_data","query_database","admin"]}
 ```
+
+Role names and trusted domains are matched case-insensitively. Supported
+security levels are `public`, `internal`, `confidential`, and `secret`. An
+explicit empty permission array denies application permissions for that role;
+an empty `OAUTH_DEFAULT_PERMISSIONS` value makes unknown roles fail closed.
+
+The built-in role defaults preserve previous behavior for `admin`,
+`administrator`, `data_admin`, `super_admin`, `data_analyst`, `developer`,
+`manager`, `viewer`, `user`, and `oauth_user`. No email domain is trusted by
+default.
+
+These settings govern MCP application permissions and security classification.
+Database, table, column, and row access must still be enforced with Doris users,
+roles, grants, views, and row policies; OAuth mapping does not bypass Doris
+authorization.
 
 ### SQL Security Validation
 
