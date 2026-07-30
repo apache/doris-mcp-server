@@ -288,7 +288,13 @@ async def _http_process(environment: dict[str, str]) -> AsyncIterator[str]:
         )
         try:
             await _wait_for_http_server(process, port, log_file)
-            yield f"http://127.0.0.1:{port}"
+            try:
+                yield f"http://127.0.0.1:{port}"
+            except Exception as exc:
+                exc.add_note(
+                    "HTTP MCP process log:\n" + _read_process_log(log_file)
+                )
+                raise
         finally:
             await _stop_process(process)
 
@@ -335,7 +341,15 @@ async def _stdio_client(
                 pytrace=False,
             )
         try:
-            yield client
+            try:
+                yield client
+            except Exception as exc:
+                log_file.flush()
+                log_file.seek(0)
+                exc.add_note(
+                    "STDIO MCP process log:\n" + log_file.read()[-4000:]
+                )
+                raise
         finally:
             await stack.aclose()
 

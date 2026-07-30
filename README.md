@@ -560,6 +560,17 @@ changes, or under another principal returns `Invalid Params`. Restart the
 listing without a cursor in that case. This prevents a multi-page traversal
 from silently duplicating, dropping, or crossing permission-scoped entries.
 
+List failures are never represented as successful empty collections. A Doris
+metadata outage returns `List backend unavailable`; a Doris metadata permission
+failure returns `List operation permission denied`; and an unexpected
+tool/resource/prompt registry failure returns `Internal server error`. These
+responses use JSON-RPC code `-32603` and include only the list operation and a
+bounded error category/code, never backend exception text. A successful
+response with an empty `resources`, `tools`, or `prompts` array therefore means
+that the caller's visible collection is genuinely empty. The same contract
+applies to Streamable HTTP and stdio, and a failed request does not prevent the
+next list request from succeeding.
+
 ### Subscriptions and Change Notifications
 
 The server does not currently advertise or serve `subscriptions/listen`.
