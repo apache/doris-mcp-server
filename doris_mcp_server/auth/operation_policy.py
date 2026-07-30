@@ -15,7 +15,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""MCP operation policy for Doris OAuth."""
+"""MCP operation policy for scope-aware OAuth authentication."""
 
 from dataclasses import dataclass
 from typing import Any
@@ -324,6 +324,14 @@ OPERATION_POLICIES: dict[str, OperationPolicy] = {
     "http:/token/management": OperationPolicy("http:/token/management", None, "deny", "token_admin", "high"),
 }
 
+EXTERNAL_OAUTH_OPERATION_SCOPES: dict[str, str] = {
+    "list_tools": "tool:list",
+    "list_resources": "resource:list",
+    "read_resource": "resource:read",
+    "list_prompts": "prompt:list",
+    "get_prompt": "prompt:get",
+}
+
 
 def resolve_operation_policy(operation: str, auth_context: Any = None) -> OperationPolicy:
     if operation.startswith("tool:"):
@@ -341,9 +349,49 @@ def _has_scope(auth_context: Any, required_scope: str | None) -> bool:
     return required_scope in scopes
 
 
+def _external_oauth_required_scope(operation: str) -> str:
+    if operation.startswith("tool:"):
+        tool_name = operation.split(":", 1)[1]
+        if policy_definition_for_tool(tool_name) is None:
+            raise OperationAuthorizationError(
+                f"Unknown MCP operation: {operation}",
+                status_code=403,
+                error_code="UNKNOWN_OPERATION",
+                required_scope=f"tool:call:{tool_name}",
+                operation=operation,
+            )
+        return f"tool:call:{tool_name}"
+
+    required_scope = EXTERNAL_OAUTH_OPERATION_SCOPES.get(operation)
+    if required_scope is None:
+        raise OperationAuthorizationError(
+            f"Unknown MCP operation: {operation}",
+            status_code=403,
+            error_code="UNKNOWN_OPERATION",
+            operation=operation,
+        )
+    return required_scope
+
+
 def authorize_operation(auth_context: Any | None, operation: str) -> None:
-    """Authorize an operation for Doris OAuth. Legacy auth methods pass through."""
+    """Authorize scope-aware OAuth operations.
+
+    Static token, JWT, anonymous, and local stdio paths retain their existing
+    authorization behavior outside this OAuth scope policy.
+    """
     if auth_context is None:
+        return
+
+    if auth_context.auth_method == "external_oauth":
+        required_scope = _external_oauth_required_scope(operation)
+        if not _has_scope(auth_context, required_scope):
+            raise OperationAuthorizationError(
+                f"Missing required scope: {required_scope}",
+                status_code=403,
+                error_code="PERMISSION_DENIED",
+                required_scope=required_scope,
+                operation=operation,
+            )
         return
 
     if auth_context.auth_method != "doris_oauth":

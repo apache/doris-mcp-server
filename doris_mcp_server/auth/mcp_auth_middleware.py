@@ -19,6 +19,7 @@
 
 from typing import Any
 
+from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -40,9 +41,26 @@ from .oauth_resource import (
     external_oauth_error_response,
     external_oauth_insufficient_scope_response,
 )
-from .operation_policy import OperationAuthorizationError
+from .operation_policy import OperationAuthorizationError, authorize_operation
 
 logger = get_logger(__name__)
+
+_HTTP_METHOD_OPERATIONS = {
+    "tools/list": "list_tools",
+    "resources/list": "list_resources",
+    "resources/read": "read_resource",
+    "prompts/list": "list_prompts",
+    "prompts/get": "get_prompt",
+}
+
+
+def _operation_from_http_scope(scope: Scope) -> str | None:
+    headers = Headers(scope=scope)
+    method = headers.get("Mcp-Method")
+    if method == "tools/call":
+        tool_name = headers.get("Mcp-Name")
+        return f"tool:{tool_name}" if tool_name else None
+    return _HTTP_METHOD_OPERATIONS.get(method or "")
 
 
 async def extract_bearer_credentials_from_scope(
@@ -133,6 +151,9 @@ class MCPAuthASGIMiddleware:
             return
 
         try:
+            operation = _operation_from_http_scope(scoped_request)
+            if operation is not None:
+                authorize_operation(auth_context, operation)
             await self.downstream(scoped_request, receive, send)
         except OperationAuthorizationError as exc:
             body = redact_error_payload(exc.to_dict())

@@ -799,7 +799,7 @@ OAUTH_AUDIENCE=https://mcp.example.com/mcp
 OAUTH_INTROSPECTION_URL=https://issuer.example.com/introspect
 OAUTH_USERINFO_URL=https://issuer.example.com/userinfo
 
-OAUTH_SCOPE="tool:list resource:list resource:read"
+OAUTH_SCOPE="tool:list tool:call:exec_query resource:list resource:read"
 OAUTH_REQUIRED_SCOPE="tool:list resource:read"
 ```
 
@@ -819,6 +819,14 @@ step-up authorization. Access tokens and provider-internal error details are
 not copied into these responses. These HTTP OAuth challenges do not apply to
 stdio transport, where credentials are supplied through the local process
 environment.
+
+External OAuth operation scopes are exact: listing tools requires `tool:list`,
+calling a tool requires `tool:call:<tool-name>`, listing and reading resources
+require `resource:list` and `resource:read`, and Prompt operations require
+`prompt:list` and `prompt:get`. Add every callable tool scope to
+`OAUTH_SCOPE`; `*` and unrelated scopes never satisfy an operation check.
+Static token, JWT, anonymous loopback, and local stdio authorization keep
+their existing non-OAuth permission behavior.
 
 ### Doris-Backed OAuth Authentication
 

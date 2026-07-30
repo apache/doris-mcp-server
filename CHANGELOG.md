@@ -87,6 +87,9 @@ under **Unreleased** until a new version is selected and published.
 - Preserved external OAuth token failures through the authentication boundary
   and returned RFC 6750/RFC 9728 Bearer challenges, protected-resource
   metadata, and operation-specific insufficient-scope responses.
+- Enforced exact external OAuth scopes across tool, resource, and Prompt
+  operations before modern HTTP dispatch while preserving static token, JWT,
+  anonymous loopback, and local stdio behavior.
 - Bound Doris OAuth access tokens to the canonical MCP resource and rejected
   tokens issued for any other resource before per-user pool access.
 - Rejected Doris OAuth authorization-code exchanges whose required RFC 8707
