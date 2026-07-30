@@ -96,6 +96,7 @@ def test_quality_test_and_package_gates_cover_the_release_contract():
     assert 'doris-mcp-server" --version' in package
     assert 'doris-mcp-client" --help' in package
     assert "import doris_mcp_client, doris_mcp_server" in package
+    assert "test/deployment/check_runtime_dependencies.py" in package
 
 
 def test_conformance_gate_is_official_pinned_and_has_no_failure_baseline():

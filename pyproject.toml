@@ -65,7 +65,6 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "jsonschema>=4.23.0,<5.0.0",
-    "toml>=0.10.0",
     "PyYAML>=6.0.0",
     "python-dotenv>=1.0.0",
     # Security and authentication
@@ -86,32 +85,29 @@ dependencies = [
     "uvicorn[standard]>=0.25.0",
     "fastapi>=0.108.0",
     "starlette>=0.27.0",
-    # Development utilities
+    # CLI and runtime utilities
     "click>=8.1.0",
     "typer>=0.9.0",
     "requests>=2.31.0",
     "tqdm>=4.66.0",
-    "pytest>=8.4.0",
-    "pytest-asyncio>=1.0.0",
-    "pytest-cov>=6.1.1",
 ]
 
 [project.optional-dependencies]
 dev = [
     # Testing
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=4.1.0",
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.1.1",
     "pytest-mock>=3.12.0",
     "pytest-xdist>=3.5.0",
     
     # Code quality
-    "ruff>=0.1.0",
+    "ruff>=0.11.13",
     "black>=23.12.0",
     "isort>=5.13.0",
     "flake8>=7.0.0",
-    "mypy>=1.8.0",
-    "bandit>=1.7.0",
+    "mypy>=1.16.0",
+    "bandit>=1.8.3",
     "safety>=2.3.0",
     
     # Documentation
@@ -305,6 +301,11 @@ dev = [
     "bandit>=1.8.3",
     "mypy>=1.16.0",
     "pandas-stubs>=2.2.0",
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.1.1",
+    "pytest-mock>=3.12.0",
+    "pytest-xdist>=3.5.0",
     "ruff>=0.11.13",
     "types-jsonschema>=4.23.0",
 ]

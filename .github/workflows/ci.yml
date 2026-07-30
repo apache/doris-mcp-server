@@ -107,6 +107,8 @@ jobs:
           "$smoke_root/venv/bin/doris-mcp-client" --help
           "$smoke_root/venv/bin/python" -c \
             "import doris_mcp_client, doris_mcp_server"
+          "$smoke_root/venv/bin/python" \
+            "$GITHUB_WORKSPACE/test/deployment/check_runtime_dependencies.py"
 
   conformance:
     name: MCP 2026-07-28 conformance

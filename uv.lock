@@ -628,9 +628,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt" },
     { name = "pymysql" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
     { name = "python-dateutil" },
     { name = "python-dotenv" },
     { name = "python-jose", extra = ["cryptography"] },
@@ -642,7 +639,6 @@ dependencies = [
     { name = "starlette", version = "0.46.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14'" },
     { name = "starlette", version = "1.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
     { name = "structlog" },
-    { name = "toml" },
     { name = "tqdm" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
@@ -693,6 +689,11 @@ dev = [
     { name = "bandit" },
     { name = "mypy" },
     { name = "pandas-stubs" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-mock" },
+    { name = "pytest-xdist" },
     { name = "ruff" },
     { name = "types-jsonschema" },
 ]
@@ -706,7 +707,7 @@ requires-dist = [
     { name = "aiomysql", specifier = ">=0.2.0" },
     { name = "aioredis", specifier = ">=2.0.0" },
     { name = "asyncio-mqtt", specifier = ">=0.16.0" },
-    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
+    { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.8.3" },
     { name = "bcrypt", specifier = ">=4.1.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.12.0" },
     { name = "cchardet", marker = "extra == 'performance'", specifier = ">=2.1.0" },
@@ -721,7 +722,7 @@ requires-dist = [
     { name = "jaeger-client", marker = "extra == 'monitoring'", specifier = ">=4.8.0" },
     { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
     { name = "mcp", specifier = ">=2.0.0,<2.1.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.16.0" },
     { name = "myst-parser", marker = "extra == 'dev'", specifier = ">=2.0.0" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=2.0.0" },
     { name = "numpy", specifier = ">=1.24.0" },
@@ -739,12 +740,9 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.1.0" },
     { name = "pyjwt", specifier = ">=2.8.0" },
     { name = "pymysql", specifier = ">=1.1.0" },
-    { name = "pytest", specifier = ">=8.4.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
-    { name = "pytest-asyncio", specifier = ">=1.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "pytest-cov", specifier = ">=6.1.1" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.4.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.1.1" },
     { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "python-dateutil", specifier = ">=2.8.0" },
@@ -754,7 +752,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "rich", specifier = ">=13.7.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.13" },
     { name = "safety", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "sphinx", marker = "extra == 'dev'", specifier = ">=7.2.0" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.2.0" },
@@ -764,7 +762,6 @@ requires-dist = [
     { name = "sqlparse", specifier = ">=0.4.4" },
     { name = "starlette", specifier = ">=0.27.0" },
     { name = "structlog", specifier = ">=23.2.0" },
-    { name = "toml", specifier = ">=0.10.0" },
     { name = "tox", marker = "extra == 'dev'", specifier = ">=4.11.0" },
     { name = "tqdm", specifier = ">=4.66.0" },
     { name = "typer", specifier = ">=0.9.0" },
@@ -779,6 +776,11 @@ dev = [
     { name = "bandit", specifier = ">=1.8.3" },
     { name = "mypy", specifier = ">=1.16.0" },
     { name = "pandas-stubs", specifier = ">=2.2.0" },
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "pytest-cov", specifier = ">=6.1.1" },
+    { name = "pytest-mock", specifier = ">=3.12.0" },
+    { name = "pytest-xdist", specifier = ">=3.5.0" },
     { name = "ruff", specifier = ">=0.11.13" },
     { name = "types-jsonschema", specifier = ">=4.23.0" },
 ]
@@ -2862,15 +2864,6 @@ name = "thrift"
 version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b2/c2/db648cc10dd7d15560f2eafd92a27cd280811924696e0b4a87175fb28c94/thrift-0.22.0.tar.gz", hash = "sha256:42e8276afbd5f54fe1d364858b6877bc5e5a4a5ed69f6a005b94ca4918fe1466", size = 62303, upload-time = "2025-05-23T20:49:33.309Z" }
-
-[[package]]
-name = "toml"
-version = "0.10.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/be/ba/1f744cdc819428fc6b5084ec34d9b30660f6f9daaf70eead706e3203ec3c/toml-0.10.2.tar.gz", hash = "sha256:b3bda1d108d5dd99f4a20d24d9c348e91c4db7ab1b749200bded2f839ccbe68f", size = 22253, upload-time = "2020-11-01T01:40:22.204Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/6f/7120676b6d73228c96e17f1f794d8ab046fc910d781c8d151120c3f1569e/toml-0.10.2-py2.py3-none-any.whl", hash = "sha256:806143ae5bfb6a3c6e736a764057db0e6a0e05e338b5630894a5f779cabb4f9b", size = 16588, upload-time = "2020-11-01T01:40:20.672Z" },
-]
 
 [[package]]
 name = "tomlkit"
