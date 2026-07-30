@@ -22,6 +22,11 @@ from unittest.mock import Mock
 
 import pytest
 
+from doris_mcp_server.tools.domain_dispatcher import (
+    ToolExposureMode,
+    ToolNotFoundError,
+)
+from doris_mcp_server.tools.domain_manifest import DomainManifestService
 from doris_mcp_server.tools.resources_manager import DorisResourcesManager
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.redaction import (
@@ -146,30 +151,24 @@ def test_logging_filter_redacts_arguments_and_exception_tracebacks():
 
 
 @pytest.mark.asyncio
-async def test_tool_manager_never_returns_exception_or_arguments():
+async def test_removed_tool_name_returns_safe_not_found_without_arguments():
     manager = object.__new__(DorisToolsManager)
+    manager._tool_exposure_mode = ToolExposureMode.HIERARCHICAL
+    manager._domain_manifest_service = DomainManifestService()
 
-    async def fail_with_secrets(arguments):
-        del arguments
-        raise RuntimeError(
-            f"password={PASSWORD_SECRET}; token={TOKEN_SECRET}; SELECT '{SQL_SECRET}'"
+    with pytest.raises(ToolNotFoundError) as exc_info:
+        await manager.call_tool(
+            "exec_query",
+            {
+                "sql": f"SELECT '{SQL_SECRET}'",
+                "password": PASSWORD_SECRET,
+                "token": TOKEN_SECRET,
+            },
         )
 
-    manager._exec_query_tool = fail_with_secrets
-    result = await manager.call_tool(
-        "exec_query",
-        {
-            "sql": f"SELECT '{SQL_SECRET}'",
-            "password": PASSWORD_SECRET,
-            "token": TOKEN_SECRET,
-        },
-    )
-    payload = json.loads(result)
-
-    assert payload["error"] == "Tool execution failed"
-    assert payload["error_code"] == "TOOL_EXECUTION_FAILED"
-    assert "arguments" not in payload
-    assert_secrets_absent(payload)
+    assert exc_info.value.name == "exec_query"
+    assert str(exc_info.value) == "Tool not found"
+    assert_secrets_absent(str(exc_info.value))
 
 
 @pytest.mark.asyncio

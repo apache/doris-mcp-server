@@ -165,15 +165,19 @@ python test_unified_client.py benchmark
 🚀 Testing HTTP Mode
 ==================================================
 📋 Getting server capabilities...
-✅ Found 11 tools
+✅ Found 8 domain tools
 ✅ Found 0 resources
 ✅ Found 0 prompts
 
 🔧 Available tools:
-  1. get_db_list: Get database list
-  2. get_table_list: Get table list for specified database
-  3. get_table_schema: Get table structure information
-  4. exec_query: Execute SQL query
+  1. doris_catalog: Catalog and table metadata
+  2. doris_query: Read-only query and diagnostics
+  3. doris_cluster: Cluster runtime and health
+  4. doris_pipeline: Ingestion and freshness
+  5. doris_search: Search and index diagnostics
+  6. doris_governance: Governance and lineage
+  7. doris_lakehouse: Lakehouse capabilities
+  8. doris_semantic: Explicit semantic-model access
   ...
 
 🧪 Testing basic functionality...
@@ -325,4 +329,4 @@ export DORIS_MCP_DEBUG=true
 
 ## 📄 License
 
-This project is licensed under the Apache 2.0 License. 
+This project is licensed under the Apache 2.0 License.

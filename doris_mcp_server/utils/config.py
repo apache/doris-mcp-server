@@ -838,6 +838,13 @@ class MonitoringConfig:
 
 
 @dataclass
+class ToolExposureConfig:
+    """Public MCP tool-list shape."""
+
+    mode: str = "hierarchical"
+
+
+@dataclass
 class DorisConfig:
     """Doris MCP Server complete configuration"""
 
@@ -870,6 +877,9 @@ class DorisConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     adbc: ADBCConfig = field(default_factory=ADBCConfig)
+    tool_exposure: ToolExposureConfig = field(
+        default_factory=ToolExposureConfig
+    )
 
     # Custom configuration
     custom_config: dict[str, Any] = field(default_factory=dict)
@@ -1506,6 +1516,12 @@ class DorisConfig:
                 if value.strip()
             ]
             _mark_source(config, "mcp_tool_providers", "env")
+        if "MCP_TOOL_EXPOSURE_MODE" in os.environ:
+            config.tool_exposure.mode = os.getenv(
+                "MCP_TOOL_EXPOSURE_MODE",
+                config.tool_exposure.mode,
+            ).strip()
+            _mark_source(config, "mcp_tool_exposure_mode", "env")
         if "MCP_STATE_HANDLE_SECRET" in os.environ:
             config.mcp_state_handle_secret = os.getenv(
                 "MCP_STATE_HANDLE_SECRET",
@@ -1601,6 +1617,17 @@ class DorisConfig:
                 if hasattr(config.adbc, key):
                     setattr(config.adbc, key, value)
 
+        if "tool_exposure" in config_data:
+            exposure_config = config_data["tool_exposure"]
+            for key, value in exposure_config.items():
+                if hasattr(config.tool_exposure, key):
+                    setattr(config.tool_exposure, key, value)
+            _mark_source(
+                config,
+                "mcp_tool_exposure_mode",
+                "config_file",
+            )
+
         # Custom configuration
         config.custom_config = config_data.get("custom", {})
 
@@ -1620,6 +1647,9 @@ class DorisConfig:
             "mcp_tool_providers": self.mcp_tool_providers,
             "mcp_state_handle_ttl_seconds": self.mcp_state_handle_ttl_seconds,
             "temp_files_dir": self.temp_files_dir,
+            "tool_exposure": {
+                "mode": self.tool_exposure.mode,
+            },
             "database": {
                 "host": self.database.host,
                 "hosts": self.database.hosts,
@@ -1849,6 +1879,11 @@ class DorisConfig:
         if not 1 <= self.mcp_list_page_size <= 1000:
             errors.append("MCP list page size must be in the range 1-1000")
 
+        if self.tool_exposure.mode not in {"hierarchical", "flat"}:
+            errors.append(
+                "MCP tool exposure mode must be hierarchical or flat"
+            )
+
         raw_tool_providers: Any = self.mcp_tool_providers
         if not isinstance(raw_tool_providers, list):
             errors.append("MCP tool providers must be a list")
@@ -2019,6 +2054,9 @@ class DorisConfig:
             "monitoring": {
                 "metrics_enabled": self.monitoring.enable_metrics,
                 "alerts_enabled": self.monitoring.enable_alerts,
+            },
+            "tool_exposure": {
+                "mode": self.tool_exposure.mode,
             },
         }
 

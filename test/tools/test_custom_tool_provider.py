@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from importlib import metadata
 from unittest.mock import AsyncMock, Mock
@@ -32,6 +31,7 @@ from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
 )
+from doris_mcp_server.tools.domain_dispatcher import ToolNotFoundError
 from doris_mcp_server.tools.doris_feature_matrix import (
     EXPECTED_DOMAIN_CHILDREN,
 )
@@ -107,7 +107,7 @@ class RecordingProvider:
 
 
 @pytest.mark.asyncio
-async def test_provider_tool_is_internal_dispatched_audited_and_lifecycle_managed():
+async def test_provider_lifecycle_is_managed_without_hidden_public_dispatch():
     provider = RecordingProvider()
     manager = DorisToolsManager(
         _connection_manager(),
@@ -118,23 +118,16 @@ async def test_provider_tool_is_internal_dispatched_audited_and_lifecycle_manage
 
     await manager.start()
     listed = await manager.list_tools()
-    payload = json.loads(
+    with pytest.raises(ToolNotFoundError):
         await manager.call_tool(
             "lookup_business_order",
             {"order_id": "order-42"},
         )
-    )
     await manager.close()
 
     assert {tool.name for tool in listed} == set(EXPECTED_DOMAIN_CHILDREN)
     assert "lookup_business_order" not in {tool.name for tool in listed}
-    provider.handler.assert_awaited_once_with({"order_id": "order-42"})
-    assert payload["ok"] is True
-    assert payload["source"] == "business-api"
-    assert "_execution_info" not in payload
-    definition = manager.tool_registry.resolve("lookup_business_order")
-    assert definition.provider_name == "orders_api"
-    assert definition.policy.channel == "custom_provider"
+    provider.handler.assert_not_awaited()
     provider.start.assert_awaited_once_with()
     provider.close.assert_awaited_once_with()
 
@@ -163,7 +156,7 @@ async def test_provider_start_failure_rolls_back_started_providers():
 
 
 @pytest.mark.asyncio
-async def test_custom_tool_rate_limit_is_fail_closed_and_principal_scoped():
+async def test_custom_tool_cannot_bypass_formal_dispatch_for_any_principal():
     provider = RecordingProvider(
         rate_limit=ToolRateLimit(
             max_calls=1,
@@ -176,18 +169,11 @@ async def test_custom_tool_rate_limit_is_fail_closed_and_principal_scoped():
         tool_providers=[provider],
     )
 
-    first = json.loads(
+    with pytest.raises(ToolNotFoundError):
         await manager.call_tool(
             "lookup_business_order",
             {"order_id": "first"},
         )
-    )
-    limited = json.loads(
-        await manager.call_tool(
-            "lookup_business_order",
-            {"order_id": "second"},
-        )
-    )
 
     context_token = set_current_auth_context(
         AuthContext(
@@ -197,20 +183,15 @@ async def test_custom_tool_rate_limit_is_fail_closed_and_principal_scoped():
         )
     )
     try:
-        another_principal = json.loads(
+        with pytest.raises(ToolNotFoundError):
             await manager.call_tool(
                 "lookup_business_order",
                 {"order_id": "third"},
             )
-        )
     finally:
         reset_auth_context(context_token)
 
-    assert first["ok"] is True
-    assert limited["error_code"] == "TOOL_RATE_LIMITED"
-    assert limited["retry_after_seconds"] >= 1
-    assert another_principal["ok"] is True
-    assert provider.handler.await_count == 2
+    assert provider.handler.await_count == 0
 
 
 def test_custom_tool_cannot_shadow_a_builtin_tool():

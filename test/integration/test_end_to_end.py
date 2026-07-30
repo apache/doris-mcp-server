@@ -19,7 +19,6 @@
 End-to-end integration tests
 """
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -228,15 +227,16 @@ class TestEndToEndIntegration:
     @pytest.mark.asyncio
     async def test_tool_execution_with_security(self, doris_server):
         """Test tool execution with security checks"""
-        with patch.object(doris_server.tools_manager.connection_manager, 'execute_query') as mock_execute:
-            mock_execute.return_value = [{"Database": "test_db"}]
+        expected = {"success": True, "databases": ["test_db"]}
+        with patch.object(
+            doris_server.tools_manager.metadata_extractor,
+            "get_db_list_for_mcp",
+            return_value=expected,
+        ) as mock_execute:
+            result = await doris_server.tools_manager._get_db_list_tool({})
 
-            # Test tool execution through tools manager
-            result = await doris_server.tools_manager.call_tool("get_db_list", {})
-            result_data = json.loads(result)
-
-            # Accept either success result or error (due to mock environment)
-            assert "result" in result_data or "error" in result_data
+        assert result == expected
+        mock_execute.assert_awaited_once_with(None)
 
     @pytest.mark.asyncio
     async def test_error_handling_workflow(self, doris_server):
@@ -255,22 +255,19 @@ class TestEndToEndIntegration:
     @pytest.mark.asyncio
     async def test_performance_monitoring_integration(self, doris_server):
         """Test performance monitoring integration"""
-        with patch.object(doris_server.tools_manager.connection_manager, 'execute_query') as mock_execute:
-            mock_execute.return_value = [
-                {
-                    "query_count": 1500,
-                    "avg_execution_time": 0.25,
-                    "slow_query_count": 5,
-                    "error_count": 2
-                }
-            ]
+        expected = {
+            "success": True,
+            "databases": ["performance_schema"],
+        }
+        with patch.object(
+            doris_server.tools_manager.metadata_extractor,
+            "get_db_list_for_mcp",
+            return_value=expected,
+        ) as mock_execute:
+            result = await doris_server.tools_manager._get_db_list_tool({})
 
-            # Test performance stats tool
-            result = await doris_server.tools_manager.call_tool("get_db_list", {})
-            result_data = json.loads(result)
-
-            # Accept either success result or error (due to mock environment)
-            assert "result" in result_data or "error" in result_data
+        assert result == expected
+        mock_execute.assert_awaited_once_with(None)
 
     @pytest.mark.asyncio
     async def test_server_initialization(self, doris_server):

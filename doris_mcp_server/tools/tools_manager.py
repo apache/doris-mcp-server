@@ -19,17 +19,13 @@ Apache Doris MCP Tools Manager
 Responsible for tool registration, management, scheduling and routing, does not contain specific business logic implementation
 """
 
-import json
-import math
-import time
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from ..auth.operation_policy import (
-    OperationAuthorizationError,
-    authorize_operation,
-)
+from mcp.types import Tool
+
+from ..auth.operation_policy import authorize_operation
 from ..result_limits import configured_default_result_rows
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.analysis_tools import MemoryTracker, SQLAnalyzer, TableAnalyzer
@@ -45,14 +41,21 @@ from ..utils.query_executor import DorisQueryExecutor
 from ..utils.schema_extractor import MetadataExtractor
 from ..utils.security import get_current_auth_context
 from ..utils.security_analytics_tools import SecurityAnalyticsTools
+from .domain_catalog import CURRENT_FLAT_TOOL_NAMES
+from .domain_dispatcher import (
+    BoundHandlerAvailabilityProvider,
+    DomainDispatcher,
+    ToolExposureMode,
+    ToolNotFoundError,
+    serialize_dispatch_result,
+)
 from .domain_manifest import (
     DomainAvailabilityProvider,
     DomainManifestManagerMixin,
     DomainManifestService,
 )
-from .tool_catalog import build_tool_registry
 from .tool_provider import CustomToolProvider, ToolProviderRuntime
-from .tool_registry import ToolDefinition, ToolDefinitionRegistry
+from .tool_registry import ToolRegistryError
 
 logger = get_logger(__name__)
 
@@ -66,6 +69,7 @@ class DorisToolsManager(DomainManifestManagerMixin):
         *,
         tool_providers: Iterable[CustomToolProvider] | None = None,
         domain_availability_provider: DomainAvailabilityProvider | None = None,
+        tool_exposure_mode: str | ToolExposureMode | None = None,
     ) -> None:
         self.connection_manager = connection_manager
         config = getattr(connection_manager, "config", None)
@@ -91,14 +95,32 @@ class DorisToolsManager(DomainManifestManagerMixin):
 
         # Initialize ADBC query tools
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
-        self._tool_registry = self._build_tool_registry()
+        if domain_availability_provider is None:
+            domain_availability_provider = BoundHandlerAvailabilityProvider(self)
         self._domain_manifest_service = DomainManifestService(
             availability_provider=domain_availability_provider,
         )
+        configured_mode = getattr(
+            getattr(config, "tool_exposure", None),
+            "mode",
+            ToolExposureMode.HIERARCHICAL.value,
+        )
+        if not isinstance(configured_mode, str | ToolExposureMode):
+            configured_mode = ToolExposureMode.HIERARCHICAL.value
+        self._tool_exposure_mode = ToolExposureMode.parse(
+            tool_exposure_mode or configured_mode
+        )
+        self._domain_dispatcher = DomainDispatcher(
+            self,
+            self._domain_manifest_service,
+        )
+        self._validate_custom_tool_names()
 
         logger.info(
             "DorisToolsManager initialized with business logic processors, v0.5.0 "
-            "analytics tools, ADBC query tools, and %d custom tool providers",
+            "analytics tools, ADBC query tools, %s tool exposure, and %d custom "
+            "tool providers",
+            self._tool_exposure_mode.value,
             self._tool_provider_runtime.provider_count,
         )
 
@@ -137,134 +159,68 @@ class DorisToolsManager(DomainManifestManagerMixin):
             raise ValueError(f"{name} must be a non-empty list of strings")
         return value
 
-    def _build_tool_registry(self) -> ToolDefinitionRegistry:
-        """Build the registry from the standalone immutable catalog."""
-        provider_runtime = getattr(self, "_tool_provider_runtime", None)
-        custom_tools = provider_runtime.custom_tools() if provider_runtime else ()
-        return build_tool_registry(
-            self,
-            getattr(
-                getattr(self, "connection_manager", None),
-                "config",
-                None,
-            ),
-            custom_tools=custom_tools,
-        )
+    @property
+    def tool_exposure_mode(self) -> ToolExposureMode:
+        """Return the exact configured public tool-list shape."""
+        return self._tool_exposure_mode
 
     @property
-    def tool_registry(self) -> ToolDefinitionRegistry:
-        """Return the registry, constructing it for legacy test fixtures."""
-        registry = getattr(self, "_tool_registry", None)
-        if registry is None:
-            registry = self._build_tool_registry()
-            self._tool_registry = registry
-        return registry
+    def domain_dispatcher(self) -> DomainDispatcher:
+        """Return the sole production child dispatcher."""
+        return self._domain_dispatcher
+
+    def _validate_custom_tool_names(self) -> None:
+        """Reserve every 1.0 public and removed pre-1.0 tool name."""
+        reserved = (
+            set(self.domain_manifest_service.domain_names)
+            | set(self._domain_dispatcher.formal_flat_names)
+            | set(CURRENT_FLAT_TOOL_NAMES)
+        )
+        custom_names: set[str] = set()
+        for _, custom_tool in self._tool_provider_runtime.custom_tools():
+            name = custom_tool.tool.name
+            if name in reserved or name in custom_names:
+                raise ToolRegistryError(f"Duplicate tool definition: {name}")
+            custom_names.add(name)
+
+    async def list_tools(self) -> list[Tool]:
+        """List either eight domains or 47 formal flat children."""
+        if self._tool_exposure_mode is ToolExposureMode.HIERARCHICAL:
+            return await super().list_tools()
+        return await self._domain_dispatcher.list_flat_tools(
+            get_current_auth_context()
+        )
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        """Call a domain or an internal migration tool by exact name."""
-        if self.domain_manifest_service.handles(name):
-            return await self._call_domain_tool(name, arguments)
-
-        authorize_operation(get_current_auth_context(), f"tool:{name}")
-        definition: ToolDefinition | None = None
-        start_time = time.time()
-        try:
-            definition = self.tool_registry.resolve(name)
-            if definition.rate_limit is not None:
-                retry_after = await self._tool_provider_runtime.retry_after(
-                    tool_name=definition.name,
-                    auth_context=get_current_auth_context(),
-                    limit=definition.rate_limit,
-                )
-                if retry_after is not None:
-                    execution_time = time.time() - start_time
-                    self._audit_tool_call(
-                        definition,
-                        arguments=arguments,
-                        status="rate_limited",
-                        execution_time=execution_time,
-                    )
-                    return json.dumps(
-                        {
-                            "error": "Tool rate limit exceeded",
-                            "error_code": "TOOL_RATE_LIMITED",
-                            "retry_after_seconds": max(
-                                1,
-                                math.ceil(retry_after),
-                            ),
-                            "timestamp": datetime.now().isoformat(),
-                        },
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-            handler = definition.bind_handler(self)
-            prepared_arguments = definition.prepare_arguments(arguments)
-            result = await handler(prepared_arguments)
-            execution_time = time.time() - start_time
-
-            # Add execution information
-            if isinstance(result, dict) and definition.provider_name is None:
-                result["_execution_info"] = {
-                    "tool_name": name,
-                    "canonical_tool_name": definition.canonical_name,
-                    "audit_event": definition.audit.event_name,
-                    "execution_time": round(execution_time, 3),
-                    "timestamp": datetime.now().isoformat(),
-                }
-
-            self._audit_tool_call(
-                definition,
-                arguments=prepared_arguments,
-                status="success",
-                execution_time=execution_time,
+        """Call only a registered domain or formal flat child by exact name."""
+        auth_context = get_current_auth_context()
+        if self._tool_exposure_mode is ToolExposureMode.HIERARCHICAL:
+            if not self.domain_manifest_service.handles(name):
+                raise ToolNotFoundError(name)
+            authorize_operation(auth_context, f"tool:{name}")
+            result = await self._domain_dispatcher.call_domain(
+                name,
+                arguments,
+                auth_context,
             )
-            return json.dumps(result, ensure_ascii=False, indent=2)
-
-        except OperationAuthorizationError:
-            raise
-        except Exception as e:
-            if definition is not None:
-                self._audit_tool_call(
-                    definition,
-                    arguments=arguments,
-                    status="error",
-                    execution_time=time.time() - start_time,
+            if getattr(result, "mode", None) == "manifest":
+                get_audit_logger().info(
+                    "event=mcp.tool.call.%s tool=%s category=domain "
+                    "risk=metadata status=success argument_names=%s",
+                    name,
+                    name,
+                    ",".join(sorted(arguments)),
                 )
-            logger.error(
-                "Tool call failed (%s)",
-                type(e).__name__,
-            )
-            error_result = {
-                "error": "Tool execution failed",
-                "error_code": "TOOL_EXECUTION_FAILED",
-                "timestamp": datetime.now().isoformat(),
-            }
-            return json.dumps(error_result, ensure_ascii=False, indent=2)
+            return serialize_dispatch_result(result)
 
-    @staticmethod
-    def _audit_tool_call(
-        definition: ToolDefinition,
-        *,
-        arguments: dict[str, Any],
-        status: str,
-        execution_time: float,
-    ) -> None:
-        audit = definition.audit
-        provided_names = sorted(
-            set(arguments).intersection(audit.argument_names)
+        if not self._domain_dispatcher.handles_flat(name):
+            raise ToolNotFoundError(name)
+        result = await self._domain_dispatcher.call_flat(
+            name,
+            arguments,
+            auth_context,
         )
-        get_audit_logger().info(
-            "event=%s tool=%s canonical_tool=%s category=%s risk=%s "
-            "status=%s duration_ms=%d argument_names=%s",
-            audit.event_name,
-            definition.name,
-            definition.canonical_name,
-            audit.category,
-            audit.risk,
-            status,
-            round(execution_time * 1000),
-            ",".join(provided_names),
-        )
+        return serialize_dispatch_result(result)
 
     async def _exec_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL query execution tool routing (supports federation queries)"""

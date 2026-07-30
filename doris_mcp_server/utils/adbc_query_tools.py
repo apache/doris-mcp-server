@@ -94,7 +94,7 @@ class DorisADBCQueryTools:
             "success": False,
             "error": (
                 "ADBC is unavailable for token-bound database routes; use "
-                "exec_query or a separately configured MCP process"
+                "doris_query.execute_query or a separately configured MCP process"
             ),
             "error_type": "token_bound_adbc_unsupported",
         }

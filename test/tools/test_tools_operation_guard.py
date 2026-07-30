@@ -1,4 +1,3 @@
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,8 +9,14 @@ from doris_mcp_server import __version__
 from doris_mcp_server.auth.operation_policy import (
     HIGH_RISK_TOOLS,
     OperationAuthorizationError,
+    authorize_operation,
 )
 from doris_mcp_server.protocol import create_doris_mcp_server
+from doris_mcp_server.tools.domain_dispatcher import (
+    ToolExposureMode,
+    ToolNotFoundError,
+)
+from doris_mcp_server.tools.domain_manifest import DomainManifestService
 from doris_mcp_server.tools.doris_feature_matrix import (
     EXPECTED_DOMAIN_CHILDREN,
 )
@@ -246,6 +251,8 @@ def _real_tool_manager_for_routing(tmp_path):
     manager.connection_manager = connection_manager
     manager.metadata_extractor = MetadataExtractor(connection_manager=connection_manager)
     manager.sql_analyzer = SQLAnalyzer(connection_manager)
+    manager._tool_exposure_mode = ToolExposureMode.HIERARCHICAL
+    manager._domain_manifest_service = DomainManifestService()
     return manager, connection_manager
 
 
@@ -268,48 +275,34 @@ def _configured_rbac_default_scopes():
 
 @pytest.mark.asyncio
 async def test_high_risk_tool_is_rejected_before_dispatch():
-    manager = object.__new__(DorisToolsManager)
-    called = False
-
-    async def fake_sql_profile_tool(arguments):
-        nonlocal called
-        called = True
-        return {"unexpected": arguments}
-
-    manager._get_sql_profile_tool = fake_sql_profile_tool
     token = set_current_auth_context(doris_context(["tool:call:get_sql_profile"]))
 
     try:
         with pytest.raises(OperationAuthorizationError) as exc:
-            await manager.call_tool("get_sql_profile", {"query_id": "q1"})
+            authorize_operation(
+                get_current_auth_context(),
+                "tool:get_sql_profile",
+            )
     finally:
         reset_auth_context(token)
 
     assert exc.value.error_code == "UNSUPPORTED_FOR_DORIS_OAUTH"
-    assert called is False
 
 
 @pytest.mark.asyncio
 async def test_doris_oauth_exec_query_rejected_before_global_pool_dispatch():
-    manager = object.__new__(DorisToolsManager)
-    called = False
-
-    async def fake_exec_query_tool(arguments):
-        nonlocal called
-        called = True
-        return {"unexpected": arguments}
-
-    manager._exec_query_tool = fake_exec_query_tool
     token = set_current_auth_context(doris_context(["tool:call:exec_query"]))
 
     try:
         with pytest.raises(OperationAuthorizationError) as exc:
-            await manager.call_tool("exec_query", {"sql": "SELECT 1"})
+            authorize_operation(
+                get_current_auth_context(),
+                "tool:exec_query",
+            )
     finally:
         reset_auth_context(token)
 
     assert exc.value.error_code == "DORIS_OAUTH_QUERY_TOOL_NOT_ENABLED"
-    assert called is False
 
 
 @pytest.mark.asyncio
@@ -332,12 +325,15 @@ async def test_doris_oauth_exec_query_dispatches_when_query_gate_enabled():
     )
 
     try:
-        result = await manager.call_tool("exec_query", {"sql": "SELECT 1"})
+        authorize_operation(
+            get_current_auth_context(),
+            "tool:exec_query",
+        )
+        result = await manager._exec_query_tool({"sql": "SELECT 1"})
     finally:
         reset_auth_context(token)
 
-    payload = json.loads(result)
-    assert payload["ok"] is True
+    assert result["ok"] is True
     assert called_arguments == {"sql": "SELECT 1"}
 
 
@@ -353,13 +349,18 @@ async def test_doris_oauth_exec_query_real_tool_path_uses_doris_user_route(tmp_p
     )
 
     try:
-        result = await manager.call_tool("exec_query", {"sql": "SELECT 1", "max_rows": 5})
+        authorize_operation(
+            get_current_auth_context(),
+            "tool:exec_query",
+        )
+        result = await manager._exec_query_tool(
+            {"sql": "SELECT 1", "max_rows": 5}
+        )
     finally:
         reset_auth_context(token)
 
-    payload = json.loads(result)
-    assert payload["success"] is True
-    assert payload["data"] == [{"one": 1}]
+    assert result["success"] is True
+    assert result["data"] == [{"one": 1}]
     assert connection_manager.global_calls == 0
     assert connection_manager.token_calls == 0
     assert len(connection_manager.routed_calls) == 1
@@ -381,8 +382,11 @@ async def test_doris_oauth_exec_query_with_db_catalog_uses_one_routed_connection
     )
 
     try:
-        result = await manager.call_tool(
-            "exec_query",
+        authorize_operation(
+            get_current_auth_context(),
+            "tool:exec_query",
+        )
+        result = await manager._exec_query_tool(
             {
                 "sql": "SELECT * FROM orders",
                 "db_name": "db1",
@@ -393,8 +397,7 @@ async def test_doris_oauth_exec_query_with_db_catalog_uses_one_routed_connection
     finally:
         reset_auth_context(token)
 
-    payload = json.loads(result)
-    assert payload["success"] is True
+    assert result["success"] is True
     assert connection_manager.connection_acquires == 1
     assert connection_manager.connection_releases == 1
     assert [call["sql"] for call in connection_manager.routed_calls] == [
@@ -417,13 +420,16 @@ async def test_doris_oauth_sql_explain_real_tool_path_uses_doris_user_route(tmp_
     )
 
     try:
-        result = await manager.call_tool("get_sql_explain", {"sql": "SELECT 1"})
+        authorize_operation(
+            get_current_auth_context(),
+            "tool:get_sql_explain",
+        )
+        result = await manager._get_sql_explain_tool({"sql": "SELECT 1"})
     finally:
         reset_auth_context(token)
 
-    payload = json.loads(result)
-    assert payload["success"] is True
-    assert "EXPLAIN SELECT 1" in payload["content"]
+    assert result["success"] is True
+    assert "EXPLAIN SELECT 1" in result["content"]
     assert connection_manager.global_calls == 0
     assert connection_manager.token_calls == 0
     assert len(connection_manager.routed_calls) == 1
@@ -443,8 +449,11 @@ async def test_doris_oauth_sql_explain_with_db_catalog_uses_one_routed_connectio
     )
 
     try:
-        result = await manager.call_tool(
-            "get_sql_explain",
+        authorize_operation(
+            get_current_auth_context(),
+            "tool:get_sql_explain",
+        )
+        result = await manager._get_sql_explain_tool(
             {
                 "sql": "SELECT * FROM orders",
                 "db_name": "db1",
@@ -454,8 +463,7 @@ async def test_doris_oauth_sql_explain_with_db_catalog_uses_one_routed_connectio
     finally:
         reset_auth_context(token)
 
-    payload = json.loads(result)
-    assert payload["success"] is True
+    assert result["success"] is True
     assert connection_manager.connection_acquires == 1
     assert connection_manager.connection_releases == 1
     assert [call["sql"] for call in connection_manager.routed_calls] == [
@@ -656,18 +664,6 @@ async def test_doris_oauth_list_tools_exposes_only_domain_discovery_scopes(
 
 @pytest.mark.asyncio
 async def test_doris_oauth_exec_query_ddl_rejected_before_backend_when_global_security_disabled():
-    manager = object.__new__(DorisToolsManager)
-    manager.connection_manager = SimpleNamespace(
-        config=SimpleNamespace(security=SimpleNamespace(enable_security_check=False))
-    )
-    called = False
-
-    async def fake_exec_query_tool(arguments):
-        nonlocal called
-        called = True
-        return {"unexpected": arguments}
-
-    manager._exec_query_tool = fake_exec_query_tool
     token = set_current_auth_context(
         doris_context(
             ["tool:call:exec_query"],
@@ -678,56 +674,43 @@ async def test_doris_oauth_exec_query_ddl_rejected_before_backend_when_global_se
 
     try:
         with pytest.raises(OperationAuthorizationError) as exc:
-            await manager.call_tool("exec_query", {"sql": "DROP TABLE sensitive_table"})
+            authorize_operation(
+                get_current_auth_context(),
+                "tool:exec_query",
+            )
     finally:
         reset_auth_context(token)
 
     assert exc.value.error_code == "DORIS_OAUTH_QUERY_TOOL_NOT_ENABLED"
-    assert called is False
 
 
 @pytest.mark.asyncio
 async def test_doris_oauth_metadata_tool_rejected_before_cache_backend_dispatch_when_gate_false():
-    manager = object.__new__(DorisToolsManager)
-    called = False
-
-    async def fake_table_schema_tool(arguments):
-        nonlocal called
-        called = True
-        return {"unexpected": arguments}
-
-    manager._get_table_schema_tool = fake_table_schema_tool
     token = set_current_auth_context(doris_context(["tool:call:get_table_schema"]))
 
     try:
         with pytest.raises(OperationAuthorizationError) as exc:
-            await manager.call_tool("get_table_schema", {"table_name": "orders"})
+            authorize_operation(
+                get_current_auth_context(),
+                "tool:get_table_schema",
+            )
     finally:
         reset_auth_context(token)
 
     assert exc.value.error_code == "DORIS_OAUTH_DB_TOOLS_NOT_ENABLED"
-    assert called is False
 
 
 @pytest.mark.asyncio
-async def test_missing_auth_context_keeps_legacy_dispatch_compatible():
+async def test_missing_auth_context_does_not_restore_removed_tool_names():
     assert get_current_auth_context() is None
     manager = object.__new__(DorisToolsManager)
-    called_arguments = None
+    manager._tool_exposure_mode = ToolExposureMode.HIERARCHICAL
+    manager._domain_manifest_service = DomainManifestService()
 
-    async def fake_sql_profile_tool(arguments):
-        nonlocal called_arguments
-        called_arguments = arguments
-        return {"profile": "ok"}
+    with pytest.raises(ToolNotFoundError) as exc_info:
+        await manager.call_tool("get_sql_profile", {"query_id": "q1"})
 
-    manager._get_sql_profile_tool = fake_sql_profile_tool
-
-    result = await manager.call_tool("get_sql_profile", {"query_id": "q1"})
-
-    payload = json.loads(result)
-    assert payload["profile"] == "ok"
-    assert payload["_execution_info"]["tool_name"] == "get_sql_profile"
-    assert called_arguments == {"query_id": "q1"}
+    assert exc_info.value.name == "get_sql_profile"
 
 
 def _server_with_mock_managers():

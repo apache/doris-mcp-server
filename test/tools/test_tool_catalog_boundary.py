@@ -43,10 +43,12 @@ def _config() -> SimpleNamespace:
     )
 
 
-def test_manager_delegates_catalog_construction() -> None:
-    source = inspect.getsource(DorisToolsManager._build_tool_registry)
+def test_manager_uses_formal_dispatcher_without_runtime_legacy_registry() -> None:
+    source = inspect.getsource(DorisToolsManager)
 
-    assert "build_tool_registry(" in source
+    assert "DomainDispatcher(" in source
+    assert "tool_registry.resolve" not in source
+    assert "_build_tool_registry" not in source
     assert "Tool(" not in source
     assert len(Path(inspect.getfile(DorisToolsManager)).read_text().splitlines()) < 800
 
@@ -62,20 +64,21 @@ def test_catalog_does_not_depend_on_tools_manager_module() -> None:
     assert ".tools_manager" not in imports
 
 
-def test_catalog_preserves_names_schemas_and_handler_binding() -> None:
+def test_migration_catalog_remains_a_build_time_validation_artifact() -> None:
     connection_manager = Mock()
     connection_manager.config = _config()
     manager = DorisToolsManager(connection_manager)
 
-    standalone = build_tool_registry(manager, connection_manager.config)
-    delegated = manager.tool_registry
+    migration_registry = build_tool_registry(
+        manager,
+        connection_manager.config,
+    )
 
-    standalone_names = tuple(definition.name for definition in standalone.definitions)
-    delegated_names = tuple(definition.name for definition in delegated.definitions)
-    assert standalone_names == delegated_names
-    for name in delegated_names:
-        standalone_definition = standalone.resolve(name)
-        delegated_definition = delegated.resolve(name)
-        assert standalone_definition.tool == delegated_definition.tool
-        assert standalone_definition.handler_name == (delegated_definition.handler_name)
-        assert standalone_definition.bind_handler(manager).__self__ is manager
+    assert not hasattr(manager, "tool_registry")
+    assert len(migration_registry.advertised_names) == 25
+    assert len(manager.domain_dispatcher.formal_flat_names) == 47
+    assert not set(migration_registry.advertised_names).intersection(
+        manager.domain_dispatcher.formal_flat_names
+    )
+    for definition in migration_registry.definitions:
+        assert definition.bind_handler(manager)

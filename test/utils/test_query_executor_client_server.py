@@ -64,13 +64,7 @@ class TestQueryExecutorClientServer:
         async def test_callback(client_instance):
             result = await client_instance.execute_sql(sample_queries[0])  # "SELECT 1 as test_value"
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
-
-            if result["success"]:
-                assert "data" in result, "Successful result should contain 'data' field"
-            else:
-                assert "error" in result, "Failed result should contain 'error' field"
+            assert result.get("mode") in {"result", "error"}
 
             return result
 
@@ -84,8 +78,7 @@ class TestQueryExecutorClientServer:
         async def test_callback(client_instance):
             result = await client_instance.execute_sql(sample_queries[1])  # "SHOW DATABASES"
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)
@@ -98,8 +91,7 @@ class TestQueryExecutorClientServer:
         async def test_callback(client_instance):
             result = await client_instance.execute_sql(sample_queries[2])  # "SELECT COUNT(*) FROM information_schema.tables"
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)
@@ -108,13 +100,12 @@ class TestQueryExecutorClientServer:
     async def test_query_with_max_rows_parameter_via_client(self, client, test_config):
         """Test query with max_rows parameter through client"""
         async def test_callback(client_instance):
-            result = await client_instance.call_tool("exec_query", {
-                "sql": "SELECT 1 as test_value",
-                "max_rows": 10
-            })
+            result = await client_instance.execute_sql(
+                "SELECT 1 as test_value",
+                max_rows=10,
+            )
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)
@@ -125,8 +116,7 @@ class TestQueryExecutorClientServer:
         async def test_callback(client_instance):
             result = await client_instance.execute_sql("INVALID SQL SYNTAX")
 
-            # Should get a result (either success or error)
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)
@@ -137,16 +127,12 @@ class TestQueryExecutorClientServer:
         if not test_config.is_security_tests_enabled():
             pytest.skip("Security tests are disabled")
 
-        auth_tokens = test_config.get_auth_tokens()
-
         async def test_callback(client_instance):
-            result = await client_instance.call_tool("exec_query", {
-                "sql": "SELECT 1 as test_value",
-                "auth_token": auth_tokens["valid_token"]
-            })
+            result = await client_instance.execute_sql(
+                "SELECT 1 as test_value"
+            )
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)

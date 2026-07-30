@@ -29,6 +29,7 @@ from doris_mcp_server.result_limits import (
     configured_result_limits,
     resolve_result_limits,
 )
+from doris_mcp_server.tools.tool_catalog import build_tool_registry
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
 from doris_mcp_server.utils.query_executor import DorisQueryExecutor
@@ -125,7 +126,10 @@ def test_exec_query_schema_advertises_effective_ceilings() -> None:
     connection_manager = Mock()
     connection_manager.config = _config()
     manager = DorisToolsManager(connection_manager)
-    tool = manager.tool_registry.resolve("exec_query").tool
+    tool = build_tool_registry(
+        manager,
+        connection_manager.config,
+    ).resolve("exec_query").tool
     assert tool is not None
     properties = tool.input_schema["properties"]
 
@@ -186,7 +190,10 @@ def test_exec_adbc_query_schema_advertises_effective_ceilings() -> None:
     connection_manager = Mock()
     connection_manager.config = _config()
     manager = DorisToolsManager(connection_manager)
-    tool = manager.tool_registry.resolve("exec_adbc_query").tool
+    tool = build_tool_registry(
+        manager,
+        connection_manager.config,
+    ).resolve("exec_adbc_query").tool
     assert tool is not None
     properties = tool.input_schema["properties"]
 

@@ -110,7 +110,9 @@ The necessary dependencies are listed in `requirements.txt` and will be managed 
 
 ### Step 3: Verify the Integration
 
-Once saved, go back to the **Settings** panel. If everything is configured correctly, you’ll see a green status dot next to `doris-mcp-server`, along with available tools like `exec_query`.
+Once saved, go back to the **Settings** panel. If everything is configured
+correctly, you’ll see a green status dot next to `doris-mcp-server`, together
+with the eight domain tools such as `doris_catalog` and `doris_query`.
 
 ![MCP Server](../images/cursor_doris-mcp.png)
 
@@ -132,7 +134,8 @@ You can now chat with Cursor Agent to run SQL queries against your Doris databas
 
 > **Prompt:** What tables are in the `ssb` database?
 
-The agent will call the `get_db_table_list` tool and return the results.
+The agent will discover `doris_catalog`, then call its exact `list_tables`
+child and return the results.
 
 ![ask](../images/cursor_ask1.png)
 

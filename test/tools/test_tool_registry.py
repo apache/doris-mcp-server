@@ -19,13 +19,14 @@
 from __future__ import annotations
 
 import inspect
-import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from mcp.types import Tool
 
 from doris_mcp_server.schema_validation import ToolSchemaGuard
+from doris_mcp_server.tools.domain_dispatcher import ToolNotFoundError
+from doris_mcp_server.tools.tool_catalog import build_tool_registry
 from doris_mcp_server.tools.tool_registry import (
     DORIS_OAUTH_EXPLAIN_TOOL_SET,
     DORIS_OAUTH_METADATA_TOOL_SET,
@@ -48,10 +49,19 @@ def tools_manager() -> DorisToolsManager:
     return DorisToolsManager(connection_manager)
 
 
+def _migration_registry(
+    tools_manager: DorisToolsManager,
+) -> ToolDefinitionRegistry:
+    return build_tool_registry(
+        tools_manager,
+        tools_manager.connection_manager.config,
+    )
+
+
 def test_registry_is_the_complete_schema_policy_handler_and_audit_source(
     tools_manager: DorisToolsManager,
 ) -> None:
-    registry = tools_manager.tool_registry
+    registry = _migration_registry(tools_manager)
     advertised = registry.advertised_definitions
 
     assert len(advertised) == 25
@@ -73,10 +83,11 @@ def test_registry_is_the_complete_schema_policy_handler_and_audit_source(
 def test_registry_policy_classes_cover_every_executable_tool(
     tools_manager: DorisToolsManager,
 ) -> None:
+    registry = _migration_registry(tools_manager)
     names_by_policy = {
         policy_class: {
             definition.name
-            for definition in tools_manager.tool_registry.definitions
+            for definition in registry.definitions
             if definition.policy.policy_class == policy_class
         }
         for policy_class in ("metadata", "query", "explain", "restricted")
@@ -89,7 +100,7 @@ def test_registry_policy_classes_cover_every_executable_tool(
 
 
 @pytest.mark.asyncio
-async def test_registry_dispatch_and_audit_do_not_log_sql_values(
+async def test_migration_registry_is_not_a_runtime_dispatch_source(
     tools_manager: DorisToolsManager,
 ) -> None:
     sql = "SELECT 'registry-secret-value'"
@@ -100,19 +111,13 @@ async def test_registry_dispatch_and_audit_do_not_log_sql_values(
         "doris_mcp_server.tools.tools_manager.get_audit_logger",
         return_value=audit_logger,
     ):
-        payload = json.loads(
+        with pytest.raises(ToolNotFoundError):
             await tools_manager.call_tool("exec_query", {"sql": sql})
-        )
 
-    tools_manager._exec_query_tool.assert_awaited_once_with({"sql": sql})
-    assert payload["ok"] is True
-    assert payload["_execution_info"]["canonical_tool_name"] == "exec_query"
-    assert payload["_execution_info"]["audit_event"] == (
-        "mcp.tool.call.exec_query"
-    )
+    tools_manager._exec_query_tool.assert_not_awaited()
+    audit_logger.info.assert_not_called()
     assert sql not in repr(audit_logger.info.call_args)
-    assert "sql" in repr(audit_logger.info.call_args)
-    assert tools_manager.tool_registry.resolve(
+    assert _migration_registry(tools_manager).resolve(
         "exec_query"
     ).audit.sensitive_arguments == ("sql",)
 
@@ -126,23 +131,24 @@ async def test_legacy_alias_uses_registry_override_without_mutating_input(
     )
     arguments = {"role": "fe"}
 
-    payload = json.loads(
+    registry = _migration_registry(tools_manager)
+    definition = registry.resolve("get_monitoring_metrics_info")
+    prepared = definition.prepare_arguments(arguments)
+
+    assert arguments == {"role": "fe"}
+    assert prepared == {"role": "fe", "content_type": "definitions"}
+    assert definition.canonical_name == (
+        "get_monitoring_metrics"
+    )
+    assert "get_monitoring_metrics_info" not in (
+        registry.advertised_names
+    )
+    with pytest.raises(ToolNotFoundError):
         await tools_manager.call_tool(
             "get_monitoring_metrics_info",
             arguments,
         )
-    )
-
-    assert arguments == {"role": "fe"}
-    tools_manager._get_monitoring_metrics_tool.assert_awaited_once_with(
-        {"role": "fe", "content_type": "definitions"}
-    )
-    assert payload["_execution_info"]["canonical_tool_name"] == (
-        "get_monitoring_metrics"
-    )
-    assert "get_monitoring_metrics_info" not in (
-        tools_manager.tool_registry.advertised_names
-    )
+    tools_manager._get_monitoring_metrics_tool.assert_not_awaited()
 
 
 def test_registry_rejects_duplicate_unknown_and_missing_handler_definitions(
@@ -175,7 +181,7 @@ def test_registry_rejects_duplicate_unknown_and_missing_handler_definitions(
 
     with pytest.raises(ToolRegistryError, match="missing handler"):
         ToolDefinitionRegistry.from_tools(
-            tools_manager.tool_registry.listed_tools(),
+            _migration_registry(tools_manager).listed_tools(),
             object(),
         )
 
@@ -183,8 +189,9 @@ def test_registry_rejects_duplicate_unknown_and_missing_handler_definitions(
 def test_internal_migration_registry_rendering_is_deterministic(
     tools_manager: DorisToolsManager,
 ) -> None:
-    first = tools_manager.tool_registry.render_markdown()
-    second = tools_manager.tool_registry.render_markdown()
+    registry = _migration_registry(tools_manager)
+    first = registry.render_markdown()
+    second = registry.render_markdown()
 
     assert first == second
     assert first.startswith("# Doris MCP Tool Registry")

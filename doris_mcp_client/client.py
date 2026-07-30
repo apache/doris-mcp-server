@@ -220,6 +220,50 @@ class DorisToolsClient:
             or category_lower in tool.name.lower()
         ]
 
+    async def call_child(
+        self,
+        domain: str,
+        child_tool: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Call one exact 1.0 child in hierarchical or formal flat mode."""
+        tools = await self.list_tools()
+        tool_names = {tool.name for tool in tools}
+        if domain in tool_names:
+            manifest = await self.call_tool(domain, {})
+            children = manifest.get("children")
+            if not isinstance(children, list) or not any(
+                isinstance(child, dict) and child.get("name") == child_tool
+                for child in children
+            ):
+                return {
+                    "success": False,
+                    "error": "Child capability not found",
+                    "error_code": "CHILD_TOOL_NOT_FOUND",
+                    "domain": domain,
+                    "child_tool": child_tool,
+                }
+            request: dict[str, Any] = {
+                "child_tool": child_tool,
+                "arguments": arguments,
+            }
+            manifest_version = manifest.get("manifest_version")
+            if isinstance(manifest_version, str):
+                request["manifest_version"] = manifest_version
+            return await self.call_tool(domain, request)
+
+        flat_name = f"{domain}_{child_tool}"
+        if flat_name in tool_names:
+            return await self.call_tool(flat_name, arguments)
+
+        return {
+            "success": False,
+            "error": "Child capability not found",
+            "error_code": "CHILD_TOOL_NOT_FOUND",
+            "domain": domain,
+            "child_tool": child_tool,
+        }
+
 
 class DorisPromptClient:
     """Doris prompt client - Handles Prompts related operations"""
@@ -370,81 +414,60 @@ class DorisUnifiedClient:
         """Get prompt"""
         return await self.prompts.get_prompt(name, arguments)
 
-    # Smart tool finding methods
-    async def _find_tool_by_pattern(self, patterns: list[str]) -> str | None:
-        """Find tool by name pattern"""
-        tools = await self.list_all_tools()
-        for pattern in patterns:
-            for tool in tools:
-                if pattern in tool.name:
-                    return tool.name
-        return None
-
-    async def _find_tool_by_function(self, function_keywords: list[str]) -> str | None:
-        """Find tool by function keywords"""
-        tools = await self.list_all_tools()
-        for tool in tools:
-            tool_desc = tool.description.lower()
-            tool_name = tool.name.lower()
-            for keyword in function_keywords:
-                if keyword.lower() in tool_desc or keyword.lower() in tool_name:
-                    return tool.name
-        return None
-
     # High-level business methods
     async def execute_sql(self, sql: str, **kwargs) -> dict[str, Any]:
-        """Execute SQL query"""
-        tool_name = await self._find_tool_by_pattern(["exec_query", "execute", "query"])
-        if not tool_name:
-            return {"success": False, "error": "SQL execution tool not found"}
-
+        """Execute a read-only SQL query through the exact query child."""
         arguments = {"sql": sql, **kwargs}
-        return await self.call_tool(tool_name, arguments)
+        return await self.tools.call_child(
+            "doris_query",
+            "execute_query",
+            arguments,
+        )
 
-    async def get_table_schema(self, table_name: str, db_name: str = None, **kwargs) -> dict[str, Any]:
-        """Get table schema"""
-        tool_name = await self._find_tool_by_pattern(["get_table_schema", "table_schema", "schema"])
-        if not tool_name:
-            return {"success": False, "error": "Table schema tool not found"}
-
-        arguments = {"table_name": table_name}
-        if db_name:
-            arguments["db_name"] = db_name
+    async def get_table_schema(
+        self,
+        table_name: str,
+        db_name: str,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Get the schema section of the exact table-context child."""
+        arguments = {
+            "table": table_name,
+            "database": db_name,
+            "sections": ["schema"],
+        }
         arguments.update(kwargs)
 
-        return await self.call_tool(tool_name, arguments)
+        return await self.tools.call_child(
+            "doris_catalog",
+            "get_table_context",
+            arguments,
+        )
 
     async def get_database_list(self, **kwargs) -> dict[str, Any]:
-        """Get database list"""
-        tool_name = await self._find_tool_by_pattern(["get_db_list", "database_list", "db_list"])
-        if not tool_name:
-            return {"success": False, "error": "Database list tool not found"}
+        """Get databases through the exact catalog child."""
+        return await self.tools.call_child(
+            "doris_catalog",
+            "list_databases",
+            kwargs,
+        )
 
-        return await self.call_tool(tool_name, kwargs)
-
-    async def get_memory_stats(self, tracker_type: str = "overview", include_details: bool = True, **kwargs) -> dict[str, Any]:
-        """Get memory statistics"""
-        tool_name = await self._find_tool_by_pattern(["memory", "realtime_memory"])
-        if not tool_name:
-            return {"success": False, "error": "Memory stats tool not found"}
-
-        arguments = {"tracker_type": tracker_type, "include_details": include_details}
+    async def get_memory_stats(
+        self,
+        detail: str = "summary",
+        node_ids: list[str] | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Get memory statistics through the exact cluster child."""
+        arguments: dict[str, Any] = {"detail": detail}
+        if node_ids is not None:
+            arguments["node_ids"] = node_ids
         arguments.update(kwargs)
-        return await self.call_tool(tool_name, arguments)
-
-    async def call_tool_by_function(self, function_description: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Call tool by function description"""
-        # Try to find appropriate tool based on function description
-        function_keywords = function_description.lower().split()
-        tool_name = await self._find_tool_by_function(function_keywords)
-
-        if not tool_name:
-            return {
-                "success": False,
-                "error": f"No tool found for function: {function_description}"
-            }
-
-        return await self.call_tool(tool_name, arguments)
+        return await self.tools.call_child(
+            "doris_cluster",
+            "get_memory_stats",
+            arguments,
+        )
 
 
 # Convenience factory functions

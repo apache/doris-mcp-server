@@ -26,6 +26,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
+from doris_mcp_server.tools import domain_catalog as domain_catalog_module
 from doris_mcp_server.tools import tool_catalog
 from doris_mcp_server.tools.domain_catalog import (
     CURRENT_FLAT_TOOL_NAMES,
@@ -67,6 +68,13 @@ def _manager() -> DorisToolsManager:
     connection_manager = Mock()
     connection_manager.config = _config()
     return DorisToolsManager(connection_manager)
+
+
+def _migration_registry(manager: DorisToolsManager):
+    return tool_catalog.build_tool_registry(
+        manager,
+        manager.connection_manager.config,
+    )
 
 
 def _copy_catalog(
@@ -274,6 +282,7 @@ def test_composite_diagnostics_have_deterministic_required_steps(
 
 def test_legacy_migrations_cover_exact_flat_baseline_and_real_handlers() -> None:
     manager = _manager()
+    registry = _migration_registry(manager)
 
     assert tuple(
         migration.legacy_tool_name
@@ -281,11 +290,11 @@ def test_legacy_migrations_cover_exact_flat_baseline_and_real_handlers() -> None
     ) == CURRENT_FLAT_TOOL_NAMES
     assert tuple(
         definition.name
-        for definition in manager.tool_registry.advertised_definitions
+        for definition in registry.advertised_definitions
         if definition.provider_name is None
     ) == CURRENT_FLAT_TOOL_NAMES
     DORIS_DOMAIN_CATALOG.validate_legacy_registry(
-        manager.tool_registry,
+        registry,
         manager,
     )
 
@@ -566,6 +575,7 @@ def test_migration_model_rejects_invalid_mode_fields() -> None:
 
 def test_runtime_registry_handler_name_drift_is_rejected() -> None:
     manager = _manager()
+    registry = _migration_registry(manager)
     first = LEGACY_TOOL_MIGRATIONS[0].model_copy(
         update={"legacy_handler_name": "_changed_handler"}
     )
@@ -574,23 +584,24 @@ def test_runtime_registry_handler_name_drift_is_rejected() -> None:
     )
 
     with pytest.raises(DomainCatalogError, match="changed handler"):
-        invalid.validate_legacy_registry(manager.tool_registry, manager)
+        invalid.validate_legacy_registry(registry, manager)
 
 
 def test_runtime_dangling_handler_is_rejected() -> None:
     manager = _manager()
+    registry = _migration_registry(manager)
     manager.__dict__["_exec_query_tool"] = None
 
     with pytest.raises(DomainCatalogError, match="dangling handler"):
         DORIS_DOMAIN_CATALOG.validate_legacy_registry(
-            manager.tool_registry,
+            registry,
             manager,
         )
 
 
 def test_runtime_flat_registry_drift_is_rejected() -> None:
     manager = _manager()
-    registry = manager.tool_registry
+    registry = _migration_registry(manager)
     registry._ordered_names = registry._ordered_names[1:]
 
     with pytest.raises(DomainCatalogError, match="25-tool migration baseline"):
@@ -607,7 +618,7 @@ def test_server_startup_rejects_injected_duplicate_catalog(
     invalid = _copy_catalog(
         domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
     )
-    monkeypatch.setattr(tool_catalog, "DORIS_DOMAIN_CATALOG", invalid)
+    monkeypatch.setattr(domain_catalog_module, "DORIS_DOMAIN_CATALOG", invalid)
 
     with pytest.raises(DomainCatalogError, match="exact ordered"):
         _manager()
