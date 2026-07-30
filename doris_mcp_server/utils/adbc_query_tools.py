@@ -34,6 +34,7 @@ from ..result_limits import (
     resolve_result_limits,
 )
 from ..utils.db import DorisConnectionManager
+from ..utils.doris_http_client import database_config_for_request
 from ..utils.logger import get_logger
 from ..utils.security import AuthContext
 from ..utils.sql_security_utils import get_auth_context
@@ -78,6 +79,26 @@ class DorisADBCQueryTools:
         # ADBC connections and cursors are not safe to replace concurrently.
         self._query_lock = asyncio.Lock()
 
+    def _token_bound_route_error(self) -> dict[str, Any] | None:
+        global_database_config = getattr(
+            self.connection_manager.config,
+            "database",
+            None,
+        )
+        if global_database_config is None:
+            return None
+        selected = database_config_for_request(self.connection_manager)
+        if selected is global_database_config:
+            return None
+        return {
+            "success": False,
+            "error": (
+                "ADBC is unavailable for token-bound database routes; use "
+                "exec_query or a separately configured MCP process"
+            ),
+            "error_type": "token_bound_adbc_unsupported",
+        }
+
     async def exec_adbc_query(
         self,
         sql: str,
@@ -100,6 +121,9 @@ class DorisADBCQueryTools:
             Query results in specified format with metadata
         """
         try:
+            route_error = self._token_bound_route_error()
+            if route_error is not None:
+                return route_error
             # Use configuration defaults if parameters not specified
             adbc_config = self.connection_manager.config.adbc
             try:
@@ -218,8 +242,7 @@ class DorisADBCQueryTools:
                 }
 
             # Get host address
-            db_config = self.connection_manager.config.database
-            fe_host = db_config.host
+            fe_host = self.connection_manager.host
 
             # Check FE Arrow Flight SQL port availability
             fe_available = self._check_port_connectivity(fe_host, fe_port)
@@ -393,7 +416,7 @@ class DorisADBCQueryTools:
             fe_port = int(fe_port_raw)
 
             # Build connection URI
-            uri = f"grpc://{db_config.host}:{fe_port}"
+            uri = f"grpc://{self.connection_manager.host}:{fe_port}"
 
             # Create database connection parameters
             db_kwargs = {
@@ -623,6 +646,13 @@ class DorisADBCQueryTools:
     async def get_adbc_connection_info(self) -> dict[str, Any]:
         """Get ADBC connection information and status"""
         try:
+            route_error = self._token_bound_route_error()
+            if route_error is not None:
+                return {
+                    **route_error,
+                    "status": "not_ready",
+                    "timestamp": datetime.now().isoformat(),
+                }
             # Check port status
             port_status = await self._check_arrow_flight_ports()
 
@@ -638,7 +668,7 @@ class DorisADBCQueryTools:
                 "adbc_available": module_status["success"],
                 "ports_available": port_status["success"],
                 "configuration": {
-                    "fe_host": db_config.host,
+                    "fe_host": self.connection_manager.host,
                     "fe_arrow_flight_port": fe_port,
                     "be_arrow_flight_port": be_port,
                     "user": db_config.user

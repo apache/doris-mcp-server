@@ -359,6 +359,10 @@ class DatabaseConfig:
     """Database connection configuration"""
 
     host: str = "localhost"
+    # Ordered FE MySQL endpoints for one Doris cluster. When populated, the
+    # connection manager tries these hosts in order and keeps ``host`` as the
+    # backward-compatible primary endpoint.
+    hosts: list[str] = field(default_factory=list)
     port: int = 9030
     user: str = "root"
     password: str = ""
@@ -368,6 +372,7 @@ class DatabaseConfig:
     # FE HTTP API endpoint for profile and other HTTP APIs. An empty host keeps
     # backward compatibility by falling back to the SQL host.
     fe_http_host: str = ""
+    fe_http_hosts: list[str] = field(default_factory=list)
     fe_http_port: int = 8030
 
     # BE HTTP nodes must be configured explicitly. SQL metadata is not trusted
@@ -936,6 +941,19 @@ class DorisConfig:
         doris_host = os.getenv("DORIS_HOST", "").strip()
         config.database.host = doris_host if doris_host else config.database.host
 
+        doris_hosts_env = os.getenv("DORIS_HOSTS", "")
+        if doris_hosts_env:
+            doris_hosts = [
+                host.strip()
+                for host in doris_hosts_env.split(",")
+                if host.strip()
+            ]
+            if doris_host:
+                doris_hosts = list(dict.fromkeys([doris_host, *doris_hosts]))
+            if doris_hosts:
+                config.database.hosts = doris_hosts
+                config.database.host = doris_hosts[0]
+
         doris_port = os.getenv("DORIS_PORT", "").strip()
         if doris_port and doris_port.isdigit():
             config.database.port = int(doris_port)
@@ -951,6 +969,21 @@ class DorisConfig:
 
         doris_fe_http_host = os.getenv("DORIS_FE_HTTP_HOST", "").strip()
         config.database.fe_http_host = doris_fe_http_host
+
+        doris_fe_http_hosts_env = os.getenv("DORIS_FE_HTTP_HOSTS", "")
+        if doris_fe_http_hosts_env:
+            doris_fe_http_hosts = [
+                host.strip()
+                for host in doris_fe_http_hosts_env.split(",")
+                if host.strip()
+            ]
+            if doris_fe_http_host:
+                doris_fe_http_hosts = list(
+                    dict.fromkeys([doris_fe_http_host, *doris_fe_http_hosts])
+                )
+            if doris_fe_http_hosts:
+                config.database.fe_http_hosts = doris_fe_http_hosts
+                config.database.fe_http_host = doris_fe_http_hosts[0]
 
         doris_fe_http_port = os.getenv("DORIS_FE_HTTP_PORT", "").strip()
         if doris_fe_http_port and doris_fe_http_port.isdigit():
@@ -1519,6 +1552,10 @@ class DorisConfig:
             for key, value in db_config.items():
                 if hasattr(config.database, key):
                     setattr(config.database, key, value)
+            if config.database.hosts and "host" not in db_config:
+                config.database.host = config.database.hosts[0]
+            if config.database.fe_http_hosts and "fe_http_host" not in db_config:
+                config.database.fe_http_host = config.database.fe_http_hosts[0]
 
         # Update security configuration
         if "security" in config_data:
@@ -1585,12 +1622,14 @@ class DorisConfig:
             "temp_files_dir": self.temp_files_dir,
             "database": {
                 "host": self.database.host,
+                "hosts": self.database.hosts,
                 "port": self.database.port,
                 "user": self.database.user,
                 "password": "***",  # Hide password
                 "database": self.database.database,
                 "charset": self.database.charset,
                 "fe_http_host": self.database.fe_http_host,
+                "fe_http_hosts": self.database.fe_http_hosts,
                 "fe_http_port": self.database.fe_http_port,
                 "be_hosts": self.database.be_hosts,
                 "be_webserver_port": self.database.be_webserver_port,
@@ -1744,6 +1783,28 @@ class DorisConfig:
         # Validate database configuration
         if not self.database.host:
             errors.append("Database host address cannot be empty")
+
+        database_host_lists: tuple[tuple[str, Any], ...] = (
+            ("Doris FE SQL hosts", self.database.hosts),
+            ("Doris FE HTTP hosts", self.database.fe_http_hosts),
+        )
+        for field_name, hosts in database_host_lists:
+            if not isinstance(hosts, list):
+                errors.append(f"{field_name} must be a list")
+                continue
+            if len(hosts) > 16:
+                errors.append(f"{field_name} cannot contain more than 16 entries")
+            if any(
+                not isinstance(host, str)
+                or host != host.strip()
+                or not host
+                or "://" in host
+                or any(character in host for character in "/\\?#@%")
+                for host in hosts
+            ):
+                errors.append(
+                    f"{field_name} must contain only hostname or IP address values"
+                )
 
         if not (1 <= self.database.port <= 65535):
             errors.append("Database port must be in the range 1-65535")

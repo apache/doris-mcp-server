@@ -200,12 +200,20 @@ Doris user:
 ```json
 {
   "database_config": {
-    "host": "doris-fe.internal.example",
+    "host": "doris-fe-1.internal.example",
+    "hosts": [
+      "doris-fe-1.internal.example",
+      "doris-fe-2.internal.example"
+    ],
     "port": 9030,
     "user": "mcp_orders_east",
     "password": "<secret-store-value>",
     "database": "sales",
     "charset": "UTF8",
+    "fe_http_hosts": [
+      "doris-fe-1.internal.example",
+      "doris-fe-2.internal.example"
+    ],
     "fe_http_port": 8030
   }
 }
@@ -215,6 +223,10 @@ Token-bound database configuration validates and uses a dedicated connection
 pool for this route. It must not fall back to the global Doris account. Store
 only a token digest in `tokens.json`, keep the file at mode `0600`, and protect
 the Doris password as a secret.
+
+All entries in `hosts` and `fe_http_hosts` must be FE nodes of the same Doris
+cluster. Use separate static-token bindings for separate clusters; the bearer
+token selects the route and a tool call cannot override it.
 
 Do not bind a fine-grained token to `root`, `admin`, or a service account that
 has global/table-level privileges.
@@ -237,6 +249,10 @@ DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true
 `exec_query`, reviewed metadata tools, and SQL explain then reach Doris as the
 signed-in user. Doris-backed OAuth must fail closed if its per-user pool is
 missing; it must never use the global service account as a fallback.
+When multiple FE candidates are configured, sign-in tries them in order.
+If an established per-user pool later fails, the user must sign in again:
+the server intentionally does not retain the raw Doris password needed to
+reconstruct that pool.
 
 The current Doris-backed OAuth implementation is single-process and requires
 `WORKERS=1`. See the main README for its complete operational limits.

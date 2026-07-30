@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from doris_mcp_server.auth.token_manager import TokenManager
+from doris_mcp_server.auth.token_manager import DatabaseConfig, TokenManager
 from doris_mcp_server.utils.config import (
     AuthConfigError,
     DorisConfig,
@@ -90,6 +90,62 @@ async def test_created_token_is_returned_once_and_persisted_as_digest(
         assert result.is_valid is True
         assert result.token_info.token_id == "generated"
         assert result.token_info.description == "one-time display"
+    finally:
+        reloaded.stop_hot_reload()
+
+
+@pytest.mark.asyncio
+async def test_token_database_fe_candidates_round_trip(
+    tmp_path,
+    monkeypatch,
+):
+    _clear_static_token_environment(monkeypatch)
+    config = _config(tmp_path)
+    manager = TokenManager(config)
+    try:
+        raw_token = await manager.create_token(
+            "multi-fe",
+            database_config=DatabaseConfig(
+                host="fe-1.internal",
+                hosts=["fe-1.internal", "fe-2.internal"],
+                user="tenant_reader",
+                password="tenant-password",
+                database="analytics",
+                fe_http_hosts=["fe-http-1.internal", "fe-http-2.internal"],
+                be_hosts=["be-1.internal", "be-2.internal"],
+            ),
+        )
+        stored = json.loads(
+            Path(config.security.token_file_path).read_text(encoding="utf-8")
+        )["tokens"][0]["database_config"]
+
+        assert stored["hosts"] == ["fe-1.internal", "fe-2.internal"]
+        assert stored["fe_http_hosts"] == [
+            "fe-http-1.internal",
+            "fe-http-2.internal",
+        ]
+        assert stored["be_hosts"] == ["be-1.internal", "be-2.internal"]
+
+        selected = manager.get_database_config_by_token(raw_token)
+        assert selected is not None
+        assert selected.hosts == ["fe-1.internal", "fe-2.internal"]
+        assert selected.fe_http_hosts == [
+            "fe-http-1.internal",
+            "fe-http-2.internal",
+        ]
+    finally:
+        manager.stop_hot_reload()
+
+    reloaded = TokenManager(config)
+    try:
+        result = await reloaded.validate_token(raw_token)
+        assert result.is_valid is True
+        assert result.token_info.token_id == "multi-fe"
+        assert result.token_info.database_config is not None
+        assert result.token_info.database_config.hosts == [
+            "fe-1.internal",
+            "fe-2.internal",
+        ]
     finally:
         reloaded.stop_hot_reload()
 

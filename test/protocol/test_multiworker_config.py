@@ -100,10 +100,14 @@ def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret
 def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config = DorisConfig()
     config.database.host = "127.0.0.1"
+    config.database.hosts = ["127.0.0.1", "127.0.0.2"]
     config.database.port = 19030
     config.database.user = "loader"
     config.database.password = "test-password"
     config.database.database = "hhm_dt_sim"
+    config.database.fe_http_host = "127.0.0.10"
+    config.database.fe_http_hosts = ["127.0.0.10", "127.0.0.11"]
+    config.database.be_hosts = ["127.0.0.20", "127.0.0.21"]
     config.server_name = "doris-mcp-server"
     config.mcp_allowed_hosts = ["mcp.example.test", "mcp.example.test:*"]
     config.mcp_allowed_origins = ["https://client.example.test"]
@@ -126,10 +130,17 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
 
     child_config = DorisConfig.from_env()
     assert child_config.database.host == "127.0.0.1"
+    assert child_config.database.hosts == ["127.0.0.1", "127.0.0.2"]
     assert child_config.database.port == 19030
     assert child_config.database.user == "loader"
     assert child_config.database.password == "test-password"
     assert child_config.database.database == "hhm_dt_sim"
+    assert child_config.database.fe_http_host == "127.0.0.10"
+    assert child_config.database.fe_http_hosts == [
+        "127.0.0.10",
+        "127.0.0.11",
+    ]
+    assert child_config.database.be_hosts == ["127.0.0.20", "127.0.0.21"]
     assert child_config.server_host == "127.0.0.1"
     assert child_config.server_port == 31133
     assert child_config.mcp_allowed_hosts == [

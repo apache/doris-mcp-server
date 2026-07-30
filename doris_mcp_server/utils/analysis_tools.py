@@ -27,7 +27,11 @@ from typing import Any
 from urllib.parse import quote
 
 from .db import DorisConnectionManager
-from .doris_http_client import DorisHTTPClient
+from .doris_http_client import (
+    DorisHTTPClient,
+    configured_fe_http_hosts,
+    database_config_for_request,
+)
 from .logger import get_logger
 from .sql_security_utils import (
     SQLSecurityError,
@@ -924,12 +928,12 @@ class SQLAnalyzer:
             Query ID string or None if not found
         """
         try:
-            db_config = self.connection_manager.config.database
-            fe_http_host = getattr(db_config, "fe_http_host", "") or db_config.host
+            db_config = database_config_for_request(self.connection_manager)
+            fe_http_hosts = configured_fe_http_hosts(db_config)
             http_client = DorisHTTPClient.from_database_config(db_config)
-            response = await http_client.get(
+            response = await http_client.get_first_available(
                 role="fe",
-                host=fe_http_host,
+                hosts=fe_http_hosts,
                 port=db_config.fe_http_port,
                 path=(f"/rest/v2/manager/query/trace_id/{quote(trace_id, safe='')}"),
                 headers={"Accept": "application/json"},
@@ -1001,8 +1005,8 @@ class SQLAnalyzer:
             Profile data dict or None if failed
         """
         try:
-            db_config = self.connection_manager.config.database
-            fe_http_host = getattr(db_config, "fe_http_host", "") or db_config.host
+            db_config = database_config_for_request(self.connection_manager)
+            fe_http_hosts = configured_fe_http_hosts(db_config)
             endpoints = [
                 (
                     f"/rest/v2/manager/query/profile/text/{quote(query_id, safe='')}",
@@ -1013,9 +1017,9 @@ class SQLAnalyzer:
             http_client = DorisHTTPClient.from_database_config(db_config)
             for i, (path, params) in enumerate(endpoints):
                 logger.info("Requesting profile from configured FE endpoint %s", i + 1)
-                response = await http_client.get(
+                response = await http_client.get_first_available(
                     role="fe",
-                    host=fe_http_host,
+                    hosts=fe_http_hosts,
                     port=db_config.fe_http_port,
                     path=path,
                     params=params,
@@ -1091,7 +1095,7 @@ class SQLAnalyzer:
             Dict containing table data size information
         """
         try:
-            db_config = self.connection_manager.config.database
+            db_config = database_config_for_request(self.connection_manager)
             params = {}
             if db_name:
                 params["db"] = db_name
@@ -1103,11 +1107,11 @@ class SQLAnalyzer:
                 "Requesting table data size from configured FE endpoint with params: %s",
                 params,
             )
-            fe_http_host = getattr(db_config, "fe_http_host", "") or db_config.host
+            fe_http_hosts = configured_fe_http_hosts(db_config)
             http_client = DorisHTTPClient.from_database_config(db_config)
-            response = await http_client.get(
+            response = await http_client.get_first_available(
                 role="fe",
-                host=fe_http_host,
+                hosts=fe_http_hosts,
                 port=db_config.fe_http_port,
                 path="/api/show_table_data",
                 params=params,
