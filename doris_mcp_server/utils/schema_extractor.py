@@ -1667,9 +1667,12 @@ class MetadataExtractor:
 
             if effective_catalog and effective_catalog != "internal":
                 safe_catalog = quote_identifier(effective_catalog, "catalog name")
-                query = f"DESCRIBE {safe_catalog}.{safe_db}.{safe_table}"
+                query = (
+                    "SHOW FULL COLUMNS FROM "
+                    f"{safe_catalog}.{safe_db}.{safe_table}"
+                )
             else:
-                query = f"DESCRIBE {safe_db}.{safe_table}"
+                query = f"SHOW FULL COLUMNS FROM {safe_db}.{safe_table}"
 
             # Execute async query
             result = await self._execute_query_async(query, db_name)

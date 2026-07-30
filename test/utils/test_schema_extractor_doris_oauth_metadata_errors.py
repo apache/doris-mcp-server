@@ -79,6 +79,54 @@ async def _call_tool(method_name, args, connection_manager):
         reset_auth_context(token)
 
 
+@pytest.mark.parametrize(
+    ("catalog_name", "expected_query"),
+    [
+        (None, "SHOW FULL COLUMNS FROM `db1`.`tbl1`"),
+        ("internal", "SHOW FULL COLUMNS FROM `db1`.`tbl1`"),
+        ("hive", "SHOW FULL COLUMNS FROM `hive`.`db1`.`tbl1`"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_table_schema_uses_full_columns_and_preserves_comments(
+    catalog_name,
+    expected_query,
+):
+    connection_manager = FakeConnectionManager(
+        rows=[
+            {
+                "Field": "customer_id",
+                "Type": "bigint",
+                "Null": "NO",
+                "Key": "YES",
+                "Default": None,
+                "Extra": "",
+                "Comment": "Customer identifier",
+            }
+        ]
+    )
+    extractor = MetadataExtractor(db_name="db1", connection_manager=connection_manager)
+
+    schema = await extractor.get_table_schema_async(
+        "tbl1",
+        "db1",
+        catalog_name,
+    )
+
+    assert connection_manager.calls[0][1] == expected_query
+    assert schema == [
+        {
+            "column_name": "customer_id",
+            "data_type": "bigint",
+            "is_nullable": False,
+            "default_value": None,
+            "comment": "Customer identifier",
+            "key": "YES",
+            "extra": "",
+        }
+    ]
+
+
 @pytest.mark.parametrize(("tool_name", "method_name", "args"), METADATA_TOOL_CASES)
 @pytest.mark.parametrize(
     ("error", "error_code", "status_code"),

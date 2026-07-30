@@ -148,7 +148,7 @@ def doris_sandbox() -> DorisSandbox:
                 f"""
                 CREATE TABLE {qualified_table} (
                     id BIGINT,
-                    marker VARCHAR(64)
+                    marker VARCHAR(64) COMMENT 'Integration marker'
                 )
                 DUPLICATE KEY(id)
                 DISTRIBUTED BY HASH(id) BUCKETS 1
@@ -813,6 +813,20 @@ async def test_real_doris_tool_regression_paths(
         assert isinstance(basic_info_result.structured_content, dict)
         assert basic_info_result.structured_content["row_count"] == 1
         assert basic_info_result.structured_content["column_count"] == 2
+
+        schema_result = await client.call_tool(
+            "get_table_schema",
+            {
+                "table_name": doris_sandbox.table,
+                "db_name": doris_sandbox.settings.database,
+            },
+        )
+        assert schema_result.is_error is False
+        assert isinstance(schema_result.structured_content, dict)
+        schema_columns = schema_result.structured_content["result"]
+        assert next(
+            column for column in schema_columns if column["column_name"] == "marker"
+        )["comment"] == "Integration marker"
 
         column_analysis_result = await client.call_tool(
             "analyze_columns",
