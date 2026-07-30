@@ -262,9 +262,23 @@ cd doris-mcp-server
 
 ### 2. Install Dependencies
 
+The `dev` dependency group contains the test and quality tools used by CI:
+
 ```bash
-pip install -r requirements.txt
+uv sync --frozen --group dev
 ```
+
+For pip-based workflows, `requirements.txt` contains production dependencies
+only. `requirements-dev.txt` includes that runtime manifest and adds the same
+lean test and quality toolchain:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Production images and runtime environments must install only the package or
+`requirements.txt`; pytest, linters, type checkers, and build backends are not
+runtime dependencies.
 
 ### 3. Configure Environment Variables
 
@@ -1451,7 +1465,8 @@ doris-mcp-server/
 ├── README.md                   # This documentation
 ├── CHANGELOG.md                 # Tagged release history and unreleased changes
 ├── .env.example                # Environment variables template
-├── requirements.txt            # Python dependencies
+├── requirements.txt            # Runtime-only Python dependencies
+├── requirements-dev.txt        # Runtime plus test and quality dependencies
 ├── pyproject.toml              # Project configuration and entry points
 ├── uv.lock                     # UV package manager lock file
 ├── generate_requirements.py    # Requirements generation script

@@ -78,6 +78,9 @@ under **Unreleased** until a new version is selected and published.
   token files.
 - Added coverage gates for the protocol, authentication, and core manager
   domains at 80%, alongside a 55% whole-repository floor.
+- Separated production dependencies from test, lint, type-check, and build
+  tooling across package metadata, generated requirements, Docker, and clean
+  wheel verification.
 
 ### Fixed
 
