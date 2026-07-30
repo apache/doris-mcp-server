@@ -535,6 +535,31 @@ Stdio carries the same JSON-RPC request metadata in the message body, but it
 does not use HTTP headers. Do not write logs or other diagnostics to stdout in
 stdio mode; stdout is reserved for MCP protocol messages.
 
+### OpenTelemetry Trace Context
+
+Clients may propagate the W3C `traceparent`, `tracestate`, and `baggage`
+carrier fields in `params._meta`, as defined by
+[MCP SEP-414](https://modelcontextprotocol.io/seps/414-request-meta),
+[W3C Trace Context](https://www.w3.org/TR/trace-context/), and
+[W3C Baggage](https://www.w3.org/TR/baggage/). The same message-level carrier
+works on Streamable HTTP and stdio; these values are not separate MCP HTTP
+headers.
+
+When an OpenTelemetry provider and exporter are configured, each MCP operation
+span is parented to the valid incoming trace context. The active context is
+available to instrumented downstream work for the lifetime of that operation
+and is reset before the next request. Trace carrier fields are never passed to
+the Doris tool, resource, or prompt managers and are never copied into model
+content or structured results.
+
+The server validates trace carrier values before the SDK propagator sees them.
+Malformed, oversized, duplicate, or orphaned fields are ignored independently,
+and warning logs identify only the field name—never its supplied value.
+Values under credential-like baggage keys such as `token`, `secret`, or
+`authorization` are replaced with `[REDACTED]` before propagation. `baggage`
+can still contain other deployment-sensitive correlation data, so clients
+should send only values approved by their telemetry data-handling policy.
+
 ### List Pagination
 
 `resources/list`, `tools/list`, and `prompts/list` return at most

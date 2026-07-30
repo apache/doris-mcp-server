@@ -39,6 +39,9 @@ under **Unreleased** until a new version is selected and published.
   Streamable HTTP and stdio.
 - HMAC-authenticated explicit state handles with principal, scope, resource,
   expiry, and shared-worker key binding instead of protocol-session state.
+- W3C `traceparent`, `tracestate`, and `baggage` propagation from request
+  `_meta`, with value-safe validation, credential-like baggage redaction,
+  per-request isolation, and no trace metadata in model-facing results.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
