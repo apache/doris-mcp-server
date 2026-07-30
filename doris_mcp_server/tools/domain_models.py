@@ -221,6 +221,49 @@ class ChildSupportContract(ContractModel):
         return self
 
 
+class ManifestVersionSupport(ContractModel):
+    """Compact public version ranges projected from an internal support contract."""
+
+    rule_id: RuleIdentifier
+    supported_ranges: Annotated[tuple[NonEmptyText, ...], Field(min_length=1)]
+    excluded_ranges: tuple[NonEmptyText, ...] = ()
+    tested_versions: tuple[NonEmptyText, ...] = ()
+
+    @classmethod
+    def from_contract(
+        cls,
+        contract: ChildSupportContract,
+    ) -> ManifestVersionSupport:
+        """Project execution details into the bounded public manifest shape."""
+        supported_ranges = tuple(
+            dict.fromkeys(
+                supported_range
+                for variant in contract.variants
+                for supported_range in variant.supported_ranges
+            )
+        )
+        excluded_ranges = tuple(
+            dict.fromkeys(
+                excluded_range
+                for variant in contract.variants
+                for excluded_range in variant.excluded_ranges
+            )
+        )
+        return cls(
+            rule_id=contract.rule_id,
+            supported_ranges=supported_ranges,
+            excluded_ranges=excluded_ranges,
+            tested_versions=contract.tested_versions,
+        )
+
+    @model_validator(mode="after")
+    def _validate_summary(self) -> Self:
+        _require_unique(self.supported_ranges, "supported_ranges")
+        _require_unique(self.excluded_ranges, "excluded_ranges")
+        _require_unique(self.tested_versions, "tested_versions")
+        return self
+
+
 class CompositeStep(ContractModel):
     """One private deterministic step in a composite child DAG."""
 
@@ -409,7 +452,7 @@ class DomainToolRequest(ContractModel):
 
     @model_validator(mode="after")
     def _validate_request_mode(self) -> Self:
-        if self.child_tool is None and self.arguments:
+        if self.child_tool is None and self.arguments is not None:
             raise ValueError("arguments require child_tool")
         return self
 
@@ -430,7 +473,7 @@ class ChildManifestEntry(ContractModel):
     description: NonEmptyText
     input_schema: JsonObject
     output_schema: JsonObject
-    version_support: ChildSupportContract
+    version_support: ManifestVersionSupport
     availability: Availability
     annotations: ToolContractAnnotations
 
@@ -454,6 +497,10 @@ class ChildManifestEntry(ContractModel):
         _check_object_schema(self.output_schema, "output_schema")
         return self
 
+    def to_wire(self) -> JsonObject:
+        """Omit optional empty metadata from the bounded public manifest."""
+        return _compact_manifest_entry_wire(super().to_wire())
+
 
 class DiscoveryEnvelope(ContractModel):
     """Stable structured result for an empty domain discovery call."""
@@ -473,6 +520,12 @@ class DiscoveryEnvelope(ContractModel):
             "manifest child names",
         )
         return self
+
+    def to_wire(self) -> JsonObject:
+        """Serialize children through their compact public wire projection."""
+        payload = super().to_wire()
+        payload["children"] = [child.to_wire() for child in self.children]
+        return payload
 
 
 class ExecutionMetadata(ContractModel):
@@ -546,6 +599,22 @@ class ErrorEnvelope(ContractModel):
     child_tool: Identifier | None = None
     manifest_version: NonEmptyText | None = None
     error: StandardError
+
+
+def _compact_manifest_entry_wire(payload: JsonObject) -> JsonObject:
+    """Remove optional empty fields without requiring a newer Pydantic."""
+    for section_name, optional_fields in (
+        ("version_support", ("excluded_ranges", "tested_versions")),
+        (
+            "availability",
+            ("detected_versions", "evidence_sources", "limitations"),
+        ),
+    ):
+        section = cast(dict[str, JsonValue], payload[section_name])
+        for field_name in optional_fields:
+            if not section.get(field_name):
+                section.pop(field_name, None)
+    return payload
 
 
 def _require_unique(values: tuple[str, ...], field_name: str) -> None:
@@ -624,6 +693,7 @@ __all__ = [
     "ExecutionEnvelope",
     "ExecutionMetadata",
     "JsonObject",
+    "ManifestVersionSupport",
     "StandardError",
     "ToolContractAnnotations",
     "UnavailableBehavior",

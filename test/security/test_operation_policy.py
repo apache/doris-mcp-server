@@ -11,6 +11,9 @@ from doris_mcp_server.auth.operation_policy import (
     authorize_operation,
     filter_tools_for_auth_context,
 )
+from doris_mcp_server.tools.doris_feature_matrix import (
+    EXPECTED_DOMAIN_CHILDREN,
+)
 from doris_mcp_server.utils.security import AuthContext
 
 
@@ -51,6 +54,40 @@ def test_legacy_auth_methods_pass_through_operation_policy():
 
 def test_missing_auth_context_passes_for_legacy_stdio_paths():
     authorize_operation(None, "tool:get_sql_profile")
+
+
+@pytest.mark.parametrize("domain_name", EXPECTED_DOMAIN_CHILDREN)
+def test_doris_oauth_allows_read_only_domain_discovery_with_tool_list_scope(
+    domain_name,
+):
+    authorize_operation(
+        doris_context(["tool:list"]),
+        f"tool:{domain_name}",
+    )
+
+
+@pytest.mark.parametrize("domain_name", EXPECTED_DOMAIN_CHILDREN)
+def test_doris_oauth_domain_discovery_rejects_missing_tool_list_scope(
+    domain_name,
+):
+    with pytest.raises(OperationAuthorizationError) as exc:
+        authorize_operation(
+            doris_context([]),
+            f"tool:{domain_name}",
+        )
+
+    assert exc.value.error_code == "PERMISSION_DENIED"
+    assert exc.value.required_scope == "tool:list"
+
+
+def test_domain_discovery_does_not_expand_default_oauth_scope_set() -> None:
+    policy = DorisOAuthScopePolicy()
+
+    assert {
+        f"tool:call:{domain_name}"
+        for domain_name in EXPECTED_DOMAIN_CHILDREN
+    }.isdisjoint(policy.server_allowed_scopes)
+    assert "tool:list" in policy.server_allowed_scopes
 
 
 @pytest.mark.parametrize("tool_name", sorted(P4_DORIS_OAUTH_METADATA_TOOLS))

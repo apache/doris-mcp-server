@@ -17,6 +17,9 @@ from doris_mcp_server.auth.operation_policy import (
 )
 from doris_mcp_server.http_transport import DorisMCPHTTPTransport
 from doris_mcp_server.protocol import create_transport_security
+from doris_mcp_server.tools.doris_feature_matrix import (
+    EXPECTED_DOMAIN_CHILDREN,
+)
 from doris_mcp_server.tools.tool_registry import (
     DORIS_OAUTH_EXPLAIN_TOOL_SET,
     DORIS_OAUTH_METADATA_TOOL_SET,
@@ -47,7 +50,15 @@ TOOL_OPERATION_SCOPES = tuple(
     (f"tool:{tool_name}", f"tool:call:{tool_name}")
     for tool_name in ALL_TOOL_NAMES
 )
-ALL_OPERATION_SCOPES = BASE_OPERATION_SCOPES + TOOL_OPERATION_SCOPES
+DOMAIN_OPERATION_SCOPES = tuple(
+    (f"tool:{domain_name}", "tool:list")
+    for domain_name in EXPECTED_DOMAIN_CHILDREN
+)
+ALL_OPERATION_SCOPES = (
+    BASE_OPERATION_SCOPES
+    + TOOL_OPERATION_SCOPES
+    + DOMAIN_OPERATION_SCOPES
+)
 
 
 def _context(auth_method: str, scopes: Iterable[str] = ()) -> AuthContext:
@@ -88,7 +99,6 @@ def _external_oauth_config() -> EffectiveAuthConfig:
         external_oauth_resource="https://mcp.example.test/mcp",
         external_oauth_scopes=(
             "tool:list",
-            "tool:call:exec_query",
         ),
         external_oauth_required_scopes=("tool:list",),
     )
@@ -260,11 +270,8 @@ def test_external_oauth_rejects_unknown_tool_before_dispatch() -> None:
 @pytest.mark.asyncio
 async def test_streamable_http_enforces_external_oauth_tool_scope_before_dispatch() -> None:
     contexts = {
+        "no-scope": _context("external_oauth"),
         "list-only": _context("external_oauth", ["tool:list"]),
-        "exec-query": _context(
-            "external_oauth",
-            ["tool:list", "tool:call:exec_query"],
-        ),
     }
 
     class SecurityManager:
@@ -299,29 +306,31 @@ async def test_streamable_http_enforces_external_oauth_tool_scope_before_dispatc
             headers=_modern_headers("tools/list", token="list-only"),
         )
         assert listed.status_code == 200
-        assert len(listed.json()["result"]["tools"]) == 25
+        assert {
+            tool["name"] for tool in listed.json()["result"]["tools"]
+        } == set(EXPECTED_DOMAIN_CHILDREN)
 
         denied = await client.post(
             "/mcp",
             json=_modern_request(
                 2,
                 "tools/call",
-                name="exec_query",
-                arguments={"sql": "SELECT 1"},
+                name="doris_catalog",
+                arguments={},
             ),
             headers=_modern_headers(
                 "tools/call",
-                name="exec_query",
-                token="list-only",
+                name="doris_catalog",
+                token="no-scope",
             ),
         )
         assert denied.status_code == 403
         assert denied.json()["error"] == "PERMISSION_DENIED"
-        assert denied.json()["required_scope"] == "tool:call:exec_query"
+        assert denied.json()["required_scope"] == "tool:list"
         assert 'error="insufficient_scope"' in denied.headers[
             "www-authenticate"
         ]
-        assert 'scope="tool:call:exec_query"' in denied.headers[
+        assert 'scope="tool:list"' in denied.headers[
             "www-authenticate"
         ]
 
@@ -330,19 +339,22 @@ async def test_streamable_http_enforces_external_oauth_tool_scope_before_dispatc
             json=_modern_request(
                 3,
                 "tools/call",
-                name="exec_query",
-                arguments={"sql": "SELECT 1"},
+                name="doris_catalog",
+                arguments={},
             ),
             headers=_modern_headers(
                 "tools/call",
-                name="exec_query",
-                token="exec-query",
+                name="doris_catalog",
+                token="list-only",
             ),
         )
         assert allowed.status_code == 200
-        assert allowed.json()["result"]["structuredContent"][
-            "registry_dispatch"
-        ] is True
+        assert allowed.json()["result"]["structuredContent"]["mode"] == (
+            "manifest"
+        )
+        assert allowed.json()["result"]["structuredContent"]["domain"] == (
+            "doris_catalog"
+        )
 
 
 @pytest.mark.asyncio
@@ -359,10 +371,13 @@ async def test_true_subprocess_stdio_keeps_local_tool_and_resource_paths_scope_f
 
     async with Client(stdio_client(server_params)) as client:
         tools = await client.list_tools(cache_mode="bypass")
-        assert len(tools.tools) == 25
+        assert {tool.name for tool in tools.tools} == set(
+            EXPECTED_DOMAIN_CHILDREN
+        )
 
-        called = await client.call_tool("exec_query", {"sql": "SELECT 1"})
-        assert called.structured_content["registry_dispatch"] is True
+        called = await client.call_tool("doris_catalog", {})
+        assert called.structured_content["mode"] == "manifest"
+        assert called.structured_content["domain"] == "doris_catalog"
 
         resources = await client.list_resources(cache_mode="bypass")
         assert resources.resources == []

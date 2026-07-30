@@ -49,6 +49,9 @@ from doris_mcp_server.protocol import (
     create_doris_mcp_server,
     create_transport_security,
 )
+from doris_mcp_server.tools.doris_feature_matrix import (
+    EXPECTED_DOMAIN_CHILDREN,
+)
 from test.protocol.schema_validation_server import create_schema_validation_server
 from test.protocol.stdio_capability_server import OneToolManager as ProfileToolManager
 from test.protocol.tool_registry_server import create_registry_test_server
@@ -363,7 +366,7 @@ def modern_tool_headers(name: str) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_http_uses_production_tool_registry_for_list_validation_and_dispatch():
+async def test_http_uses_production_domain_catalog_for_discovery_validation():
     server = create_registry_test_server()
     app = server.streamable_http_app(
         json_response=True,
@@ -390,14 +393,22 @@ async def test_http_uses_production_tool_registry_for_list_validation_and_dispat
             tool["name"]: tool
             for tool in listed.json()["result"]["tools"]
         }
-        assert len(tools) == 25
-        assert tools["exec_query"]["inputSchema"]["required"] == ["sql"]
+        assert set(tools) == set(EXPECTED_DOMAIN_CHILDREN)
+        assert set(tools["doris_catalog"]["inputSchema"]["properties"]) == {
+            "child_tool",
+            "arguments",
+            "manifest_version",
+        }
         assert "get_monitoring_metrics_info" not in tools
 
         invalid = await client.post(
             "/mcp",
-            json=modern_tool_request(2, "exec_query", {}),
-            headers=modern_tool_headers("exec_query"),
+            json=modern_tool_request(
+                2,
+                "doris_catalog",
+                {"unexpected": True},
+            ),
+            headers=modern_tool_headers("doris_catalog"),
         )
         assert invalid.status_code == 400
         assert invalid.json()["error"]["code"] == -32602
@@ -406,18 +417,16 @@ async def test_http_uses_production_tool_registry_for_list_validation_and_dispat
             "/mcp",
             json=modern_tool_request(
                 3,
-                "exec_query",
-                {"sql": "SELECT 1"},
+                "doris_catalog",
+                {},
             ),
-            headers=modern_tool_headers("exec_query"),
+            headers=modern_tool_headers("doris_catalog"),
         )
         assert called.status_code == 200
         structured = called.json()["result"]["structuredContent"]
-        assert structured["registry_dispatch"] is True
-        assert structured["sql_length"] == len("SELECT 1")
-        assert structured["_execution_info"]["canonical_tool_name"] == (
-            "exec_query"
-        )
+        assert structured["mode"] == "manifest"
+        assert structured["domain"] == "doris_catalog"
+        assert len(structured["children"]) == 5
 
 
 @pytest.mark.asyncio
@@ -1303,7 +1312,7 @@ async def test_true_subprocess_stdio_does_not_advertise_or_serve_subscriptions()
 
 
 @pytest.mark.asyncio
-async def test_true_subprocess_stdio_uses_production_tool_registry():
+async def test_true_subprocess_stdio_uses_production_domain_catalog():
     server_script = Path(__file__).with_name("tool_registry_server.py")
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -1315,28 +1324,34 @@ async def test_true_subprocess_stdio_uses_production_tool_registry():
             tool.name: tool
             for tool in (await modern.list_tools(cache_mode="bypass")).tools
         }
-        assert len(tools) == 25
-        assert tools["exec_query"].input_schema["required"] == ["sql"]
+        assert set(tools) == set(EXPECTED_DOMAIN_CHILDREN)
+        assert set(tools["doris_catalog"].input_schema["properties"]) == {
+            "child_tool",
+            "arguments",
+            "manifest_version",
+        }
         assert "get_monitoring_metrics_info" not in tools
 
         with pytest.raises(MCPError) as invalid:
-            await modern.call_tool("exec_query", {})
+            await modern.call_tool(
+                "doris_catalog",
+                {"unexpected": True},
+            )
         assert invalid.value.code == -32602
 
-        called = await modern.call_tool("exec_query", {"sql": "SELECT 1"})
-        assert called.structured_content["registry_dispatch"] is True
-        assert called.structured_content["_execution_info"][
-            "canonical_tool_name"
-        ] == "exec_query"
+        called = await modern.call_tool("doris_catalog", {})
+        assert called.structured_content["mode"] == "manifest"
+        assert called.structured_content["domain"] == "doris_catalog"
 
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
         tools = {
             tool.name: tool
             for tool in (await legacy.list_tools()).tools
         }
-        assert len(tools) == 25
-        called = await legacy.call_tool("exec_query", {"sql": "SELECT 1"})
-        assert called.structured_content["registry_dispatch"] is True
+        assert set(tools) == set(EXPECTED_DOMAIN_CHILDREN)
+        called = await legacy.call_tool("doris_catalog", {})
+        assert called.structured_content["mode"] == "manifest"
+        assert called.structured_content["domain"] == "doris_catalog"
 
 
 @pytest.mark.asyncio

@@ -26,12 +26,9 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from mcp.types import Tool
-
 from ..auth.operation_policy import (
     OperationAuthorizationError,
     authorize_operation,
-    filter_tools_for_auth_context,
 )
 from ..result_limits import configured_default_result_rows
 from ..utils.adbc_query_tools import DorisADBCQueryTools
@@ -48,6 +45,11 @@ from ..utils.query_executor import DorisQueryExecutor
 from ..utils.schema_extractor import MetadataExtractor
 from ..utils.security import get_current_auth_context
 from ..utils.security_analytics_tools import SecurityAnalyticsTools
+from .domain_manifest import (
+    DomainAvailabilityProvider,
+    DomainManifestManagerMixin,
+    DomainManifestService,
+)
 from .tool_catalog import build_tool_registry
 from .tool_provider import CustomToolProvider, ToolProviderRuntime
 from .tool_registry import ToolDefinition, ToolDefinitionRegistry
@@ -55,7 +57,7 @@ from .tool_registry import ToolDefinition, ToolDefinitionRegistry
 logger = get_logger(__name__)
 
 
-class DorisToolsManager:
+class DorisToolsManager(DomainManifestManagerMixin):
     """Apache Doris Tools Manager"""
 
     def __init__(
@@ -63,6 +65,7 @@ class DorisToolsManager:
         connection_manager: DorisConnectionManager,
         *,
         tool_providers: Iterable[CustomToolProvider] | None = None,
+        domain_availability_provider: DomainAvailabilityProvider | None = None,
     ) -> None:
         self.connection_manager = connection_manager
         config = getattr(connection_manager, "config", None)
@@ -89,6 +92,9 @@ class DorisToolsManager:
         # Initialize ADBC query tools
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
         self._tool_registry = self._build_tool_registry()
+        self._domain_manifest_service = DomainManifestService(
+            availability_provider=domain_availability_provider,
+        )
 
         logger.info(
             "DorisToolsManager initialized with business logic processors, v0.5.0 "
@@ -154,17 +160,11 @@ class DorisToolsManager:
             self._tool_registry = registry
         return registry
 
-    async def list_tools(self) -> list[Tool]:
-        """List tools visible to the current authorization context."""
-        return filter_tools_for_auth_context(
-            get_current_auth_context(),
-            self.tool_registry.listed_tools(),
-        )
-
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
-        """
-        Call the specified query tool (tool routing and scheduling center)
-        """
+        """Call a domain or an internal migration tool by exact name."""
+        if self.domain_manifest_service.handles(name):
+            return await self._call_domain_tool(name, arguments)
+
         authorize_operation(get_current_auth_context(), f"tool:{name}")
         definition: ToolDefinition | None = None
         start_time = time.time()
