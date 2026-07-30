@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from doris_mcp_server.schema_validation import ToolSchemaGuard
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
 
@@ -65,6 +66,9 @@ class TestDorisToolsManager:
         # Create a proper mock connection manager
         mock_connection_manager = Mock()
         mock_connection_manager.get_connection = AsyncMock()
+        mock_connection_manager.config.adbc.default_max_rows = 1000
+        mock_connection_manager.config.adbc.default_timeout = 30
+        mock_connection_manager.config.adbc.default_return_format = "dict"
         return DorisToolsManager(mock_connection_manager)
 
     @pytest.mark.asyncio
@@ -270,3 +274,13 @@ class TestDorisToolsManager:
             # Required fields should be defined
             if 'required' in tool.input_schema:
                 assert isinstance(tool.input_schema['required'], list)
+
+    @pytest.mark.asyncio
+    async def test_all_production_tool_schemas_compile_as_bounded_2020_12(
+        self,
+        tools_manager,
+    ):
+        tools = await tools_manager.list_tools()
+        compiled = ToolSchemaGuard().compile_catalog(tools)
+
+        assert set(compiled) == {tool.name for tool in tools}

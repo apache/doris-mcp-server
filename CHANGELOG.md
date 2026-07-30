@@ -52,6 +52,8 @@ under **Unreleased** until a new version is selected and published.
 - Recorded `subscriptions/listen` as intentionally unavailable until a real
   cross-worker Doris change-event source exists, with discovery kept
   capability-honest.
+- Added bounded JSON Schema 2020-12 validation for tool definitions, arguments,
+  and declared structured outputs without external reference fetching.
 - Positioned Dynamic Client Registration as a compatibility fallback behind
   preconfigured clients and Client ID Metadata Documents.
 - Persisted static bearer tokens as self-describing SHA-256/SHA-512 digests,
