@@ -23,6 +23,7 @@ from mcp.types import Tool
 
 from ..result_limits import configured_default_result_rows, configured_result_limits
 from ..utils.config import ADBCConfig
+from .domain_catalog import DORIS_DOMAIN_CATALOG
 from .tool_provider import CustomTool
 from .tool_registry import ToolDefinitionRegistry
 
@@ -939,8 +940,11 @@ No parameters required. Returns connection status, configuration, and diagnostic
         ),
     ]
 
-    return ToolDefinitionRegistry.from_tools(
+    registry = ToolDefinitionRegistry.from_tools(
         tools,
         handler_owner,
         custom_tools=custom_tools,
     )
+    DORIS_DOMAIN_CATALOG.validate_integrity()
+    DORIS_DOMAIN_CATALOG.validate_legacy_registry(registry, handler_owner)
+    return registry
