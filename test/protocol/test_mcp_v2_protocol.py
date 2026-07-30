@@ -32,6 +32,10 @@ from mcp.types import (
     PromptMessage,
     Resource,
     SamplingCapability,
+    SubscriptionFilter,
+    SubscriptionsListenRequest,
+    SubscriptionsListenRequestParams,
+    SubscriptionsListenResult,
     TextContent,
     Tool,
 )
@@ -432,6 +436,67 @@ async def test_http_discover_is_stateless_and_unknown_method_does_not_kill_serve
         )
         assert second.status_code == 200
         assert second.json()["result"]["resultType"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_http_does_not_advertise_or_serve_subscriptions_without_change_source():
+    server = create_test_server()
+    assert server.get_request_handler("subscriptions/listen") is None
+    app = server.streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        host="127.0.0.1",
+        transport_security=create_transport_security("127.0.0.1"),
+    )
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.ASGITransport(app) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        discovered = await client.post(
+            "/mcp",
+            json=modern_request(1, "server/discover"),
+            headers=modern_headers("server/discover"),
+        )
+        assert discovered.status_code == 200
+        capabilities = discovered.json()["result"]["capabilities"]
+        assert capabilities["tools"]["listChanged"] is False
+        assert capabilities["prompts"]["listChanged"] is False
+        assert capabilities["resources"] == {
+            "subscribe": False,
+            "listChanged": False,
+        }
+
+        listen_request = modern_request(2, "subscriptions/listen")
+        listen_request["params"]["notifications"] = {
+            "toolsListChanged": True,
+            "promptsListChanged": True,
+            "resourcesListChanged": True,
+            "resourceSubscriptions": ["doris://table/orders"],
+        }
+        rejected = await client.post(
+            "/mcp",
+            json=listen_request,
+            headers=modern_headers("subscriptions/listen"),
+        )
+        assert rejected.status_code == 404
+        assert rejected.json()["error"] == {
+            "code": -32601,
+            "message": "Method not found",
+            "data": "subscriptions/listen",
+        }
+
+        recovered = await client.post(
+            "/mcp",
+            json=modern_request(3, "server/discover"),
+            headers=modern_headers("server/discover"),
+        )
+        assert recovered.status_code == 200
+        assert recovered.json()["result"]["resultType"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -1037,6 +1102,48 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
             json.loads(legacy_error.contents[0].text)["error_code"]
             == "RESOURCE_NOT_FOUND"
         )
+
+
+@pytest.mark.asyncio
+async def test_true_subprocess_stdio_does_not_advertise_or_serve_subscriptions():
+    server_script = Path(__file__).with_name("stdio_capability_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+    )
+
+    async with Client(stdio_client(server_params)) as modern:
+        capabilities = modern.server_capabilities
+        assert capabilities is not None
+        assert capabilities.tools is not None
+        assert capabilities.tools.list_changed is False
+        assert capabilities.prompts is not None
+        assert capabilities.prompts.list_changed is False
+        assert capabilities.resources is not None
+        assert capabilities.resources.list_changed is False
+        assert capabilities.resources.subscribe is False
+
+        listen_request = SubscriptionsListenRequest(
+            params=SubscriptionsListenRequestParams(
+                notifications=SubscriptionFilter(
+                    tools_list_changed=True,
+                    prompts_list_changed=True,
+                    resources_list_changed=True,
+                    resource_subscriptions=["doris://table/orders"],
+                )
+            )
+        )
+        with pytest.raises(MCPError) as unsupported:
+            await modern.session.send_request(
+                listen_request,
+                SubscriptionsListenResult,
+                request_read_timeout_seconds=1,
+            )
+        assert unsupported.value.code == -32601
+        assert unsupported.value.message == "Method not found"
+
+        recovered = await modern.list_resources(cache_mode="bypass")
+        assert recovered.result_type == "complete"
 
 
 @pytest.mark.asyncio

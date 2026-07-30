@@ -47,8 +47,14 @@ from typing import Any
 import httpx
 import pymysql
 import pytest
-from mcp import Client, StdioServerParameters
+from mcp import Client, MCPError, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.types import (
+    SubscriptionFilter,
+    SubscriptionsListenRequest,
+    SubscriptionsListenRequestParams,
+    SubscriptionsListenResult,
+)
 
 from doris_mcp_server import __version__
 
@@ -444,6 +450,36 @@ async def test_real_doris_protocol_lists_paginate_without_loss(
         environment,
         read_timeout_seconds=60,
     ) as client:
+        capabilities = client.server_capabilities
+        assert capabilities is not None
+        assert capabilities.tools is not None
+        assert capabilities.tools.list_changed is False
+        assert capabilities.prompts is not None
+        assert capabilities.prompts.list_changed is False
+        assert capabilities.resources is not None
+        assert capabilities.resources.list_changed is False
+        assert capabilities.resources.subscribe is False
+
+        with pytest.raises(MCPError) as unsupported:
+            await client.session.send_request(
+                SubscriptionsListenRequest(
+                    params=SubscriptionsListenRequestParams(
+                        notifications=SubscriptionFilter(
+                            tools_list_changed=True,
+                            prompts_list_changed=True,
+                            resources_list_changed=True,
+                            resource_subscriptions=[
+                                f"doris://table/{doris_sandbox.table}"
+                            ],
+                        )
+                    )
+                ),
+                SubscriptionsListenResult,
+                request_read_timeout_seconds=5,
+            )
+        assert unsupported.value.code == -32601
+        assert unsupported.value.message == "Method not found"
+
         for list_method, result_field, identifier in (
             (
                 client.list_resources,

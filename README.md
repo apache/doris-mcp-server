@@ -560,6 +560,21 @@ changes, or under another principal returns `Invalid Params`. Restart the
 listing without a cursor in that case. This prevents a multi-page traversal
 from silently duplicating, dropping, or crossing permission-scoped entries.
 
+### Subscriptions and Change Notifications
+
+The server does not currently advertise or serve `subscriptions/listen`.
+Tools and prompts have no runtime mutation channel, and Doris catalog metadata
+does not provide this process with a reliable cross-worker change-event source.
+Cache expiry and periodic catalog polling are not treated as change events.
+
+Consequently, MCP 2026-07-28 discovery reports `listChanged: false` for tools,
+prompts, and resources and `subscribe: false` for resources. A
+`subscriptions/listen` request returns `Method not found`; clients should
+refresh lists explicitly. Streamable HTTP and true subprocess stdio tests
+enforce this boundary. See
+[the subscription decision record](docs/decisions/0001-subscriptions-require-change-events.md)
+for the conditions required before the capability can be enabled.
+
 ### Migrating from MCP 2025-11-25
 
 1. Upgrade the client to a `2026-07-28`-capable MCP SDK.

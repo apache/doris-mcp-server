@@ -49,6 +49,9 @@ under **Unreleased** until a new version is selected and published.
   `serverInfo`, and health endpoints on one product version source.
 - Documented the modern request headers, migration steps, and deployment
   constraints.
+- Recorded `subscriptions/listen` as intentionally unavailable until a real
+  cross-worker Doris change-event source exists, with discovery kept
+  capability-honest.
 - Positioned Dynamic Client Registration as a compatibility fallback behind
   preconfigured clients and Client ID Metadata Documents.
 - Persisted static bearer tokens as self-describing SHA-256/SHA-512 digests,
