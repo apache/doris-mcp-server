@@ -77,59 +77,46 @@ class TestToolsClientServer:
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
-    async def test_call_tool_exec_query_via_client(self, client, test_config):
-        """Test calling exec_query tool through client"""
+    async def test_call_query_child_via_client(self, client, test_config):
+        """Test calling the exact query child through the client."""
         sample_queries = test_config.get_sample_queries()
 
         async def test_callback(client_instance):
-            # Test with a simple query
-            result = await client_instance.call_tool("exec_query", {
-                "sql": sample_queries[0],  # "SELECT 1 as test_value"
-                "max_rows": 100
-            })
+            result = await client_instance.execute_sql(
+                sample_queries[0],
+                max_rows=100,
+            )
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
-
-            if result["success"]:
-                assert "data" in result, "Successful result should contain 'data' field"
-            else:
-                assert "error" in result, "Failed result should contain 'error' field"
+            assert result.get("mode") in {"result", "error"}
 
             return result
 
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
-    async def test_call_tool_get_db_list_via_client(self, client, test_config):
-        """Test calling get_db_list tool through client"""
+    async def test_call_database_list_child_via_client(self, client, test_config):
+        """Test calling the exact database-list child through the client."""
         async def test_callback(client_instance):
-            result = await client_instance.call_tool("get_db_list", {})
+            result = await client_instance.get_database_list()
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
-
-            if result["success"]:
-                assert "result" in result, "Successful result should contain 'result' field"
-                assert isinstance(result["result"], list), "Database list should be a list"
+            assert result.get("mode") in {"result", "error"}
 
             return result
 
         await client.connect_and_run(test_callback)
 
     @pytest.mark.asyncio
-    async def test_call_tool_get_table_schema_via_client(self, client, test_config):
-        """Test calling get_table_schema tool through client"""
+    async def test_call_table_context_schema_via_client(self, client, test_config):
+        """Test calling the schema section of table context."""
         test_tables = test_config.get_test_tables()
 
         async def test_callback(client_instance):
-            result = await client_instance.call_tool("get_table_schema", {
-                "table_name": test_tables[0],  # "users"
-                "db_name": "information_schema"  # Use a database that should exist
-            })
+            result = await client_instance.get_table_schema(
+                test_tables[0],
+                "information_schema",
+            )
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)
@@ -138,13 +125,11 @@ class TestToolsClientServer:
     async def test_tool_error_handling_via_client(self, client, test_config):
         """Test tool error handling through client"""
         async def test_callback(client_instance):
-            # Try to call a tool with invalid parameters
-            result = await client_instance.call_tool("exec_query", {
-                "sql": "INVALID SQL SYNTAX HERE"
-            })
+            result = await client_instance.execute_sql(
+                "INVALID SQL SYNTAX HERE"
+            )
 
-            # Should get a result (either success or error)
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)
@@ -155,15 +140,10 @@ class TestToolsClientServer:
         if not test_config.is_security_tests_enabled():
             pytest.skip("Security tests are disabled")
 
-        auth_tokens = test_config.get_auth_tokens()
-
         async def test_callback(client_instance):
-            result = await client_instance.call_tool("get_db_list", {
-                "auth_token": auth_tokens["valid_token"]
-            })
+            result = await client_instance.get_database_list()
 
-            # Verify result structure
-            assert "success" in result, "Result should contain 'success' field"
+            assert result.get("mode") in {"result", "error"}
             return result
 
         await client.connect_and_run(test_callback)

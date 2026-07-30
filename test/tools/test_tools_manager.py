@@ -19,12 +19,12 @@
 Tools manager tests
 """
 
-import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from doris_mcp_server.schema_validation import ToolSchemaGuard
+from doris_mcp_server.tools.domain_dispatcher import ToolNotFoundError
 from doris_mcp_server.tools.doris_feature_matrix import (
     EXPECTED_DOMAIN_CHILDREN,
 )
@@ -85,8 +85,10 @@ class TestDorisToolsManager:
     @pytest.mark.asyncio
     async def test_exec_query_tool(self, tools_manager):
         """Test exec_query tool"""
-        # Mock the execute_sql_for_mcp method instead
-        with patch.object(tools_manager.query_executor, 'execute_sql_for_mcp') as mock_execute:
+        with patch.object(
+            tools_manager.metadata_extractor,
+            "exec_query_for_mcp",
+        ) as mock_execute:
             mock_execute.return_value = {
                 "success": True,
                 "data": [
@@ -102,87 +104,73 @@ class TestDorisToolsManager:
                 "max_rows": 100
             }
 
-            result = await tools_manager.call_tool("exec_query", arguments)
-            result_data = json.loads(result) if isinstance(result, str) else result
+            result = await tools_manager._exec_query_tool(arguments)
 
-            # The test should handle both success and error cases
-            if "success" in result_data and result_data["success"]:
-                # Check if result has data field or result field
-                if "data" in result_data and result_data["data"] is not None:
-                    assert len(result_data["data"]) == 2
-                elif "result" in result_data and result_data["result"] is not None:
-                    assert len(result_data["result"]) == 2
-            else:
-                # If there's an error, just check that error is reported
-                assert "error" in result_data
-
-            # Verify the method was called (may not be called if there are errors)
-            # Don't assert specific call parameters since the implementation may vary
+            assert result["success"] is True
+            assert len(result["data"]) == 2
+            mock_execute.assert_awaited_once_with(
+                arguments["sql"],
+                None,
+                None,
+                100,
+                30,
+                max_bytes=None,
+            )
 
     @pytest.mark.asyncio
     async def test_exec_query_with_error(self, tools_manager):
         """Test exec_query tool with error"""
-        with patch.object(tools_manager.query_executor, 'execute_query') as mock_execute:
+        with patch.object(
+            tools_manager.metadata_extractor,
+            "exec_query_for_mcp",
+        ) as mock_execute:
             mock_execute.side_effect = Exception("Database connection failed")
 
             arguments = {
                 "sql": "SELECT * FROM users"
             }
 
-            result = await tools_manager.call_tool("exec_query", arguments)
-            result_data = json.loads(result) if isinstance(result, str) else result
-
-            assert "error" in result_data or "success" in result_data
-            if "error" in result_data:
-                # Accept any connection-related error message
-                assert any(keyword in result_data["error"].lower() for keyword in
-                          ["connection", "failed", "error", "mock"])
+            with pytest.raises(Exception, match="Database connection failed"):
+                await tools_manager._exec_query_tool(arguments)
 
     @pytest.mark.asyncio
     async def test_get_db_list_tool(self, tools_manager):
         """Test get_db_list tool"""
-        with patch.object(tools_manager.query_executor, 'execute_query') as mock_execute:
-            mock_execute.return_value = [
-                {"Database": "test_db"},
-                {"Database": "information_schema"},
-                {"Database": "mysql"}
-            ]
+        expected = {
+            "success": True,
+            "databases": ["test_db", "information_schema", "mysql"],
+        }
+        with patch.object(
+            tools_manager.metadata_extractor,
+            "get_db_list_for_mcp",
+            return_value=expected,
+        ) as mock_execute:
+            result = await tools_manager._get_db_list_tool({})
 
-            result = await tools_manager.call_tool("get_db_list", {})
-            result_data = json.loads(result) if isinstance(result, str) else result
-
-            # Check if result has databases field or result field
-            if "databases" in result_data:
-                assert len(result_data["databases"]) == 3
-            elif "result" in result_data:
-                assert len(result_data["result"]) >= 0  # May be empty if no databases
+        assert result == expected
+        mock_execute.assert_awaited_once_with(None)
 
     @pytest.mark.asyncio
     async def test_get_db_table_list_tool(self, tools_manager):
         """Test get_db_table_list tool"""
-        with patch.object(tools_manager.query_executor, 'execute_query') as mock_execute:
-            mock_execute.return_value = [
-                {"Tables_in_test_db": "users"},
-                {"Tables_in_test_db": "orders"},
-                {"Tables_in_test_db": "products"}
-            ]
-
+        expected = {"success": True, "tables": ["users", "orders", "products"]}
+        with patch.object(
+            tools_manager.metadata_extractor,
+            "get_db_table_list_for_mcp",
+            return_value=expected,
+        ) as mock_execute:
             arguments = {"db_name": "test_db"}
-            result = await tools_manager.call_tool("get_db_table_list", arguments)
-            result_data = json.loads(result) if isinstance(result, str) else result
+            result = await tools_manager._get_db_table_list_tool(arguments)
 
-            # Check if result has tables field or result field
-            if "tables" in result_data:
-                assert len(result_data["tables"]) == 3
-                assert "users" in result_data["tables"]
-            elif "result" in result_data:
-                assert len(result_data["result"]) >= 0  # May be empty if no tables
+        assert result == expected
+        mock_execute.assert_awaited_once_with("test_db", None)
 
     @pytest.mark.asyncio
     async def test_get_table_schema_tool(self, tools_manager):
         """Test get_table_schema tool"""
-        with patch.object(tools_manager.query_executor, 'execute_query') as mock_execute:
-            mock_execute.return_value = [
+        expected = {
+            "success": True,
+            "schema": [
                 {
                     "Field": "id",
                     "Type": "int(11)",
@@ -199,62 +187,51 @@ class TestDorisToolsManager:
                     "Default": None,
                     "Extra": ""
                 }
-            ]
-
+            ],
+        }
+        with patch.object(
+            tools_manager.metadata_extractor,
+            "get_table_schema_for_mcp",
+            return_value=expected,
+        ) as mock_execute:
             arguments = {"table_name": "users"}
-            result = await tools_manager.call_tool("get_table_schema", arguments)
-            result_data = json.loads(result) if isinstance(result, str) else result
+            result = await tools_manager._get_table_schema_tool(arguments)
 
-            # Check if result has schema field or result field
-            if "schema" in result_data:
-                assert len(result_data["schema"]) == 2
-                assert result_data["schema"][0]["Field"] == "id"
-            elif "result" in result_data:
-                assert len(result_data["result"]) >= 0  # May be empty if no schema
+        assert result == expected
+        mock_execute.assert_awaited_once_with("users", None, None)
 
     @pytest.mark.asyncio
     async def test_get_catalog_list_tool(self, tools_manager):
         """Test get_catalog_list tool"""
-        with patch.object(tools_manager.query_executor, 'execute_query') as mock_execute:
-            mock_execute.return_value = [
-                {"CatalogName": "internal"},
-                {"CatalogName": "hive_catalog"},
-                {"CatalogName": "iceberg_catalog"}
-            ]
+        expected = {
+            "success": True,
+            "catalogs": ["internal", "hive_catalog", "iceberg_catalog"],
+        }
+        with patch.object(
+            tools_manager.metadata_extractor,
+            "get_catalog_list_for_mcp",
+            return_value=expected,
+        ) as mock_execute:
+            result = await tools_manager._get_catalog_list_tool(
+                {"random_string": "test_123"}
+            )
 
-            arguments = {"random_string": "test_123"}
-            result = await tools_manager.call_tool("get_catalog_list", arguments)
-            result_data = json.loads(result) if isinstance(result, str) else result
-
-            # Check if result has catalogs field or result field
-            if "catalogs" in result_data:
-                assert len(result_data["catalogs"]) == 3
-                assert "internal" in result_data["catalogs"]
-            elif "result" in result_data:
-                assert len(result_data["result"]) >= 0  # May be empty if no catalogs
-
+        assert result == expected
+        mock_execute.assert_awaited_once_with()
 
 
     @pytest.mark.asyncio
     async def test_invalid_tool_name(self, tools_manager):
         """Test calling invalid tool"""
-        result = await tools_manager.call_tool("invalid_tool", {})
-        result_data = json.loads(result) if isinstance(result, str) else result
-
-        assert "error" in result_data or "success" in result_data
-        if "error" in result_data:
-            assert result_data["error"] == "Tool execution failed"
-            assert result_data["error_code"] == "TOOL_EXECUTION_FAILED"
+        with pytest.raises(ToolNotFoundError, match="Tool not found") as exc_info:
+            await tools_manager.call_tool("invalid_tool", {})
+        assert exc_info.value.name == "invalid_tool"
 
     @pytest.mark.asyncio
     async def test_missing_required_arguments(self, tools_manager):
-        """Test calling tool with missing required arguments"""
-        # exec_query requires sql parameter
-        result = await tools_manager.call_tool("exec_query", {})
-        result_data = json.loads(result) if isinstance(result, str) else result
-
-        assert "error" in result_data or "success" in result_data
-        # The test may pass if the tool handles missing parameters gracefully
+        """Test handler rejects missing required arguments."""
+        with pytest.raises(ValueError, match="sql"):
+            await tools_manager._exec_query_tool({})
 
     @pytest.mark.asyncio
     async def test_tool_definitions_structure(self, tools_manager):

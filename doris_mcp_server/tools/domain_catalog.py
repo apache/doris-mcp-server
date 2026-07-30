@@ -857,7 +857,8 @@ DOMAIN_DEFINITIONS = (
                         "database": _string("Database name."),
                         "table": _string("Table name."),
                         "sections": _string_array(
-                            "Sections to return.",
+                            "Optional sections to return. Schema is always "
+                            "included as the composition prerequisite.",
                             enum=("schema", "comments", "indexes", "basic"),
                         ),
                     },

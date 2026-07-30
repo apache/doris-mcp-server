@@ -73,6 +73,7 @@ from .state_handles import (
     DEFAULT_STATE_HANDLE_TTL_SECONDS,
     StateHandleCodec,
 )
+from .tools.domain_dispatcher import ToolNotFoundError
 from .trace_context import TraceContextSanitizingMiddleware
 from .utils.redaction import (
     redact_error_payload,
@@ -432,6 +433,15 @@ def create_doris_mcp_server(
             payload = await tools_manager.call_tool(params.name, arguments)
         except OperationAuthorizationError:
             raise
+        except ToolNotFoundError as exc:
+            raise MCPError(
+                code=INVALID_PARAMS,
+                message="Tool not found",
+                data={
+                    "name": redact_sensitive_text(exc.name),
+                    "toolErrorCode": "TOOL_NOT_FOUND",
+                },
+            ) from exc
         except Exception:
             logger.exception("Tool execution failed")
             payload = json.dumps(

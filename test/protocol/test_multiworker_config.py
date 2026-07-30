@@ -70,6 +70,41 @@ def test_custom_tool_provider_allowlist_is_explicit_and_validated(monkeypatch):
     assert "MCP tool providers must be a list" in configured.validate()
 
 
+def test_tool_exposure_mode_is_explicit_validated_and_serialized(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("MCP_TOOL_EXPOSURE_MODE", raising=False)
+    configured = DorisConfig.from_env()
+    assert configured.tool_exposure.mode == "hierarchical"
+
+    monkeypatch.setenv("MCP_TOOL_EXPOSURE_MODE", "flat")
+    configured = DorisConfig.from_env()
+    assert configured.tool_exposure.mode == "flat"
+    assert configured.to_dict()["tool_exposure"] == {"mode": "flat"}
+    assert configured.get_config_summary()["tool_exposure"] == {
+        "mode": "flat"
+    }
+    assert configured.validate() == []
+
+    configured.tool_exposure.mode = "legacy"
+    assert (
+        "MCP tool exposure mode must be hierarchical or flat"
+        in configured.validate()
+    )
+
+
+def test_tool_exposure_mode_loads_from_json_config(tmp_path) -> None:
+    config_path = tmp_path / "doris-mcp.json"
+    config_path.write_text(
+        json.dumps({"tool_exposure": {"mode": "flat"}}),
+        encoding="utf-8",
+    )
+
+    configured = DorisConfig.from_file(str(config_path))
+
+    assert configured.tool_exposure.mode == "flat"
+
+
 def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
     monkeypatch,
 ):
@@ -114,6 +149,7 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.enable_legacy_http_adapter = True
     config.mcp_list_page_size = 17
     config.mcp_tool_providers = ["orders_api", "customer-tools"]
+    config.tool_exposure.mode = "flat"
     config.mcp_state_handle_secret = "parent-shared-state-handle-secret-value"
     config.mcp_state_handle_ttl_seconds = 45
 
@@ -151,6 +187,7 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.enable_legacy_http_adapter is True
     assert child_config.mcp_list_page_size == 17
     assert child_config.mcp_tool_providers == ["orders_api", "customer-tools"]
+    assert child_config.tool_exposure.mode == "flat"
     assert (
         child_config.mcp_state_handle_secret
         == "parent-shared-state-handle-secret-value"

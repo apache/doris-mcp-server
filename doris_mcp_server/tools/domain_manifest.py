@@ -89,7 +89,7 @@ DOMAIN_TOOL_INPUT_SCHEMA: dict[str, Any] = {
 # The complete child contract is validated by DiscoveryEnvelope before it reaches
 # the protocol layer. This compact outer schema avoids repeating the manifest
 # implementation schema eight times in tools/list.
-DOMAIN_DISCOVERY_OUTPUT_SCHEMA: dict[str, Any] = {
+_DOMAIN_MANIFEST_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "mode": {"type": "string", "const": "manifest"},
@@ -109,6 +109,85 @@ DOMAIN_DISCOVERY_OUTPUT_SCHEMA: dict[str, Any] = {
         "children",
     ],
     "additionalProperties": False,
+}
+
+_DOMAIN_EXECUTION_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string", "const": "result"},
+        "domain": {"type": "string"},
+        "child_tool": {"type": "string"},
+        "manifest_version": {"type": "string"},
+        "data": {"type": "object"},
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "request_id": {"type": "string"},
+                "duration_ms": {"type": "number", "minimum": 0},
+                "source": {"type": "string"},
+                "truncated": {"type": "boolean"},
+            },
+            "required": [
+                "request_id",
+                "duration_ms",
+                "source",
+                "truncated",
+            ],
+            "additionalProperties": False,
+        },
+        "warnings": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+    },
+    "required": [
+        "mode",
+        "domain",
+        "child_tool",
+        "manifest_version",
+        "data",
+        "metadata",
+        "warnings",
+    ],
+    "additionalProperties": False,
+}
+
+DOMAIN_ERROR_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string", "const": "error"},
+        "domain": {"type": "string", "minLength": 1},
+        "child_tool": {"type": "string", "minLength": 1},
+        "manifest_version": {"type": "string", "minLength": 1},
+        "error": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "enum": [code.value for code in DomainErrorCode],
+                },
+                "message": {"type": "string", "minLength": 1},
+                "retryable": {"type": "boolean"},
+                "details": {
+                    "type": "object",
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["code", "message", "retryable", "details"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["mode", "domain", "error"],
+    "additionalProperties": False,
+}
+
+DOMAIN_TOOL_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "oneOf": [
+        _DOMAIN_MANIFEST_OUTPUT_SCHEMA,
+        _DOMAIN_EXECUTION_OUTPUT_SCHEMA,
+        DOMAIN_ERROR_OUTPUT_SCHEMA,
+    ],
 }
 
 
@@ -193,6 +272,36 @@ def authorized_child_discovery(
         child.authorization_policy in child_controls
         or discover_policy in child_controls
     )
+
+
+def authorized_child_execution(
+    auth_context: Any | None,
+    domain: DomainDefinition,
+    child: ChildToolDefinition,
+) -> bool:
+    """Require an exact child call grant on OAuth execution paths."""
+    del domain
+    if auth_context is None:
+        return True
+
+    controls = {
+        str(value)
+        for collection_name in ("permissions", "oauth_scopes")
+        for value in (getattr(auth_context, collection_name, None) or ())
+    }
+    if child.authorization_policy in controls:
+        return True
+
+    auth_method = str(getattr(auth_context, "auth_method", ""))
+    if auth_method in {"external_oauth", "doris_oauth"}:
+        return False
+
+    child_controls = {
+        value
+        for value in controls
+        if value.startswith(("child:call:", "child:discover:"))
+    }
+    return not child_controls
 
 
 class DomainManifestService:
@@ -399,7 +508,7 @@ def _build_top_level_tool(domain: DomainDefinition) -> Tool:
         title=domain.title,
         description=domain.description + DOMAIN_DISCOVERY_DESCRIPTION_SUFFIX,
         input_schema=DOMAIN_TOOL_INPUT_SCHEMA,
-        output_schema=DOMAIN_DISCOVERY_OUTPUT_SCHEMA,
+        output_schema=DOMAIN_TOOL_OUTPUT_SCHEMA,
         annotations=ToolAnnotations(
             title=domain.title,
             read_only_hint=annotations.read_only,
@@ -563,7 +672,8 @@ def _validate_enum_budget(
 
 __all__ = [
     "DOMAIN_DISCOVERY_DESCRIPTION_SUFFIX",
-    "DOMAIN_DISCOVERY_OUTPUT_SCHEMA",
+    "DOMAIN_ERROR_OUTPUT_SCHEMA",
+    "DOMAIN_TOOL_OUTPUT_SCHEMA",
     "DOMAIN_TOOL_INPUT_SCHEMA",
     "MAX_CHILD_DESCRIPTION_CHARACTERS",
     "MAX_CHILD_SCHEMA_BYTES",
@@ -576,5 +686,6 @@ __all__ = [
     "DomainManifestService",
     "PendingCapabilityProvider",
     "authorized_child_discovery",
+    "authorized_child_execution",
     "pending_capability_availability",
 ]

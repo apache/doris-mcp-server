@@ -220,6 +220,9 @@ export ENABLE_LEGACY_HTTP_ADAPTER=false
 
 # Bound each resources/list, tools/list, and prompts/list response.
 export MCP_LIST_PAGE_SIZE=100
+# Expose eight progressive-disclosure domains by default. Set flat to expose
+# the same 47 children under exact collision-free formal names.
+export MCP_TOOL_EXPOSURE_MODE=hierarchical
 # Load only these installed custom tool providers. Empty disables extensions.
 export MCP_TOOL_PROVIDERS="orders_api"
 # A launch-local key is generated automatically. Configure one shared
@@ -320,6 +323,10 @@ cp .env.example .env
         modern traffic always uses `POST /mcp`
     *   `MCP_LIST_PAGE_SIZE`: Maximum resources, tools, or prompts returned
         per protocol page (default: 100; range: 1-1000)
+    *   `MCP_TOOL_EXPOSURE_MODE`: Tool exposure mode. `hierarchical` returns
+        eight domain tools with progressive child discovery; `flat` returns
+        the same 47 children under exact collision-free formal names
+        (default: hierarchical)
     *   `MCP_TOOL_PROVIDERS`: Comma-separated allowlist of installed
         `doris_mcp_server.tool_providers` entry points (default: empty)
     *   `MCP_STATE_HANDLE_SECRET`: Optional shared high-entropy key (at least
@@ -354,7 +361,8 @@ cp .env.example .env
     *   `ENABLE_MASKING`: Enable data masking (default: true)
     *   `MAX_RESULT_ROWS`: Deployment ceiling for returned query rows
         (default: 10000; absolute hard cap: 100000)
-    *   `DEFAULT_RESULT_ROWS`: Default row budget when `exec_query.max_rows`
+    *   `DEFAULT_RESULT_ROWS`: Default row budget when
+        `doris_query.execute_query.max_rows`
         is omitted (default: 100; cannot exceed `MAX_RESULT_ROWS`)
 *   **ADBC Configuration (New in v0.5.0)**:
     *   `ADBC_DEFAULT_MAX_ROWS`: Default maximum rows for ADBC queries
@@ -720,11 +728,18 @@ Interaction with the Doris MCP Server requires an **MCP Client**. The client con
 **Main Interaction Flow:**
 
 1.  **(Optional) Discover the Server**: A modern client can call `server/discover` to inspect supported protocol versions, capabilities, and identity.
-2.  **Discover Tools**: Call `tools/list` to get the supported tools, descriptions, and parameter schemas.
-3.  **Call Tool**: Send a self-contained `tools/call` request with its required `_meta`, `name`, and `arguments`.
-    *   **Example: Get Table Schema**
-        *   `name`: `get_table_schema`
-        *   `arguments`: Include `table_name`, `db_name`, `catalog_name`.
+2.  **Discover Domains**: In the default `hierarchical` mode, `tools/list`
+    returns the eight bounded read-only domains. Call a domain without
+    arguments to discover its exact child names, schemas, and availability.
+3.  **Call an Exact Child**: Call the same domain with `child_tool`,
+    `arguments`, and the discovered `manifest_version`.
+    *   **Example: Get the Table Schema Section**
+        *   `name`: `doris_catalog`
+        *   `child_tool`: `get_table_context`
+        *   `arguments`: Include `database`, `table`, optional `catalog`, and
+            `sections: ["schema"]`.
+    *   In `flat` mode, call the collision-free formal name
+        `doris_catalog_get_table_context` with the child arguments directly.
 4.  **Handle Response**:
     *   **Non-streaming**: The client receives a response containing `content` or `isError`.
     *   **Streaming**: The client receives a series of progress notifications, followed by a final response.
@@ -739,9 +754,11 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 
 #### Key Features:
 
-*   **Multi-Catalog Metadata Access**: All metadata tools (`get_db_list`, `get_db_table_list`, `get_table_schema`, etc.) support an optional `catalog_name` parameter to query specific catalogs.
-*   **Cross-Catalog SQL Queries**: Execute SQL queries that span multiple catalogs using three-part table naming.
-*   **Catalog Discovery**: Use `get_catalog_list` to discover available catalogs and their types.
+*   **Multi-Catalog Metadata Access**: The `doris_catalog` children accept an
+    optional `catalog` argument where applicable.
+*   **Cross-Catalog SQL Queries**: Use
+    `doris_query.execute_query` with three-part table naming.
+*   **Catalog Discovery**: Use `doris_catalog.list_catalogs`.
 
 #### Three-Part Naming Requirement:
 
@@ -755,26 +772,37 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 1.  **Get Available Catalogs:**
     ```json
     {
-      "tool_name": "get_catalog_list",
-      "arguments": {"random_string": "unique_id"}
+      "tool_name": "doris_catalog",
+      "arguments": {
+        "child_tool": "list_catalogs",
+        "manifest_version": "<value returned by domain discovery>",
+        "arguments": {}
+      }
     }
     ```
 
 2.  **Get Databases in Specific Catalog:**
     ```json
     {
-      "tool_name": "get_db_list", 
-      "arguments": {"random_string": "unique_id", "catalog_name": "mysql"}
+      "tool_name": "doris_catalog",
+      "arguments": {
+        "child_tool": "list_databases",
+        "manifest_version": "<value returned by domain discovery>",
+        "arguments": {"catalog": "mysql"}
+      }
     }
     ```
 
 3.  **Query Internal Catalog:**
     ```json
     {
-      "tool_name": "exec_query",
+      "tool_name": "doris_query",
       "arguments": {
-        "random_string": "unique_id",
-        "sql": "SELECT COUNT(*) FROM internal.ssb.customer"
+        "child_tool": "execute_query",
+        "manifest_version": "<value returned by domain discovery>",
+        "arguments": {
+          "sql": "SELECT COUNT(*) FROM internal.ssb.customer"
+        }
       }
     }
     ```
@@ -782,10 +810,13 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 4.  **Query External Catalog:**
     ```json
     {
-      "tool_name": "exec_query", 
+      "tool_name": "doris_query",
       "arguments": {
-        "random_string": "unique_id",
-        "sql": "SELECT COUNT(*) FROM mysql.ssb.customer"
+        "child_tool": "execute_query",
+        "manifest_version": "<value returned by domain discovery>",
+        "arguments": {
+          "sql": "SELECT COUNT(*) FROM mysql.ssb.customer"
+        }
       }
     }
     ```
@@ -793,10 +824,12 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 5.  **Cross-Catalog Query:**
     ```json
     {
-      "tool_name": "exec_query",
+      "tool_name": "doris_query",
       "arguments": {
-        "random_string": "unique_id", 
-        "sql": "SELECT i.c_name, m.external_data FROM internal.ssb.customer i JOIN mysql.test.user_info m ON i.c_custkey = m.customer_id"
+        "child_tool": "execute_query",
+        "arguments": {
+          "sql": "SELECT i.c_name, m.external_data FROM internal.ssb.customer i JOIN mysql.test.user_info m ON i.c_custkey = m.customer_id"
+        }
       }
     }
     ```
@@ -1940,22 +1973,27 @@ the request metadata, HTTP headers, migration steps, and deployment limits.
 
 4. **Test ADBC Connection**:
    ```bash
-   # Use get_adbc_connection_info tool to verify setup
+   # Discover doris_query, then call its get_adbc_connection_info child
    # Should show "status": "ready" and port connectivity
    ```
 
-### Q: How to use the new data analytics tools? (New in v0.5.0)
+### Q: How to use the data governance and pipeline tools?
 
-**A:** The 7 new analytics tools provide comprehensive data governance capabilities:
+**A:** Discover the relevant domain first, retain its `manifest_version`, and
+then call an exact child with schema-valid arguments:
 
-**Data Quality Analysis:**
+**Column Analysis:**
 ```json
 {
-  "tool_name": "analyze_data_quality",
+  "tool_name": "doris_governance",
   "arguments": {
-    "table_name": "customer_data",
-    "analysis_scope": "comprehensive",
-    "sample_size": 100000
+    "child_tool": "analyze_columns",
+    "manifest_version": "<value returned by domain discovery>",
+    "arguments": {
+      "database": "analytics",
+      "table": "customer_data",
+      "sample_ratio": 0.1
+    }
   }
 }
 ```
@@ -1963,10 +2001,16 @@ the request metadata, HTTP headers, migration steps, and deployment limits.
 **Column Lineage Tracking:**
 ```json
 {
-  "tool_name": "trace_column_lineage", 
+  "tool_name": "doris_governance",
   "arguments": {
-    "target_columns": ["users.email", "orders.customer_id"],
-    "analysis_depth": 3
+    "child_tool": "trace_column_lineage",
+    "manifest_version": "<value returned by domain discovery>",
+    "arguments": {
+      "object": "internal.analytics.orders",
+      "column": "customer_id",
+      "direction": "both",
+      "depth": 3
+    }
   }
 }
 ```
@@ -1974,10 +2018,15 @@ the request metadata, HTTP headers, migration steps, and deployment limits.
 **Data Freshness Monitoring:**
 ```json
 {
-  "tool_name": "monitor_data_freshness",
+  "tool_name": "doris_pipeline",
   "arguments": {
-    "freshness_threshold_hours": 24,
-    "include_update_patterns": true
+    "child_tool": "monitor_data_freshness",
+    "manifest_version": "<value returned by domain discovery>",
+    "arguments": {
+      "database": "analytics",
+      "table": "orders",
+      "threshold_seconds": 86400
+    }
   }
 }
 ```
@@ -1985,11 +2034,14 @@ the request metadata, HTTP headers, migration steps, and deployment limits.
 **Performance Analytics:**
 ```json
 {
-  "tool_name": "analyze_slow_queries_topn",
+  "tool_name": "doris_query",
   "arguments": {
-    "days": 7,
-    "top_n": 20,
-    "include_patterns": true
+    "child_tool": "list_slow_queries",
+    "manifest_version": "<value returned by domain discovery>",
+    "arguments": {
+      "window_minutes": 10080,
+      "limit": 20
+    }
   }
 }
 ```
@@ -2145,7 +2197,7 @@ cat logs/doris_mcp_server_critical.log
    database route, so run separate stdio processes when clients need separate
    clusters. `exec_adbc_query` is intentionally fail-closed on token-bound
    routes because the current Arrow Flight client is process-global; use
-   `exec_query` or a separate MCP process for that cluster.
+   `doris_query.execute_query` or a separate MCP process for that cluster.
 
 ### Q: How is Doris-backed OAuth different from external OAuth/OIDC?
 

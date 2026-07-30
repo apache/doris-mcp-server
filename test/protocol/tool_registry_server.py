@@ -28,6 +28,12 @@ from mcp.types import GetPromptResult, Prompt, Resource
 
 from doris_mcp_server import __version__
 from doris_mcp_server.protocol import create_doris_mcp_server
+from doris_mcp_server.tools.domain_models import (
+    Availability,
+    AvailabilityStatus,
+    ChildToolDefinition,
+    DomainDefinition,
+)
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
 from doris_mcp_server.utils.db import DorisConnectionManager
@@ -62,17 +68,54 @@ class RegistryToolsManager(DorisToolsManager):
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
         return {
-            "registry_dispatch": True,
-            "sql_length": len(self._required_string(arguments, "sql")),
+            "success": True,
+            "data": [
+                {
+                    "registry_dispatch": True,
+                    "sql_length": len(self._required_string(arguments, "sql")),
+                }
+            ],
+            "row_count": 1,
+            "metadata": {
+                "columns": ["registry_dispatch", "sql_length"],
+            },
         }
 
 
+class RegistryAvailabilityProvider:
+    """Enable only the deterministic query handler used by this fixture."""
+
+    async def availability_for(
+        self,
+        domain: DomainDefinition,
+        child: ChildToolDefinition,
+        auth_context: Any | None,
+    ) -> Availability:
+        del auth_context
+        if domain.name == "doris_query" and child.name == "execute_query":
+            return Availability(
+                status=AvailabilityStatus.AVAILABLE,
+                callable=True,
+                reason_code="FIXTURE_HANDLER_READY",
+                active_variant=child.support_contract.variants[0].name,
+                evidence_sources=("fixture_handler",),
+            )
+        return Availability(
+            status=AvailabilityStatus.UNKNOWN,
+            callable=False,
+            reason_code="FIXTURE_HANDLER_PENDING",
+        )
+
+
 def create_registry_test_server():
-    config = DorisConfig()
+    config = DorisConfig.from_env()
     connection_manager = DorisConnectionManager(config)
     return create_doris_mcp_server(
         resources_manager=EmptyResourcesManager(),
-        tools_manager=RegistryToolsManager(connection_manager),
+        tools_manager=RegistryToolsManager(
+            connection_manager,
+            domain_availability_provider=RegistryAvailabilityProvider(),
+        ),
         prompts_manager=EmptyPromptsManager(),
         name="doris-mcp-tool-registry-test",
         version=__version__,
@@ -92,4 +135,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-

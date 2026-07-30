@@ -17,6 +17,7 @@
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -1343,6 +1344,38 @@ async def test_true_subprocess_stdio_uses_production_domain_catalog():
         assert called.structured_content["mode"] == "manifest"
         assert called.structured_content["domain"] == "doris_catalog"
 
+        query_manifest = await modern.call_tool("doris_query", {})
+        executed = await modern.call_tool(
+            "doris_query",
+            {
+                "child_tool": "execute_query",
+                "arguments": {"sql": "SELECT 1"},
+                "manifest_version": query_manifest.structured_content[
+                    "manifest_version"
+                ],
+            },
+        )
+        assert executed.is_error is False
+        assert executed.structured_content["mode"] == "result"
+        assert executed.structured_content["data"]["data"]["rows"] == [
+            {
+                "registry_dispatch": True,
+                "sql_length": 8,
+            }
+        ]
+
+        with pytest.raises(MCPError) as old_name:
+            await modern.call_tool("exec_query", {"sql": "SELECT 1"})
+        assert old_name.value.code == -32602
+        assert old_name.value.message == "Tool not found"
+        assert old_name.value.data == {
+            "name": "exec_query",
+            "toolErrorCode": "TOOL_NOT_FOUND",
+        }
+
+        recovered = await modern.call_tool("doris_query", {})
+        assert recovered.structured_content["mode"] == "manifest"
+
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
         tools = {
             tool.name: tool
@@ -1352,6 +1385,47 @@ async def test_true_subprocess_stdio_uses_production_domain_catalog():
         called = await legacy.call_tool("doris_catalog", {})
         assert called.structured_content["mode"] == "manifest"
         assert called.structured_content["domain"] == "doris_catalog"
+
+
+@pytest.mark.asyncio
+async def test_true_subprocess_stdio_formal_flat_mode_executes_and_recovers():
+    server_script = Path(__file__).with_name("tool_registry_server.py")
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(server_script)],
+        env={
+            **os.environ,
+            "MCP_TOOL_EXPOSURE_MODE": "flat",
+        },
+    )
+
+    async with Client(stdio_client(server_params)) as modern:
+        tools = {
+            tool.name: tool
+            for tool in (await modern.list_tools(cache_mode="bypass")).tools
+        }
+        assert len(tools) == 47
+        assert "doris_query_execute_query" in tools
+        assert not set(EXPECTED_DOMAIN_CHILDREN).intersection(tools)
+        assert "exec_query" not in tools
+
+        executed = await modern.call_tool(
+            "doris_query_execute_query",
+            {"sql": "SELECT 1"},
+        )
+        assert executed.is_error is False
+        assert executed.structured_content["domain"] == "doris_query"
+        assert executed.structured_content["child_tool"] == "execute_query"
+
+        with pytest.raises(MCPError) as old_name:
+            await modern.call_tool("exec_query", {"sql": "SELECT 1"})
+        assert old_name.value.message == "Tool not found"
+
+        recovered = await modern.call_tool(
+            "doris_query_execute_query",
+            {"sql": "SELECT 2"},
+        )
+        assert recovered.is_error is False
 
 
 @pytest.mark.asyncio

@@ -462,7 +462,10 @@ class DomainToolRequest(ContractModel):
 
     @property
     def execution_arguments(self) -> JsonObject:
-        return dict(self.arguments or {})
+        return cast(
+            JsonObject,
+            _thaw_json(self.arguments or {}),
+        )
 
 
 class ChildManifestEntry(ContractModel):
