@@ -311,6 +311,45 @@ async def test_get_connection_context_uses_owner_based_release(manager, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_token_database_config_takes_priority_over_valid_global_config(
+    manager,
+    monkeypatch,
+):
+    token = "tenant-token"
+    token_db_config = SimpleNamespace(
+        host="tenant-fe",
+        port=19030,
+        user="tenant_reader",
+        password="tenant_pw",
+        database="tenant_db",
+        charset="utf8mb4",
+    )
+    manager.token_manager = SimpleNamespace(
+        get_database_config_by_token=lambda raw: (
+            token_db_config if raw == token else None
+        )
+    )
+    token_pool = FakePool("tenant")
+    create_pool = AsyncMock(return_value=token_pool)
+    monkeypatch.setattr(manager, "_create_pool_with_config", create_pool)
+
+    pool, selected_config = await manager.get_pool_for_token(token)
+
+    assert pool is token_pool
+    assert selected_config == {
+        "host": "tenant-fe",
+        "port": 19030,
+        "user": "tenant_reader",
+        "password": "tenant_pw",
+        "database": "tenant_db",
+        "charset": "utf8mb4",
+    }
+    create_pool.assert_awaited_once_with(selected_config)
+    assert manager.original_db_config["user"] == "root"
+    assert manager.active_db_config["user"] == "root"
+
+
+@pytest.mark.asyncio
 async def test_static_token_release_uses_captured_owner_pool(manager, monkeypatch):
     token = "static-token"
     old_pool = FakePool("token-v1")
