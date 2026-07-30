@@ -20,7 +20,7 @@ from typing import Any
 
 from mcp.types import Tool
 
-from ..result_limits import configured_result_limits
+from ..result_limits import configured_default_result_rows, configured_result_limits
 from ..utils.config import ADBCConfig
 from .tool_registry import ToolDefinitionRegistry
 
@@ -32,6 +32,7 @@ def build_tool_registry(
     """Build immutable tool metadata and bind it to a handler owner."""
     adbc_config = getattr(config, "adbc", None) or ADBCConfig()
     result_limits = configured_result_limits(config)
+    default_result_rows = configured_default_result_rows(config)
     adbc_default_max_rows = min(
         adbc_config.default_max_rows,
         result_limits.max_rows,
@@ -54,7 +55,7 @@ def build_tool_registry(
 
 - catalog_name (string) [Optional] - Reference catalog name for context, defaults to current catalog
 
-- max_rows (integer) [Optional] - Maximum number of rows to return, default 100
+- max_rows (integer) [Optional] - Maximum number of rows to return, defaults to the configured DEFAULT_RESULT_ROWS value
 
 - max_bytes (integer) [Optional] - Maximum UTF-8 JSON bytes for returned row data
 
@@ -78,7 +79,7 @@ def build_tool_registry(
                     "max_rows": {
                         "type": "integer",
                         "description": "Maximum number of rows to return",
-                        "default": 100,
+                        "default": default_result_rows,
                         "minimum": 1,
                         "maximum": result_limits.max_rows,
                     },

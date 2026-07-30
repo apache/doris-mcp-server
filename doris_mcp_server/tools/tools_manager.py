@@ -31,6 +31,7 @@ from ..auth.operation_policy import (
     authorize_operation,
     filter_tools_for_auth_context,
 )
+from ..result_limits import configured_default_result_rows
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.analysis_tools import MemoryTracker, SQLAnalyzer, TableAnalyzer
 from ..utils.data_exploration_tools import DataExplorationTools
@@ -224,7 +225,10 @@ class DorisToolsManager:
         sql = self._required_string(arguments, "sql")
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
-        max_rows = arguments.get("max_rows", 100)
+        max_rows = arguments.get(
+            "max_rows",
+            configured_default_result_rows(self.connection_manager.config),
+        )
         max_bytes = arguments.get("max_bytes")
         timeout = arguments.get("timeout", 30)
 

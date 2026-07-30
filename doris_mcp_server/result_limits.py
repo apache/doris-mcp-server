@@ -34,6 +34,7 @@ ABSOLUTE_MAX_QUERY_TIMEOUT_SECONDS = 300
 MIN_RESULT_BYTES = 256
 
 DEFAULT_MAX_RESULT_ROWS = 10_000
+DEFAULT_RESULT_ROWS = 100
 DEFAULT_MAX_RESULT_BYTES = 1024 * 1024
 DEFAULT_QUERY_TIMEOUT_SECONDS = 300
 
@@ -82,6 +83,17 @@ def configured_result_limits(config: object | None) -> ResultLimits:
             default=DEFAULT_QUERY_TIMEOUT_SECONDS,
             hard_maximum=ABSOLUTE_MAX_QUERY_TIMEOUT_SECONDS,
         ),
+    )
+
+
+def configured_default_result_rows(config: object | None) -> int:
+    """Return the configured default row budget bounded by the deployment ceiling."""
+    ceilings = configured_result_limits(config)
+    performance = getattr(config, "performance", None)
+    return _configured_positive_int(
+        getattr(performance, "default_result_rows", None),
+        default=min(DEFAULT_RESULT_ROWS, ceilings.max_rows),
+        hard_maximum=ceilings.max_rows,
     )
 
 

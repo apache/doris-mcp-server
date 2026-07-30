@@ -17,7 +17,7 @@
 """Tests for non-escalating query result and timeout budgets."""
 
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -37,6 +37,7 @@ from doris_mcp_server.utils.query_executor import DorisQueryExecutor
 def _config(
     *,
     rows: int = 50,
+    default_rows: int = 10,
     result_bytes: int = 4096,
     timeout: int = 20,
 ) -> SimpleNamespace:
@@ -46,6 +47,7 @@ def _config(
             enable_security_check=False,
         ),
         performance=SimpleNamespace(
+            default_result_rows=default_rows,
             max_result_bytes=result_bytes,
             query_timeout=timeout,
             max_cache_size=10,
@@ -128,8 +130,56 @@ def test_exec_query_schema_advertises_effective_ceilings() -> None:
     properties = tool.input_schema["properties"]
 
     assert properties["max_rows"]["maximum"] == 50
+    assert properties["max_rows"]["default"] == 10
     assert properties["max_bytes"]["maximum"] == 4096
     assert properties["timeout"]["maximum"] == 20
+
+
+def test_config_validation_rejects_default_rows_above_ceiling() -> None:
+    config = DorisConfig()
+    config.security.max_result_rows = 50
+    config.performance.default_result_rows = 51
+
+    assert (
+        "Default result rows must not exceed the configured maximum result rows (50)"
+        in config.validate()
+    )
+
+
+def test_environment_configures_default_rows_independently_from_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("MAX_RESULT_ROWS", "500")
+    monkeypatch.setenv("DEFAULT_RESULT_ROWS", "321")
+    monkeypatch.setenv("ADBC_DEFAULT_MAX_ROWS", "500")
+
+    config = DorisConfig.from_env(str(tmp_path / "missing.env"))
+
+    assert config.security.max_result_rows == 500
+    assert config.performance.default_result_rows == 321
+    assert config.validate() == []
+
+
+@pytest.mark.asyncio
+async def test_exec_query_uses_configured_default_rows_when_argument_is_omitted() -> None:
+    connection_manager = Mock()
+    connection_manager.config = _config(default_rows=17)
+    manager = DorisToolsManager(connection_manager)
+    manager.metadata_extractor.exec_query_for_mcp = AsyncMock()
+    manager.metadata_extractor.exec_query_for_mcp.return_value = {"success": True}
+
+    result = await manager._exec_query_tool({"sql": "SELECT 1"})
+
+    assert result == {"success": True}
+    manager.metadata_extractor.exec_query_for_mcp.assert_called_once_with(
+        "SELECT 1",
+        None,
+        None,
+        17,
+        30,
+        max_bytes=None,
+    )
 
 
 def test_exec_adbc_query_schema_advertises_effective_ceilings() -> None:

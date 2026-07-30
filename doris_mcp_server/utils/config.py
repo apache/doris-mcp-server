@@ -40,6 +40,7 @@ from ..result_limits import (
     ABSOLUTE_MAX_RESULT_ROWS,
     DEFAULT_MAX_RESULT_BYTES,
     DEFAULT_MAX_RESULT_ROWS,
+    DEFAULT_RESULT_ROWS,
     MIN_RESULT_BYTES,
 )
 from ..tools.tool_registry import (
@@ -507,6 +508,7 @@ class PerformanceConfig:
     # Concurrency control configuration
     max_concurrent_queries: int = 50
     query_timeout: int = 300
+    default_result_rows: int = DEFAULT_RESULT_ROWS
     max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
 
     # Connection pool optimization configuration
@@ -1045,6 +1047,12 @@ class DorisConfig:
         config.performance.query_timeout = int(
             os.getenv("QUERY_TIMEOUT", str(config.performance.query_timeout))
         )
+        config.performance.default_result_rows = int(
+            os.getenv(
+                "DEFAULT_RESULT_ROWS",
+                str(config.performance.default_result_rows),
+            )
+        )
         config.performance.max_result_bytes = int(
             os.getenv(
                 "MAX_RESULT_BYTES",
@@ -1363,6 +1371,7 @@ class DorisConfig:
                 "max_cache_size": self.performance.max_cache_size,
                 "max_concurrent_queries": self.performance.max_concurrent_queries,
                 "query_timeout": self.performance.query_timeout,
+                "default_result_rows": self.performance.default_result_rows,
                 "max_result_bytes": self.performance.max_result_bytes,
                 "connection_pool_size": self.performance.connection_pool_size,
                 "idle_timeout": self.performance.idle_timeout,
@@ -1518,6 +1527,14 @@ class DorisConfig:
             errors.append(
                 "Query timeout must not exceed "
                 f"{ABSOLUTE_MAX_QUERY_TIMEOUT_SECONDS} seconds"
+            )
+
+        if self.performance.default_result_rows <= 0:
+            errors.append("Default result rows must be greater than 0")
+        elif self.performance.default_result_rows > self.security.max_result_rows:
+            errors.append(
+                "Default result rows must not exceed the configured "
+                f"maximum result rows ({self.security.max_result_rows})"
             )
 
         if not (

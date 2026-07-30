@@ -407,6 +407,7 @@ async def test_real_doris_result_boundaries_and_cancellation(
     environment.update(
         {
             "MAX_RESULT_ROWS": "5",
+            "DEFAULT_RESULT_ROWS": "2",
             "MAX_RESULT_BYTES": "256",
             "QUERY_TIMEOUT": "5",
         }
@@ -431,8 +432,26 @@ async def test_real_doris_result_boundaries_and_cancellation(
         }
         query_schema = tools["exec_query"].input_schema["properties"]
         assert query_schema["max_rows"]["maximum"] == 5
+        assert query_schema["max_rows"]["default"] == 2
         assert query_schema["max_bytes"]["maximum"] == 256
         assert query_schema["timeout"]["maximum"] == 5
+
+        default_result = await client.call_tool(
+            "exec_query",
+            {
+                "sql": (
+                    "SELECT id "
+                    f"FROM {doris_sandbox.qualified_table} ORDER BY id"
+                ),
+                "max_bytes": 256,
+                "timeout": 5,
+            },
+        )
+        assert isinstance(default_result.structured_content, dict)
+        default_payload = default_result.structured_content
+        assert default_result.is_error is False
+        assert len(default_payload["data"]) == 2
+        assert default_payload["metadata"]["limits"]["max_rows"] == 2
 
         with pytest.raises(MCPError) as excessive_rows:
             await client.call_tool(
