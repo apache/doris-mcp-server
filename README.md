@@ -1152,7 +1152,10 @@ default.
 These settings govern MCP application permissions and security classification.
 Database, table, column, and row access must still be enforced with Doris users,
 roles, grants, views, and row policies; OAuth mapping does not bypass Doris
-authorization.
+authorization. See the
+[Doris fine-grained access-control guide](docs/doris-fine-grained-access-control.md)
+for an end-to-end column and row policy example, MCP identity-routing choices,
+and a verification checklist.
 
 ### SQL Security Validation
 
