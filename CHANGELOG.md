@@ -64,6 +64,8 @@ under **Unreleased** until a new version is selected and published.
 
 - Preserved service availability after malformed requests, unknown methods,
   header mismatches, unsupported versions, and missing capabilities.
+- Stopped list operations from converting Doris, permission, or internal
+  failures into successful empty resource, tool, or prompt collections.
 - Corrected resource and prompt error semantics and tool `isError` results.
 - Removed admin-token query authentication and dashboard URL propagation;
   management endpoints now accept admin credentials only in headers.

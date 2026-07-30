@@ -181,6 +181,16 @@ _PROMPT_INVALID_PARAMS_MESSAGES = {
     "MISSING_REQUIRED_ARGUMENT": "Missing required prompt argument",
 }
 _PROMPT_DATABASE_CONTEXT_ERROR = "DATABASE_CONTEXT_UNAVAILABLE"
+_LIST_ERROR_CATEGORIES = {
+    "backend_unavailable",
+    "internal_error",
+    "permission_denied",
+}
+_LIST_ERROR_MESSAGES = {
+    "backend_unavailable": "List backend unavailable",
+    "internal_error": "Internal server error",
+    "permission_denied": "List operation permission denied",
+}
 
 
 def _decode_resource_request_error(payload: str) -> tuple[str, str] | None:
@@ -199,6 +209,31 @@ def _decode_resource_request_error(payload: str) -> tuple[str, str] | None:
     if message is None:
         return None
     return error_code, message
+
+
+def _list_operation_error(operation: str, exc: Exception) -> MCPError:
+    """Build a value-safe MCP failure for a list operation."""
+    category = getattr(exc, "list_error_category", "internal_error")
+    if not isinstance(category, str) or category not in _LIST_ERROR_CATEGORIES:
+        category = "internal_error"
+
+    data = {
+        "operation": operation,
+        "listErrorCategory": category,
+    }
+    error_code = getattr(exc, "error_code", None)
+    if (
+        isinstance(error_code, str)
+        and len(error_code) <= 96
+        and error_code.replace("_", "").isalnum()
+    ):
+        data["listErrorCode"] = error_code
+
+    return MCPError(
+        code=INTERNAL_ERROR,
+        message=_LIST_ERROR_MESSAGES[category],
+        data=data,
+    )
 
 
 def _paginate_list_or_raise(
@@ -268,14 +303,20 @@ def create_doris_mcp_server(
     ) -> ListResourcesResult:
         del ctx
         authorize_operation(get_current_auth_context(), "list_resources")
-        resources = await resources_manager.list_resources()
-        page = _paginate_list_or_raise(
-            resources,
-            collection="resources",
-            cursor=params.cursor if params else None,
-            page_size=list_page_size,
-            identifier=lambda resource: str(resource.uri),
-        )
+        try:
+            resources = await resources_manager.list_resources()
+            page = _paginate_list_or_raise(
+                resources,
+                collection="resources",
+                cursor=params.cursor if params else None,
+                page_size=list_page_size,
+                identifier=lambda resource: str(resource.uri),
+            )
+        except (MCPError, OperationAuthorizationError):
+            raise
+        except Exception as exc:
+            logger.exception("resources/list failed")
+            raise _list_operation_error("resources/list", exc) from exc
         logger.info(
             "Returning %d of %d resources",
             len(page.items),
@@ -320,16 +361,22 @@ def create_doris_mcp_server(
         params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
         authorize_operation(get_current_auth_context(), "list_tools")
-        tools = await tools_manager.list_tools()
-        schema_guard.compile_catalog(tools)
-        tools = _tools_for_protocol(tools, ctx.protocol_version)
-        page = _paginate_list_or_raise(
-            tools,
-            collection="tools",
-            cursor=params.cursor if params else None,
-            page_size=list_page_size,
-            identifier=lambda tool: tool.name,
-        )
+        try:
+            tools = await tools_manager.list_tools()
+            schema_guard.compile_catalog(tools)
+            tools = _tools_for_protocol(tools, ctx.protocol_version)
+            page = _paginate_list_or_raise(
+                tools,
+                collection="tools",
+                cursor=params.cursor if params else None,
+                page_size=list_page_size,
+                identifier=lambda tool: tool.name,
+            )
+        except (MCPError, OperationAuthorizationError):
+            raise
+        except Exception as exc:
+            logger.exception("tools/list failed")
+            raise _list_operation_error("tools/list", exc) from exc
         logger.info("Returning %d of %d tools", len(page.items), len(tools))
         return ListToolsResult(
             tools=page.items,
@@ -402,14 +449,20 @@ def create_doris_mcp_server(
     ) -> ListPromptsResult:
         del ctx
         authorize_operation(get_current_auth_context(), "list_prompts")
-        prompts = await prompts_manager.list_prompts()
-        page = _paginate_list_or_raise(
-            prompts,
-            collection="prompts",
-            cursor=params.cursor if params else None,
-            page_size=list_page_size,
-            identifier=lambda prompt: prompt.name,
-        )
+        try:
+            prompts = await prompts_manager.list_prompts()
+            page = _paginate_list_or_raise(
+                prompts,
+                collection="prompts",
+                cursor=params.cursor if params else None,
+                page_size=list_page_size,
+                identifier=lambda prompt: prompt.name,
+            )
+        except (MCPError, OperationAuthorizationError):
+            raise
+        except Exception as exc:
+            logger.exception("prompts/list failed")
+            raise _list_operation_error("prompts/list", exc) from exc
         logger.info(
             "Returning %d of %d prompts",
             len(page.items),

@@ -8,6 +8,7 @@ from doris_mcp_server.tools.resources_manager import (
     DorisOAuthResourceError,
     DorisResourcesManager,
     MetadataCache,
+    ResourceMetadataError,
 )
 from doris_mcp_server.utils.security import (
     AuthContext,
@@ -19,6 +20,7 @@ from doris_mcp_server.utils.security import (
 class FakeConnection:
     def __init__(self):
         self.table_metadata_queries = 0
+        self.column_metadata_queries = 0
 
     async def execute(self, sql, params=None, auth_context=None):
         if "FROM information_schema.tables" in sql and "AND table_type = 'BASE TABLE'" in sql:
@@ -34,6 +36,7 @@ class FakeConnection:
                 ]
             )
         if "FROM information_schema.columns" in sql:
+            self.column_metadata_queries += 1
             return SimpleNamespace(data=[])
         return SimpleNamespace(data=[])
 
@@ -61,6 +64,29 @@ class RaisingConnection:
 class RaisingConnectionManager:
     def __init__(self):
         self.connection = RaisingConnection()
+        self.acquires = 0
+        self.releases = 0
+
+    @asynccontextmanager
+    async def get_connection_context(self, session_id):
+        self.acquires += 1
+        try:
+            yield self.connection
+        finally:
+            self.releases += 1
+
+
+class ClassifiedErrorConnection:
+    def __init__(self, error):
+        self.error = error
+
+    async def execute(self, sql, params=None, auth_context=None):
+        raise self.error
+
+
+class ClassifiedErrorConnectionManager:
+    def __init__(self, error):
+        self.connection = ClassifiedErrorConnection(error)
         self.acquires = 0
         self.releases = 0
 
@@ -140,6 +166,16 @@ class DorisOAuthReadConnection:
 
     async def execute(self, sql, params=None, auth_context=None):
         self.calls.append((sql, params, auth_context))
+        if "FROM information_schema.views" in sql and "AND table_name" in sql:
+            assert params == ("db1", "orders_view")
+            return SimpleNamespace(
+                data=[
+                    {
+                        "table_name": "orders_view",
+                        "view_definition": "SELECT * FROM orders",
+                    }
+                ]
+            )
         if "FROM information_schema.tables" in sql and "AND table_name" in sql:
             assert params in {("db1", "orders"), ("db/slash", "orders/slash")}
             _db_name, table_name = params
@@ -208,6 +244,7 @@ async def test_resources_manager_reuses_identity_scoped_metadata_cache():
     assert [table.name for table in second] == ["orders_1"]
     assert connection_manager.acquires == 1
     assert connection_manager.releases == 1
+    assert connection_manager.connection.column_metadata_queries == 0
 
 
 @pytest.mark.asyncio
@@ -268,6 +305,55 @@ async def test_doris_oauth_list_resources_backend_error_is_structured_failure():
 
 
 @pytest.mark.asyncio
+async def test_list_resources_backend_error_is_not_a_successful_partial_list():
+    connection_manager = ClassifiedErrorConnectionManager(
+        OSError("metadata backend unavailable")
+    )
+    manager = DorisResourcesManager(connection_manager)
+
+    with pytest.raises(ResourceMetadataError) as exc:
+        await manager.list_resources()
+
+    assert exc.value.error_code == "DORIS_METADATA_BACKEND_ERROR"
+    assert exc.value.status_code == 502
+    assert exc.value.list_error_category == "backend_unavailable"
+    assert connection_manager.acquires == 1
+    assert connection_manager.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_list_resources_permission_error_is_not_a_successful_empty_list():
+    connection_manager = ClassifiedErrorConnectionManager(
+        RuntimeError(1142, "SELECT command denied")
+    )
+    manager = DorisResourcesManager(connection_manager)
+
+    with pytest.raises(ResourceMetadataError) as exc:
+        await manager.list_resources()
+
+    assert exc.value.error_code == "DORIS_METADATA_PERMISSION_DENIED"
+    assert exc.value.status_code == 403
+    assert exc.value.list_error_category == "permission_denied"
+    assert connection_manager.acquires == 1
+    assert connection_manager.releases == 1
+
+
+@pytest.mark.asyncio
+async def test_list_resources_internal_error_is_not_a_successful_empty_list():
+    connection_manager = RaisingConnectionManager()
+    manager = DorisResourcesManager(connection_manager)
+
+    with pytest.raises(ResourceMetadataError) as exc:
+        await manager.list_resources()
+
+    assert exc.value.error_code == "DORIS_METADATA_INTERNAL_ERROR"
+    assert exc.value.status_code == 500
+    assert exc.value.list_error_category == "internal_error"
+    assert connection_manager.acquires == 1
+    assert connection_manager.releases == 1
+
+
+@pytest.mark.asyncio
 async def test_doris_oauth_list_resources_uses_database_qualified_uris_without_database_function():
     connection_manager = DorisOAuthResourceConnectionManager()
     manager = DorisResourcesManager(connection_manager)
@@ -288,7 +374,15 @@ async def test_doris_oauth_list_resources_uses_database_qualified_uris_without_d
     assert "doris://table/information_schema/information_schema_orders" not in uris
     assert connection_manager.acquires == 1
     assert connection_manager.releases == 1
-    assert all("DATABASE()" not in sql for sql, _params, _auth in connection_manager.connection.calls)
+    assert all(
+        "DATABASE()" not in sql
+        for sql, _params, _auth in connection_manager.connection.calls
+    )
+    assert all(
+        "table_comment" not in sql
+        for sql, _params, _auth in connection_manager.connection.calls
+        if "FROM information_schema.views" in sql
+    )
 
 
 @pytest.mark.asyncio
@@ -325,7 +419,37 @@ async def test_doris_oauth_read_database_qualified_table_resource_uses_uri_datab
     assert payload["table_name"] == "orders"
     assert connection_manager.acquires == 1
     assert connection_manager.releases == 1
-    assert all("DATABASE()" not in sql for sql, _params, _auth in connection_manager.connection.calls)
+    assert all(
+        "DATABASE()" not in sql
+        for sql, _params, _auth in connection_manager.connection.calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_doris_oauth_read_view_uses_doris_information_schema_columns():
+    connection_manager = DorisOAuthReadConnectionManager()
+    manager = DorisResourcesManager(connection_manager)
+    token = set_current_auth_context(doris_context(["resource:read"]))
+
+    try:
+        result = await manager.read_resource("doris://view/db1/orders_view")
+    finally:
+        reset_auth_context(token)
+
+    payload = json.loads(result)
+    assert payload == {
+        "database_name": "db1",
+        "view_name": "orders_view",
+        "comment": None,
+        "definition": "SELECT * FROM orders",
+    }
+    view_queries = [
+        sql
+        for sql, _params, _auth in connection_manager.connection.calls
+        if "FROM information_schema.views" in sql
+    ]
+    assert len(view_queries) == 1
+    assert "table_comment" not in view_queries[0]
 
 
 @pytest.mark.asyncio

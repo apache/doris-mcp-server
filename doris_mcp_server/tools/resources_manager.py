@@ -107,13 +107,25 @@ class MetadataCache:
         self.cache[key] = (value, datetime.now().timestamp())
 
 
-class DorisOAuthResourceError(RuntimeError):
-    """Structured resources metadata failure for Doris OAuth requests."""
+class ResourceMetadataError(RuntimeError):
+    """Structured resource-list failure that is safe to classify at the protocol boundary."""
 
-    def __init__(self, message: str, *, error_code: str, status_code: int):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str,
+        status_code: int,
+        list_error_category: str,
+    ) -> None:
         super().__init__(message)
         self.error_code = error_code
         self.status_code = status_code
+        self.list_error_category = list_error_category
+
+
+class DorisOAuthResourceError(ResourceMetadataError):
+    """Structured resource metadata failure for Doris OAuth requests."""
 
 
 class InvalidResourceURIError(ValueError):
@@ -224,15 +236,32 @@ class DorisResourcesManager:
             return f"doris://stats/database/{segment}"
         return f"doris://stats/{segment}"
 
-    def _resource_error_from_exception(self, exc: Exception) -> DorisOAuthResourceError:
+    def _resource_error_from_exception(self, exc: Exception) -> ResourceMetadataError:
+        if isinstance(exc, ResourceMetadataError):
+            return exc
+
+        is_doris_oauth = self._is_doris_oauth_context()
+        error_type = (
+            DorisOAuthResourceError if is_doris_oauth else ResourceMetadataError
+        )
+        error_prefix = (
+            "DORIS_OAUTH_METADATA" if is_doris_oauth else "DORIS_METADATA"
+        )
         error_code = getattr(exc, "error_code", None)
         status_code = getattr(exc, "status_code", None)
         message = str(exc) or exc.__class__.__name__
         if error_code:
-            return DorisOAuthResourceError(
+            normalized_status = int(status_code or 500)
+            category = (
+                "permission_denied"
+                if normalized_status in {401, 403}
+                else "backend_unavailable"
+            )
+            return error_type(
                 message,
                 error_code=str(error_code),
-                status_code=int(status_code or 500),
+                status_code=normalized_status,
+                list_error_category=category,
             )
 
         mysql_error_code = None
@@ -242,24 +271,46 @@ class DorisResourcesManager:
             except (TypeError, ValueError):
                 mysql_error_code = None
         if mysql_error_code in {1044, 1045, 1049, 1142, 1227}:
-            return DorisOAuthResourceError(
+            return error_type(
                 message,
-                error_code="DORIS_OAUTH_METADATA_PERMISSION_DENIED",
+                error_code=f"{error_prefix}_PERMISSION_DENIED",
                 status_code=403,
+                list_error_category="permission_denied",
             )
 
         lowered = message.lower()
-        permission_markers = ("permission denied", "access denied", "not authorized", "privilege")
+        permission_markers = (
+            "permission denied",
+            "access denied",
+            "not authorized",
+            "privilege",
+        )
         if any(marker in lowered for marker in permission_markers):
-            return DorisOAuthResourceError(
+            return error_type(
                 message,
-                error_code="DORIS_OAUTH_METADATA_PERMISSION_DENIED",
+                error_code=f"{error_prefix}_PERMISSION_DENIED",
                 status_code=403,
+                list_error_category="permission_denied",
             )
-        return DorisOAuthResourceError(
+
+        exception_family = exc.__class__.__module__.partition(".")[0]
+        if (
+            is_doris_oauth
+            or isinstance(exc, OSError | TimeoutError)
+            or exception_family in {"aiomysql", "pymysql"}
+        ):
+            return error_type(
+                message,
+                error_code=f"{error_prefix}_BACKEND_ERROR",
+                status_code=502,
+                list_error_category="backend_unavailable",
+            )
+
+        return error_type(
             message,
-            error_code="DORIS_OAUTH_METADATA_BACKEND_ERROR",
-            status_code=502,
+            error_code=f"{error_prefix}_INTERNAL_ERROR",
+            status_code=500,
+            list_error_category="internal_error",
         )
 
     def _reraise_if_doris_oauth_resource_error(self, exc: Exception) -> None:
@@ -332,8 +383,8 @@ class DorisResourcesManager:
             )
 
         except Exception as e:
-            self._reraise_if_doris_oauth_resource_error(e)
             logger.exception("Failed to get resource list")
+            raise self._resource_error_from_exception(e) from e
 
         return resources
 
@@ -471,13 +522,10 @@ class DorisResourcesManager:
         tables: list[TableMetadata] = []
 
         for row in result.data:
-            columns = await self._get_table_columns(connection, row["table_name"], db_name)
-
             table = TableMetadata(
                 name=row["table_name"],
                 comment=row.get("table_comment"),
                 row_count=row.get("row_count", 0),
-                columns=columns,
                 create_time=row.get("create_time"),
                 database=db_name,
             )
@@ -542,7 +590,6 @@ class DorisResourcesManager:
         views_query = f"""
         SELECT
             table_name,
-            table_comment,
             view_definition
         FROM information_schema.views
         WHERE {schema_filter}
@@ -656,7 +703,6 @@ class DorisResourcesManager:
         view_query = f"""
         SELECT
             table_name,
-            table_comment,
             view_definition
         FROM information_schema.views
         WHERE {schema_filter}

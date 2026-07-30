@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import mcp.types as mcp_types
 import pytest
+from mcp.shared.exceptions import MCPError
 
 from doris_mcp_server import __version__
 from doris_mcp_server.auth.operation_policy import (
@@ -809,8 +810,18 @@ async def test_doris_oauth_resources_real_handler_propagates_manager_errors(
     token = set_current_auth_context(doris_context([scope]))
 
     try:
-        with pytest.raises(RuntimeError, match=f"{operation} backend failed"):
-            await _invoke_protocol_handler(server, operation)
+        if operation == "list_resources":
+            with pytest.raises(MCPError) as exc:
+                await _invoke_protocol_handler(server, operation)
+            assert exc.value.code == -32603
+            assert exc.value.message == "Internal server error"
+            assert exc.value.data == {
+                "operation": "resources/list",
+                "listErrorCategory": "internal_error",
+            }
+        else:
+            with pytest.raises(RuntimeError, match=f"{operation} backend failed"):
+                await _invoke_protocol_handler(server, operation)
     finally:
         reset_auth_context(token)
 
@@ -820,8 +831,14 @@ async def test_list_resources_handler_propagates_backend_failure():
     server = _server_with_mock_managers()
     server.resources_manager.list_resources.side_effect = RuntimeError("legacy backend failed")
 
-    with pytest.raises(RuntimeError, match="legacy backend failed"):
+    with pytest.raises(MCPError) as exc:
         await _invoke_protocol_handler(server, "list_resources")
+    assert exc.value.code == -32603
+    assert exc.value.message == "Internal server error"
+    assert exc.value.data == {
+        "operation": "resources/list",
+        "listErrorCategory": "internal_error",
+    }
 
 
 @pytest.mark.parametrize(
