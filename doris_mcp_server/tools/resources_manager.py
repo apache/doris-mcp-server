@@ -23,6 +23,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from hashlib import sha256
 from typing import Any, cast
 from urllib.parse import quote, unquote
 
@@ -75,10 +76,16 @@ class ViewMetadata:
 class MetadataCache:
     """Metadata cache manager"""
 
-    def __init__(self, ttl_seconds: int = 300, enabled: bool = False):
+    def __init__(
+        self,
+        ttl_seconds: int = 300,
+        enabled: bool = False,
+        max_entries: int = 128,
+    ):
         self.cache: dict[str, tuple[Any, float]] = {}
         self.ttl = ttl_seconds
         self.enabled = enabled
+        self.max_entries = max_entries
 
     async def get(self, key: str) -> Any | None:
         if not self.enabled:
@@ -94,6 +101,9 @@ class MetadataCache:
     async def set(self, key: str, value: Any) -> None:
         if not self.enabled:
             return
+        if key not in self.cache and len(self.cache) >= self.max_entries:
+            oldest_key = min(self.cache, key=lambda item: self.cache[item][1])
+            del self.cache[oldest_key]
         self.cache[key] = (value, datetime.now().timestamp())
 
 
@@ -132,10 +142,52 @@ class DorisResourcesManager:
 
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
-        # Resource metadata cache is disabled until it is identity-aware.
-        # Static token-bound DB and Doris OAuth can route to different Doris
-        # users; global cache keys would leak metadata across identities.
-        self.metadata_cache = MetadataCache(enabled=False)
+        self.metadata_cache = MetadataCache(enabled=True)
+
+    def _metadata_cache_scope(self) -> str:
+        auth_context = get_auth_context()
+        original_config = getattr(
+            self.connection_manager,
+            "original_db_config",
+            {},
+        )
+        endpoint = {
+            field: original_config.get(field)
+            for field in ("host", "port", "user", "database")
+        }
+
+        token_manager = getattr(self.connection_manager, "token_manager", None)
+        token = getattr(auth_context, "token", "") if auth_context else ""
+        if token_manager and token:
+            token_config = token_manager.get_database_config_by_token(token)
+            if token_config:
+                endpoint = {
+                    field: getattr(token_config, field, None)
+                    for field in ("host", "port", "user", "database")
+                }
+
+        identity = {
+            "authMethod": getattr(auth_context, "auth_method", ""),
+            "tokenId": getattr(auth_context, "token_id", ""),
+            "userId": getattr(auth_context, "user_id", ""),
+            "roles": sorted(getattr(auth_context, "roles", [])),
+            "permissions": sorted(getattr(auth_context, "permissions", [])),
+            "dorisUser": getattr(auth_context, "doris_user", ""),
+            "oauthClientId": getattr(auth_context, "oauth_client_id", ""),
+            "oauthScopes": sorted(getattr(auth_context, "oauth_scopes", [])),
+            "oauthResource": getattr(auth_context, "oauth_resource", ""),
+            "oauthAudiences": sorted(
+                getattr(auth_context, "oauth_audiences", [])
+            ),
+            "poolKey": getattr(auth_context, "pool_key", ""),
+        }
+        payload = json.dumps(
+            {"endpoint": endpoint, "identity": identity},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return sha256(payload.encode("utf-8")).hexdigest()
 
     def _is_doris_oauth_context(self) -> bool:
         return getattr(get_auth_context(), "auth_method", "") == "doris_oauth"
@@ -364,7 +416,7 @@ class DorisResourcesManager:
 
     async def _get_table_metadata(self) -> list[TableMetadata]:
         """Get metadata for all tables"""
-        cache_key = "table_metadata"
+        cache_key = f"{self._metadata_cache_scope()}:table_metadata"
         cached = await self.metadata_cache.get(cache_key)
         if cached:
             return cast(list[TableMetadata], cached)
@@ -467,7 +519,7 @@ class DorisResourcesManager:
 
     async def _get_view_metadata(self) -> list[ViewMetadata]:
         """Get metadata for all views"""
-        cache_key = "view_metadata"
+        cache_key = f"{self._metadata_cache_scope()}:view_metadata"
         cached = await self.metadata_cache.get(cache_key)
         if cached:
             return cast(list[ViewMetadata], cached)

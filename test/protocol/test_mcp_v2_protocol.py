@@ -48,6 +48,16 @@ from doris_mcp_server.protocol import (
 from test.protocol.stdio_capability_server import OneToolManager as ProfileToolManager
 
 REQUIRED_EXTENSION = "io.apache.doris/read"
+PROFILE_TOOL_NAMES = sorted(
+    [
+        "echo",
+        "get_sql_profile",
+        "monitor_data_freshness",
+        "analyze_data_access_patterns",
+        "analyze_columns",
+        "get_monitoring_metrics",
+    ]
+)
 
 
 def test_transport_security_accepts_explicit_deployment_allowlists():
@@ -996,14 +1006,9 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
         stdio_client(server_params),
         extensions=[advertise(REQUIRED_EXTENSION)],
     ) as capable:
-        assert [tool.name for tool in (await capable.list_tools()).tools] == [
-            "echo",
-            "get_sql_profile",
-            "monitor_data_freshness",
-            "analyze_data_access_patterns",
-            "analyze_columns",
-            "get_monitoring_metrics",
-        ]
+        assert [
+            tool.name for tool in (await capable.list_tools()).tools
+        ] == PROFILE_TOOL_NAMES
         secret = "stdio-secret-sec-016"
         error_result = await capable.call_tool(
             "echo",
@@ -1024,14 +1029,9 @@ async def test_stdio_validates_capabilities_versions_and_process_survival():
         assert error_result.structured_content["token"] == "[REDACTED]"
 
     async with Client(stdio_client(server_params), mode="legacy") as legacy:
-        assert [tool.name for tool in (await legacy.list_tools()).tools] == [
-            "echo",
-            "get_sql_profile",
-            "monitor_data_freshness",
-            "analyze_data_access_patterns",
-            "analyze_columns",
-            "get_monitoring_metrics",
-        ]
+        assert [
+            tool.name for tool in (await legacy.list_tools()).tools
+        ] == PROFILE_TOOL_NAMES
         legacy_error = await legacy.read_resource("doris://table/missing")
         assert (
             json.loads(legacy_error.contents[0].text)["error_code"]

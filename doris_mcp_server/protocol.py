@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable, Mapping
-from typing import Any, Protocol
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Any, Protocol, TypeVar
 
 from mcp.server import Server, ServerRequestContext
 from mcp.server.caching import CacheHint
@@ -53,12 +53,22 @@ from mcp.types import (
 )
 
 from .auth.operation_policy import OperationAuthorizationError, authorize_operation
+from .pagination import (
+    DEFAULT_LIST_PAGE_SIZE,
+    MAX_LIST_PAGE_SIZE,
+    CursorCollection,
+    PaginationCursorError,
+    PaginationPage,
+    paginate,
+)
 from .utils.redaction import (
     redact_error_payload,
     redact_sensitive_text,
     redact_uri,
 )
 from .utils.security import get_current_auth_context
+
+_ListItemT = TypeVar("_ListItemT")
 
 
 class ResourcesManager(Protocol):
@@ -186,6 +196,31 @@ def _decode_resource_request_error(payload: str) -> tuple[str, str] | None:
     return error_code, message
 
 
+def _paginate_list_or_raise(
+    items: Sequence[_ListItemT],
+    *,
+    collection: CursorCollection,
+    cursor: str | None,
+    page_size: int,
+    identifier: Callable[[_ListItemT], str],
+) -> PaginationPage[_ListItemT]:
+    try:
+        return paginate(
+            items,
+            collection=collection,
+            cursor=cursor,
+            page_size=page_size,
+            identifier=identifier,
+            auth_context=get_current_auth_context(),
+        )
+    except PaginationCursorError as exc:
+        raise MCPError(
+            code=INVALID_PARAMS,
+            message="Invalid pagination cursor",
+            data={"cursorError": exc.reason},
+        ) from exc
+
+
 def create_doris_mcp_server(
     *,
     resources_manager: ResourcesManager,
@@ -194,20 +229,37 @@ def create_doris_mcp_server(
     name: str,
     version: str,
     logger: logging.Logger,
+    list_page_size: int = DEFAULT_LIST_PAGE_SIZE,
     required_client_capabilities: Mapping[str, ClientCapabilities] | None = None,
     required_tool_capabilities: Mapping[str, ClientCapabilities] | None = None,
 ) -> Server:
     """Create the one low-level SDK v2 server used by every transport."""
+    if not 1 <= list_page_size <= MAX_LIST_PAGE_SIZE:
+        raise ValueError(f"list_page_size must be in the range 1-{MAX_LIST_PAGE_SIZE}")
 
     async def list_resources(
         ctx: ServerRequestContext,
         params: PaginatedRequestParams | None,
     ) -> ListResourcesResult:
-        del ctx, params
+        del ctx
         authorize_operation(get_current_auth_context(), "list_resources")
         resources = await resources_manager.list_resources()
-        logger.info("Returning %d resources", len(resources))
-        return ListResourcesResult(resources=resources)
+        page = _paginate_list_or_raise(
+            resources,
+            collection="resources",
+            cursor=params.cursor if params else None,
+            page_size=list_page_size,
+            identifier=lambda resource: str(resource.uri),
+        )
+        logger.info(
+            "Returning %d of %d resources",
+            len(page.items),
+            len(resources),
+        )
+        return ListResourcesResult(
+            resources=page.items,
+            next_cursor=page.next_cursor,
+        )
 
     async def read_resource(
         ctx: ServerRequestContext,
@@ -242,11 +294,21 @@ def create_doris_mcp_server(
         ctx: ServerRequestContext,
         params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
-        del ctx, params
+        del ctx
         authorize_operation(get_current_auth_context(), "list_tools")
         tools = await tools_manager.list_tools()
-        logger.info("Returning %d tools", len(tools))
-        return ListToolsResult(tools=tools)
+        page = _paginate_list_or_raise(
+            tools,
+            collection="tools",
+            cursor=params.cursor if params else None,
+            page_size=list_page_size,
+            identifier=lambda tool: tool.name,
+        )
+        logger.info("Returning %d of %d tools", len(page.items), len(tools))
+        return ListToolsResult(
+            tools=page.items,
+            next_cursor=page.next_cursor,
+        )
 
     async def call_tool(
         ctx: ServerRequestContext,
@@ -279,11 +341,25 @@ def create_doris_mcp_server(
         ctx: ServerRequestContext,
         params: PaginatedRequestParams | None,
     ) -> ListPromptsResult:
-        del ctx, params
+        del ctx
         authorize_operation(get_current_auth_context(), "list_prompts")
         prompts = await prompts_manager.list_prompts()
-        logger.info("Returning %d prompts", len(prompts))
-        return ListPromptsResult(prompts=prompts)
+        page = _paginate_list_or_raise(
+            prompts,
+            collection="prompts",
+            cursor=params.cursor if params else None,
+            page_size=list_page_size,
+            identifier=lambda prompt: prompt.name,
+        )
+        logger.info(
+            "Returning %d of %d prompts",
+            len(page.items),
+            len(prompts),
+        )
+        return ListPromptsResult(
+            prompts=page.items,
+            next_cursor=page.next_cursor,
+        )
 
     async def get_prompt(
         ctx: ServerRequestContext,

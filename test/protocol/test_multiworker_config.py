@@ -27,6 +27,22 @@ def test_legacy_http_adapter_is_default_off_and_requires_explicit_env(monkeypatc
     assert enabled.to_dict()["enable_legacy_http_adapter"] is True
 
 
+def test_mcp_list_page_size_is_configurable_and_bounded(monkeypatch):
+    monkeypatch.delenv("MCP_LIST_PAGE_SIZE", raising=False)
+    assert DorisConfig.from_env().mcp_list_page_size == 100
+
+    monkeypatch.setenv("MCP_LIST_PAGE_SIZE", "17")
+    configured = DorisConfig.from_env()
+    assert configured.mcp_list_page_size == 17
+    assert configured.to_dict()["mcp_list_page_size"] == 17
+    assert configured.validate() == []
+
+    configured.mcp_list_page_size = 0
+    assert "MCP list page size must be in the range 1-1000" in configured.validate()
+    configured.mcp_list_page_size = 1001
+    assert "MCP list page size must be in the range 1-1000" in configured.validate()
+
+
 def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config = DorisConfig()
     config.database.host = "127.0.0.1"
@@ -38,6 +54,7 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.mcp_allowed_hosts = ["mcp.example.test", "mcp.example.test:*"]
     config.mcp_allowed_origins = ["https://client.example.test"]
     config.enable_legacy_http_adapter = True
+    config.mcp_list_page_size = 17
 
     worker_env = _multiworker_environment(
         config,
@@ -64,6 +81,7 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     ]
     assert child_config.mcp_allowed_origins == ["https://client.example.test"]
     assert child_config.enable_legacy_http_adapter is True
+    assert child_config.mcp_list_page_size == 17
     assert child_config.server_name == "doris-mcp-server"
     assert child_config.server_version == __version__
     assert child_config.transport == "http"

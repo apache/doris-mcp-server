@@ -83,6 +83,7 @@ def _multiworker_environment(
         "ENABLE_LEGACY_HTTP_ADAPTER": str(
             config.enable_legacy_http_adapter
         ).lower(),
+        "MCP_LIST_PAGE_SIZE": str(config.mcp_list_page_size),
         "SERVER_NAME": config.server_name,
         "TRANSPORT": "http",
         "WORKERS": str(workers),
@@ -134,6 +135,7 @@ class DorisServer:
             name=config.server_name,
             version=config.server_version,
             logger=self.logger,
+            list_page_size=config.mcp_list_page_size,
         )
 
     async def start_stdio(self) -> None:
