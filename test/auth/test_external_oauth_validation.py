@@ -23,6 +23,8 @@ from doris_mcp_server.auth.oauth_token_validation import (
     OAuthAccessTokenValidationError,
 )
 from doris_mcp_server.auth.oauth_types import OAuthState, OAuthTokens, OAuthUserInfo
+from doris_mcp_server.utils.config import DorisConfig
+from doris_mcp_server.utils.security import SecurityLevel
 
 ISSUER = "https://issuer.example.test"
 RESOURCE = "https://mcp.example.test/mcp"
@@ -76,6 +78,7 @@ class _FlowOAuthClient:
 
 def _provider(client) -> OAuthAuthenticationProvider:
     provider = object.__new__(OAuthAuthenticationProvider)
+    provider.config = DorisConfig()
     provider.enabled = True
     provider.oauth_client = client
     return provider
@@ -160,3 +163,61 @@ async def test_userinfo_subject_must_match_introspected_subject():
         await provider.authenticate_with_token("access-1")
 
     assert exc_info.value.error == "invalid_token"
+
+
+@pytest.mark.asyncio
+async def test_external_oauth_authorization_uses_configured_role_mappings():
+    provider = _provider(_FlowOAuthClient())
+    provider.config.security.oauth_role_security_levels = {
+        "analyst": "confidential",
+        "executive": "secret",
+    }
+    provider.config.security.oauth_role_permissions = {
+        "analyst": ["query_database", "read_data"],
+        "suspended": [],
+    }
+    provider.config.security.oauth_default_permissions = []
+
+    user_info = OAuthUserInfo(
+        sub="user-1",
+        roles=["Analyst", "Executive"],
+    )
+
+    assert (
+        await provider._determine_security_level(user_info)
+        is SecurityLevel.SECRET
+    )
+    assert await provider._map_permissions(user_info.roles) == [
+        "query_database",
+        "read_data",
+    ]
+    assert await provider._map_permissions(["unknown"]) == []
+    assert await provider._map_permissions(["suspended"]) == []
+
+
+@pytest.mark.asyncio
+async def test_external_oauth_trusted_domain_requires_verified_email():
+    provider = _provider(_FlowOAuthClient())
+    provider.config.security.oauth_trusted_domains = ["example.test"]
+    provider.config.security.oauth_trusted_domain_security_level = "confidential"
+    provider.config.security.oauth_default_security_level = "public"
+
+    verified_user = OAuthUserInfo(
+        sub="verified",
+        email="user@example.test",
+        email_verified=True,
+    )
+    unverified_user = OAuthUserInfo(
+        sub="unverified",
+        email="user@example.test",
+        email_verified=False,
+    )
+
+    assert (
+        await provider._determine_security_level(verified_user)
+        is SecurityLevel.CONFIDENTIAL
+    )
+    assert (
+        await provider._determine_security_level(unverified_user)
+        is SecurityLevel.PUBLIC
+    )

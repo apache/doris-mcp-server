@@ -66,6 +66,36 @@ DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT = list(
     DORIS_OAUTH_METADATA_TOOL_NAMES
 )
 
+EXTERNAL_OAUTH_SECURITY_LEVELS = frozenset(
+    {"public", "internal", "confidential", "secret"}
+)
+DEFAULT_EXTERNAL_OAUTH_ROLE_SECURITY_LEVELS = {
+    "admin": "secret",
+    "administrator": "secret",
+    "data_admin": "secret",
+    "super_admin": "secret",
+    "data_analyst": "confidential",
+    "developer": "confidential",
+    "manager": "confidential",
+}
+DEFAULT_EXTERNAL_OAUTH_ROLE_PERMISSIONS = {
+    "admin": ["admin", "read_data", "write_data", "manage_users"],
+    "administrator": ["admin", "read_data", "write_data", "manage_users"],
+    "data_admin": ["admin", "read_data", "write_data"],
+    "super_admin": [
+        "admin",
+        "read_data",
+        "write_data",
+        "manage_users",
+        "system_admin",
+    ],
+    "data_analyst": ["read_data", "query_database"],
+    "developer": ["read_data", "query_database", "debug"],
+    "viewer": ["read_data"],
+    "user": ["read_data"],
+    "oauth_user": ["read_data"],
+}
+
 
 @dataclass(frozen=True)
 class ConfigValue:
@@ -144,6 +174,52 @@ def _env_csv(name: str, default: list[str]) -> list[str]:
     if value is None:
         return default
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _env_json_string_map(
+    name: str,
+    default: dict[str, str],
+) -> dict[str, str]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise AuthConfigError(f"{name} must be a valid JSON object") from exc
+    if not isinstance(parsed, dict) or any(
+        not isinstance(key, str) or not isinstance(item, str)
+        for key, item in parsed.items()
+    ):
+        raise AuthConfigError(f"{name} must map strings to strings")
+    return {
+        key.strip(): item.strip()
+        for key, item in parsed.items()
+    }
+
+
+def _env_json_string_list_map(
+    name: str,
+    default: dict[str, list[str]],
+) -> dict[str, list[str]]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise AuthConfigError(f"{name} must be a valid JSON object") from exc
+    if not isinstance(parsed, dict) or any(
+        not isinstance(key, str)
+        or not isinstance(items, list)
+        or any(not isinstance(item, str) for item in items)
+        for key, items in parsed.items()
+    ):
+        raise AuthConfigError(f"{name} must map strings to arrays of strings")
+    return {
+        key.strip(): [item.strip() for item in items]
+        for key, items in parsed.items()
+    }
 
 
 def _coerce_csv_config(value: Any) -> list[str]:
@@ -482,6 +558,21 @@ class SecurityConfig:
     oauth_name_claim: str = "name"
     oauth_roles_claim: str = "roles"  # Custom claim for roles
     oauth_default_roles: list[str] = field(default_factory=lambda: ["oauth_user"])
+    oauth_default_security_level: str = "internal"
+    oauth_trusted_domains: list[str] = field(default_factory=list)
+    oauth_trusted_domain_security_level: str = "confidential"
+    oauth_role_security_levels: dict[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_EXTERNAL_OAUTH_ROLE_SECURITY_LEVELS)
+    )
+    oauth_role_permissions: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            role: list(permissions)
+            for role, permissions in DEFAULT_EXTERNAL_OAUTH_ROLE_PERMISSIONS.items()
+        }
+    )
+    oauth_default_permissions: list[str] = field(
+        default_factory=lambda: ["read_data"]
+    )
 
     def __post_init__(self) -> None:
         """Initialize default OAuth scopes based on provider"""
@@ -494,6 +585,142 @@ class SecurityConfig:
                 self.oauth_scopes = ["user:email", "read:user"]
             else:
                 self.oauth_scopes = ["openid", "email", "profile"]
+
+
+def _normalize_external_oauth_authorization_config(
+    security: SecurityConfig,
+) -> None:
+    """Normalize and validate external OAuth authorization mappings."""
+
+    def normalize_security_level(value: Any, setting: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in EXTERNAL_OAUTH_SECURITY_LEVELS:
+            allowed = ", ".join(sorted(EXTERNAL_OAUTH_SECURITY_LEVELS))
+            raise AuthConfigError(f"{setting} must be one of {allowed}")
+        return normalized
+
+    security.oauth_default_security_level = normalize_security_level(
+        security.oauth_default_security_level,
+        "OAUTH_DEFAULT_SECURITY_LEVEL",
+    )
+    security.oauth_trusted_domain_security_level = normalize_security_level(
+        security.oauth_trusted_domain_security_level,
+        "OAUTH_TRUSTED_DOMAIN_SECURITY_LEVEL",
+    )
+
+    if not isinstance(security.oauth_trusted_domains, list) or any(
+        not isinstance(domain, str)
+        for domain in security.oauth_trusted_domains
+    ):
+        raise AuthConfigError(
+            "OAUTH_TRUSTED_DOMAINS must be a comma-separated list of domains"
+        )
+    normalized_domains = []
+    for configured_domain in security.oauth_trusted_domains:
+        domain = str(configured_domain).strip().lower().removeprefix("@")
+        if (
+            not domain
+            or "@" in domain
+            or any(character.isspace() for character in domain)
+        ):
+            raise AuthConfigError(
+                "OAUTH_TRUSTED_DOMAINS must contain exact email domains"
+            )
+        if domain not in normalized_domains:
+            normalized_domains.append(domain)
+    security.oauth_trusted_domains = normalized_domains
+
+    normalized_role_levels: dict[str, str] = {}
+    if not isinstance(security.oauth_role_security_levels, dict):
+        raise AuthConfigError(
+            "OAUTH_ROLE_SECURITY_LEVELS_JSON must be a JSON object"
+        )
+    for configured_role, configured_level in (
+        security.oauth_role_security_levels.items()
+    ):
+        if not isinstance(configured_role, str) or not isinstance(
+            configured_level,
+            str,
+        ):
+            raise AuthConfigError(
+                "OAUTH_ROLE_SECURITY_LEVELS_JSON must map strings to strings"
+            )
+        role = configured_role.strip().lower()
+        if not role:
+            raise AuthConfigError(
+                "OAUTH_ROLE_SECURITY_LEVELS_JSON contains an empty role"
+            )
+        normalized_role_levels[role] = normalize_security_level(
+            configured_level,
+            f"OAUTH_ROLE_SECURITY_LEVELS_JSON[{role}]",
+        )
+    security.oauth_role_security_levels = normalized_role_levels
+
+    normalized_role_permissions: dict[str, list[str]] = {}
+    if not isinstance(security.oauth_role_permissions, dict):
+        raise AuthConfigError(
+            "OAUTH_ROLE_PERMISSIONS_JSON must be a JSON object"
+        )
+    for configured_role, configured_permissions in (
+        security.oauth_role_permissions.items()
+    ):
+        if not isinstance(configured_role, str):
+            raise AuthConfigError(
+                "OAUTH_ROLE_PERMISSIONS_JSON role names must be strings"
+            )
+        role = configured_role.strip().lower()
+        if not role:
+            raise AuthConfigError(
+                "OAUTH_ROLE_PERMISSIONS_JSON contains an empty role"
+            )
+        if not isinstance(configured_permissions, list) or any(
+            not isinstance(permission, str)
+            for permission in configured_permissions
+        ):
+            raise AuthConfigError(
+                f"OAUTH_ROLE_PERMISSIONS_JSON[{role}] must be an array of strings"
+            )
+        permissions = []
+        for configured_permission in configured_permissions:
+            permission = configured_permission.strip()
+            if not permission:
+                raise AuthConfigError(
+                    f"OAUTH_ROLE_PERMISSIONS_JSON[{role}] contains an "
+                    "empty permission"
+                )
+            if permission not in permissions:
+                permissions.append(permission)
+        normalized_role_permissions[role] = permissions
+    security.oauth_role_permissions = normalized_role_permissions
+
+    if not isinstance(security.oauth_default_roles, list) or any(
+        not isinstance(role, str)
+        for role in security.oauth_default_roles
+    ):
+        raise AuthConfigError(
+            "OAUTH_DEFAULT_ROLES must be a comma-separated list"
+        )
+    if not isinstance(security.oauth_default_permissions, list) or any(
+        not isinstance(permission, str)
+        for permission in security.oauth_default_permissions
+    ):
+        raise AuthConfigError(
+            "OAUTH_DEFAULT_PERMISSIONS must be a comma-separated list"
+        )
+    security.oauth_default_roles = list(
+        dict.fromkeys(
+            role.strip()
+            for role in security.oauth_default_roles
+            if role.strip()
+        )
+    )
+    security.oauth_default_permissions = list(
+        dict.fromkeys(
+            permission.strip()
+            for permission in security.oauth_default_permissions
+            if permission.strip()
+        )
+    )
 
 
 @dataclass
@@ -831,6 +1058,52 @@ class DorisConfig:
                 os.getenv("OAUTH_REQUIRED_SCOPE")
             )
             _mark_source(config, "oauth_required_scopes", "env")
+        if "OAUTH_DEFAULT_ROLES" in os.environ:
+            config.security.oauth_default_roles = _env_csv(
+                "OAUTH_DEFAULT_ROLES",
+                config.security.oauth_default_roles,
+            )
+            _mark_source(config, "oauth_default_roles", "env")
+        if "OAUTH_DEFAULT_SECURITY_LEVEL" in os.environ:
+            config.security.oauth_default_security_level = os.getenv(
+                "OAUTH_DEFAULT_SECURITY_LEVEL",
+                config.security.oauth_default_security_level,
+            ).strip()
+            _mark_source(config, "oauth_default_security_level", "env")
+        if "OAUTH_TRUSTED_DOMAINS" in os.environ:
+            config.security.oauth_trusted_domains = _env_csv(
+                "OAUTH_TRUSTED_DOMAINS",
+                config.security.oauth_trusted_domains,
+            )
+            _mark_source(config, "oauth_trusted_domains", "env")
+        if "OAUTH_TRUSTED_DOMAIN_SECURITY_LEVEL" in os.environ:
+            config.security.oauth_trusted_domain_security_level = os.getenv(
+                "OAUTH_TRUSTED_DOMAIN_SECURITY_LEVEL",
+                config.security.oauth_trusted_domain_security_level,
+            ).strip()
+            _mark_source(
+                config,
+                "oauth_trusted_domain_security_level",
+                "env",
+            )
+        if "OAUTH_ROLE_SECURITY_LEVELS_JSON" in os.environ:
+            config.security.oauth_role_security_levels = _env_json_string_map(
+                "OAUTH_ROLE_SECURITY_LEVELS_JSON",
+                config.security.oauth_role_security_levels,
+            )
+            _mark_source(config, "oauth_role_security_levels", "env")
+        if "OAUTH_ROLE_PERMISSIONS_JSON" in os.environ:
+            config.security.oauth_role_permissions = _env_json_string_list_map(
+                "OAUTH_ROLE_PERMISSIONS_JSON",
+                config.security.oauth_role_permissions,
+            )
+            _mark_source(config, "oauth_role_permissions", "env")
+        if "OAUTH_DEFAULT_PERMISSIONS" in os.environ:
+            config.security.oauth_default_permissions = _env_csv(
+                "OAUTH_DEFAULT_PERMISSIONS",
+                config.security.oauth_default_permissions,
+            )
+            _mark_source(config, "oauth_default_permissions", "env")
         if "ENABLE_DORIS_OAUTH_AUTH" in os.environ:
             config.security.enable_doris_oauth_auth = _str_to_bool(os.getenv("ENABLE_DORIS_OAUTH_AUTH"))
             _mark_source(config, "enable_doris_oauth_auth", "env")
@@ -1325,6 +1598,13 @@ class DorisConfig:
                 "oauth_scopes": self.security.oauth_scopes,
                 "oauth_required_scopes": self.security.oauth_required_scopes,
                 "oauth_introspection_endpoint": self.security.oauth_introspection_endpoint,
+                "oauth_default_roles": self.security.oauth_default_roles,
+                "oauth_default_security_level": self.security.oauth_default_security_level,
+                "oauth_trusted_domains": self.security.oauth_trusted_domains,
+                "oauth_trusted_domain_security_level": self.security.oauth_trusted_domain_security_level,
+                "oauth_role_security_levels": self.security.oauth_role_security_levels,
+                "oauth_role_permissions": self.security.oauth_role_permissions,
+                "oauth_default_permissions": self.security.oauth_default_permissions,
                 "enable_doris_oauth_auth": self.security.enable_doris_oauth_auth,
                 "allow_unauthenticated_non_loopback": self.security.allow_unauthenticated_non_loopback,
                 "doris_oauth_base_url": self.security.doris_oauth_base_url,
@@ -1854,6 +2134,7 @@ def normalize_effective_auth_config(
             raise AuthConfigError(str(exc)) from exc
 
     if enable_external_oauth_auth:
+        _normalize_external_oauth_authorization_config(config.security)
         config.security.oauth_issuer = _validate_external_oauth_url(
             config.security.oauth_issuer,
             setting="OAUTH_ISSUER",

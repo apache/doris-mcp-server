@@ -135,6 +135,17 @@ def test_external_oauth_environment_maps_token_context_settings(monkeypatch):
         "OAUTH_USERINFO_URL": f"{ISSUER}/userinfo",
         "OAUTH_SCOPE": "tool:list, resource:list resource:read",
         "OAUTH_REQUIRED_SCOPE": "tool:list resource:read",
+        "OAUTH_DEFAULT_ROLES": "member, auditor",
+        "OAUTH_DEFAULT_SECURITY_LEVEL": "public",
+        "OAUTH_TRUSTED_DOMAINS": "Example.COM, internal.example.test",
+        "OAUTH_TRUSTED_DOMAIN_SECURITY_LEVEL": "confidential",
+        "OAUTH_ROLE_SECURITY_LEVELS_JSON": (
+            '{"member":"internal","executive":"secret"}'
+        ),
+        "OAUTH_ROLE_PERMISSIONS_JSON": (
+            '{"member":["read_data"],"auditor":["read_data","audit"]}'
+        ),
+        "OAUTH_DEFAULT_PERMISSIONS": "",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -159,3 +170,55 @@ def test_external_oauth_environment_maps_token_context_settings(monkeypatch):
     ]
     assert config.security.oauth_introspection_client_id == ("introspection-client")
     assert config.security.oauth_introspection_client_secret == ("introspection-secret")
+    assert config.security.oauth_default_roles == ["member", "auditor"]
+    assert config.security.oauth_default_security_level == "public"
+    assert config.security.oauth_trusted_domains == [
+        "example.com",
+        "internal.example.test",
+    ]
+    assert config.security.oauth_trusted_domain_security_level == "confidential"
+    assert config.security.oauth_role_security_levels == {
+        "member": "internal",
+        "executive": "secret",
+    }
+    assert config.security.oauth_role_permissions == {
+        "member": ["read_data"],
+        "auditor": ["read_data", "audit"],
+    }
+    assert config.security.oauth_default_permissions == []
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        (
+            "OAUTH_ROLE_SECURITY_LEVELS_JSON",
+            '["admin"]',
+            "must map strings to strings",
+        ),
+        (
+            "OAUTH_ROLE_PERMISSIONS_JSON",
+            '{"admin":"read_data"}',
+            "must map strings to arrays of strings",
+        ),
+    ],
+)
+def test_external_oauth_environment_rejects_invalid_authorization_json(
+    monkeypatch,
+    tmp_path,
+    name,
+    value,
+    message,
+):
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(AuthConfigError, match=message):
+        DorisConfig.from_env(str(tmp_path / "missing.env"))
+
+
+def test_external_oauth_rejects_invalid_authorization_security_level():
+    config = _external_oauth_config()
+    config.security.oauth_default_security_level = "top-secret"
+
+    with pytest.raises(AuthConfigError, match="OAUTH_DEFAULT_SECURITY_LEVEL"):
+        normalize_effective_auth_config(config)
