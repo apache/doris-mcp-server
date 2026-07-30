@@ -463,6 +463,7 @@ class SecurityConfig:
     enable_token_expiry: bool = True  # Enable token expiration
     default_token_expiry_hours: int = 24 * 30  # Default expiry: 30 days
     token_hash_algorithm: str = "sha256"  # Token hashing algorithm: sha256, sha512
+    token_db_validation_ttl_seconds: int = 30
 
     # Token Management Security (New in v0.6.0)
     enable_http_token_management: bool = False  # Enable HTTP token management endpoints (default: disabled for security)
@@ -1288,6 +1289,12 @@ class DorisConfig:
             os.getenv("DEFAULT_TOKEN_EXPIRY_HOURS", str(config.security.default_token_expiry_hours))
         )
         config.security.token_hash_algorithm = os.getenv("TOKEN_HASH_ALGORITHM", config.security.token_hash_algorithm)
+        config.security.token_db_validation_ttl_seconds = int(
+            os.getenv(
+                "TOKEN_DB_VALIDATION_TTL_SECONDS",
+                str(config.security.token_db_validation_ttl_seconds),
+            )
+        )
 
         # Token Management Security Configuration (New in v0.6.0)
         config.security.enable_http_token_management = (
@@ -1780,6 +1787,11 @@ class DorisConfig:
         if self.security.token_expiry <= 0:
             errors.append("Token expiry time must be greater than 0")
 
+        if not 0 <= self.security.token_db_validation_ttl_seconds <= 3600:
+            errors.append(
+                "Token database validation TTL must be in the range 0-3600 seconds"
+            )
+
         if self.security.max_query_complexity <= 0:
             errors.append("Maximum query complexity must be greater than 0")
 
@@ -2052,6 +2064,10 @@ def normalize_effective_auth_config(
         )
     except ValueError as exc:
         raise AuthConfigError(str(exc)) from exc
+    if not 0 <= config.security.token_db_validation_ttl_seconds <= 3600:
+        raise AuthConfigError(
+            "TOKEN_DB_VALIDATION_TTL_SECONDS must be in the range 0-3600"
+        )
 
     modern_auth_explicit = any(
         [

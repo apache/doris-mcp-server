@@ -86,6 +86,8 @@ under **Unreleased** until a new version is selected and published.
 
 - Preserved service availability after malformed requests, unknown methods,
   header mismatches, unsupported versions, and missing capabilities.
+- Kept static-token Doris pools usable after repeated query timeouts, and
+  stopped per-request token validation from mutating the shared global pool.
 - Stopped list operations from converting Doris, permission, or internal
   failures into successful empty resource, tool, or prompt collections.
 - Corrected resource and prompt error semantics and tool `isError` results.

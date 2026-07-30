@@ -413,3 +413,61 @@ async def test_release_routed_connection_releases_closed_raw_to_captured_owner(
     assert old_owner.release_calls == [raw_connection]
     assert current_pool.release_calls == []
     assert raw_connection.ensure_closed_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_configure_for_token_validates_dedicated_route_without_global_mutation(
+    manager,
+    monkeypatch,
+):
+    token = "tenant-token"
+    manager.token_manager = SimpleNamespace(
+        get_database_config_by_token=lambda raw: (
+            SimpleNamespace(
+                host="tenant-fe",
+                port=19030,
+                user="tenant_reader",
+                password="tenant_pw",
+                database="tenant_db",
+                charset="utf8",
+            )
+            if raw == token
+            else None
+        )
+    )
+    connection = SimpleNamespace(
+        execute=AsyncMock(
+            return_value=QueryResult(
+                data=[{"connection_check": 1}],
+                metadata={},
+                execution_time=0.0,
+                row_count=1,
+                sql="SELECT 1 AS connection_check",
+            )
+        )
+    )
+    get_connection = AsyncMock(return_value=connection)
+    release_connection = AsyncMock()
+    monkeypatch.setattr(manager, "get_connection_for_token", get_connection)
+    monkeypatch.setattr(
+        manager,
+        "release_connection_for_token",
+        release_connection,
+    )
+    original_config = manager.original_db_config.copy()
+    active_config = manager.active_db_config.copy()
+
+    success, source = await manager.configure_for_token(token)
+
+    assert success is True
+    assert source == "token-bound"
+    get_connection.assert_awaited_once()
+    connection.execute.assert_awaited_once_with(
+        "SELECT 1 AS connection_check",
+        mask_result=False,
+        max_rows=1,
+        max_bytes=256,
+    )
+    release_connection.assert_awaited_once_with(token, connection)
+    assert manager.original_db_config == original_config
+    assert manager.active_db_config == active_config
