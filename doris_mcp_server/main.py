@@ -72,10 +72,16 @@ def _multiworker_environment(
     """Serialize resolved parent settings inherited by Uvicorn workers."""
     return {
         "DORIS_HOST": config.database.host,
+        "DORIS_HOSTS": ",".join(config.database.hosts),
         "DORIS_PORT": str(config.database.port),
         "DORIS_USER": config.database.user,
         "DORIS_PASSWORD": config.database.password,
         "DORIS_DATABASE": config.database.database,
+        "DORIS_FE_HTTP_HOST": config.database.fe_http_host,
+        "DORIS_FE_HTTP_HOSTS": ",".join(config.database.fe_http_hosts),
+        "DORIS_FE_HTTP_PORT": str(config.database.fe_http_port),
+        "DORIS_BE_HOSTS": ",".join(config.database.be_hosts),
+        "DORIS_BE_WEBSERVER_PORT": str(config.database.be_webserver_port),
         "SERVER_HOST": host,
         "SERVER_PORT": str(port),
         "MCP_ALLOWED_HOSTS": ",".join(config.mcp_allowed_hosts),

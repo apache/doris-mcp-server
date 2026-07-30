@@ -296,6 +296,7 @@ cp .env.example .env
 
 *   **Database Connection**:
     *   `DORIS_HOST`: Database hostname (default: localhost)
+    *   `DORIS_HOSTS`: Ordered FE MySQL failover hosts for one Doris cluster (comma-separated; `DORIS_HOST` is prepended when both are set)
     *   `DORIS_PORT`: Database port (default: 9030)
     *   `DORIS_USER`: Database username (default: root)
     *   `DORIS_PASSWORD`: Database password
@@ -303,6 +304,7 @@ cp .env.example .env
     *   `DORIS_MIN_CONNECTIONS`: Minimum connection pool size (default: 5)
     *   `DORIS_MAX_CONNECTIONS`: Maximum connection pool size (default: 20)
     *   `DORIS_FE_HTTP_HOST`: Independent FE HTTP host for profile, table-size, and monitoring tools (default: empty, falling back to `DORIS_HOST`)
+    *   `DORIS_FE_HTTP_HOSTS`: Ordered FE HTTP failover hosts for the same Doris cluster (comma-separated)
     *   `DORIS_FE_HTTP_PORT`: Independent FE HTTP API port (default: 8030)
     *   `DORIS_BE_HOSTS`: Explicit BE HTTP allowlist for monitoring (comma-separated; BE HTTP metrics are disabled when empty)
     *   `DORIS_BE_WEBSERVER_PORT`: BE webserver port for monitoring tools (default: 8040)
@@ -1731,10 +1733,12 @@ proxy, tunnel, or split network exposes them at different addresses:
 ```bash
 # SQL/MySQL protocol endpoint
 DORIS_HOST=sql-gateway.internal
+DORIS_HOSTS=sql-gateway.internal,fe-2.internal,fe-3.internal
 DORIS_PORT=9030
 
 # FE HTTP endpoint; omit DORIS_FE_HTTP_HOST to reuse DORIS_HOST
 DORIS_FE_HTTP_HOST=fe-http-proxy.internal
+DORIS_FE_HTTP_HOSTS=fe-http-proxy.internal,fe-2.internal,fe-3.internal
 DORIS_FE_HTTP_PORT=8030
 
 # Explicit BE HTTP allowlist
@@ -1752,6 +1756,17 @@ metadata/link-local destinations, disable redirects, and enforce
 connection/read/total timeouts plus a response byte limit. Private and loopback
 addresses remain available for normal internal Doris deployments and SSH
 tunnels.
+
+`DORIS_HOSTS` and `DORIS_FE_HTTP_HOSTS` are ordered failover lists, not
+load-balancing or cluster-discovery settings. Every host in one list must
+belong to the same Doris cluster and use the configured shared port and
+credentials. The server probes candidates in order during global/static-token
+pool creation and recovery; FE HTTP requests move to the next configured
+endpoint only on a transport error or `502`/`503`/`504`. Doris-backed OAuth
+tries the candidates during sign-in, but an established per-user pool cannot
+be reconstructed after failure because the server intentionally does not
+retain the user's raw password; the user must sign in again. A stable load
+balancer or SQL gateway is still recommended for large production deployments.
 
 ### Q: How to use SQL Explain/Profile files with LLM for optimization?
 
@@ -2076,11 +2091,20 @@ cat logs/doris_mcp_server_critical.log
          "is_active": true,
          "database_config": {
            "host": "tenant-alpha-db.company.com",
+           "hosts": [
+             "tenant-alpha-fe-1.company.com",
+             "tenant-alpha-fe-2.company.com"
+           ],
            "port": 9030,
            "user": "alpha_user",
            "password": "secure_password",
            "database": "alpha_analytics",
-           "charset": "UTF8"
+           "charset": "UTF8",
+           "fe_http_hosts": [
+             "tenant-alpha-fe-1.company.com",
+             "tenant-alpha-fe-2.company.com"
+           ],
+           "fe_http_port": 8030
          }
        }
      ]
@@ -2108,6 +2132,16 @@ cat logs/doris_mcp_server_critical.log
    curl -H "Authorization: Bearer $TOKEN_TENANT_ALPHA" http://localhost:3000/mcp
    curl -H "Authorization: Bearer $TOKEN_TENANT_BETA" http://localhost:3000/mcp
    ```
+
+   Each token may bind a different Doris cluster. Within one token binding,
+   `hosts` and `fe_http_hosts` are ordered FE candidates for that same cluster.
+   The authenticated token fixes the route; MCP tool arguments cannot select
+   or override another cluster. This multi-instance mode requires the HTTP
+   transport with static-token authentication. A stdio process has one global
+   database route, so run separate stdio processes when clients need separate
+   clusters. `exec_adbc_query` is intentionally fail-closed on token-bound
+   routes because the current Arrow Flight client is process-global; use
+   `exec_query` or a separate MCP process for that cluster.
 
 ### Q: How is Doris-backed OAuth different from external OAuth/OIDC?
 

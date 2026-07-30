@@ -89,10 +89,15 @@ async def test_create_token_from_get_query_includes_database_config():
                 "description": "read only",
                 "custom_token": "chosen-token",
                 "db_host": "doris.internal",
+                "db_hosts": "doris.internal,doris-2.internal",
                 "db_port": "9031",
                 "db_user": "readonly",
                 "db_password": "secret",
                 "db_database": "analytics",
+                "db_fe_http_host": "doris-http.internal",
+                "db_fe_http_hosts": (
+                    "doris-http.internal,doris-http-2.internal"
+                ),
                 "db_fe_http_port": "8031",
             },
         )
@@ -105,10 +110,16 @@ async def test_create_token_from_get_query_includes_database_config():
     assert call.kwargs["custom_token"] == "chosen-token"
     database = call.kwargs["database_config"]
     assert database.host == "doris.internal"
+    assert database.hosts == ["doris.internal", "doris-2.internal"]
     assert database.port == 9031
     assert database.user == "readonly"
     assert database.password == "secret"
     assert database.database == "analytics"
+    assert database.fe_http_host == "doris-http.internal"
+    assert database.fe_http_hosts == [
+        "doris-http.internal",
+        "doris-http-2.internal",
+    ]
     assert database.fe_http_port == 8031
 
 
@@ -121,13 +132,16 @@ async def test_create_token_from_post_json_uses_defaults():
             "/token/create",
             json={
                 "token_id": "writer",
-                "database_config": {"host": "doris.internal"},
+                "database_config": {
+                    "hosts": ["doris.internal", "doris-2.internal"]
+                },
             },
         )
 
     assert response.status_code == 200
     database = manager.create_token.await_args.kwargs["database_config"]
     assert database.host == "doris.internal"
+    assert database.hosts == ["doris.internal", "doris-2.internal"]
     assert database.port == 9030
     assert database.user == "root"
     assert database.database == "information_schema"

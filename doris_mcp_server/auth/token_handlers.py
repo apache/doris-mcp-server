@@ -37,6 +37,25 @@ if TYPE_CHECKING:
     from ..utils.security import DorisSecurityManager
 
 
+def _parse_hosts(value: object) -> list[str]:
+    if value in (None, ""):
+        return []
+    values = value.split(",") if isinstance(value, str) else value
+    if not isinstance(values, list):
+        raise ValueError("host list must be a list or comma-separated string")
+    if len(values) > 16:
+        raise ValueError("host list cannot contain more than 16 entries")
+    hosts = [host.strip() for host in values if isinstance(host, str) and host.strip()]
+    if len(hosts) != len(values):
+        raise ValueError("host list contains an invalid entry")
+    if any(
+        "://" in host or any(character in host for character in "/\\?#@%")
+        for host in hosts
+    ):
+        raise ValueError("host list contains a malformed entry")
+    return list(dict.fromkeys(hosts))
+
+
 class TokenHandlers:
     """Token Authentication HTTP Handlers"""
 
@@ -85,14 +104,24 @@ class TokenHandlers:
                 custom_token = query_params.get("custom_token")
                 # Database configuration from query params
                 db_config = None
-                if query_params.get("db_host"):
+                if query_params.get("db_host") or query_params.get("db_hosts"):
+                    db_hosts = _parse_hosts(query_params.get("db_hosts"))
                     db_config = DatabaseConfig(
-                        host=query_params.get("db_host", "localhost"),
+                        host=query_params.get("db_host") or db_hosts[0],
+                        hosts=db_hosts,
                         port=int(query_params.get("db_port", "9030")),
                         user=query_params.get("db_user", "root"),
                         password=query_params.get("db_password", ""),
                         database=query_params.get("db_database", "information_schema"),
+                        fe_http_host=query_params.get("db_fe_http_host", ""),
+                        fe_http_hosts=_parse_hosts(
+                            query_params.get("db_fe_http_hosts")
+                        ),
                         fe_http_port=int(query_params.get("db_fe_http_port", "8030")),
+                        be_hosts=_parse_hosts(query_params.get("db_be_hosts")),
+                        be_webserver_port=int(
+                            query_params.get("db_be_webserver_port", "8040")
+                        ),
                     )
             else:
                 # POST request with JSON body
@@ -110,13 +139,40 @@ class TokenHandlers:
                 if body.get("database_config"):
                     db_data = body["database_config"]
                     try:
+                        db_hosts = _parse_hosts(db_data.get("hosts"))
                         db_config = DatabaseConfig(
-                            host=db_data.get("host", "localhost"),
+                            host=db_data.get("host") or (
+                                db_hosts[0] if db_hosts else "localhost"
+                            ),
+                            hosts=db_hosts,
                             port=int(db_data.get("port", 9030)),
                             user=db_data.get("user", "root"),
                             password=db_data.get("password", ""),
                             database=db_data.get("database", "information_schema"),
+                            fe_http_host=db_data.get("fe_http_host", ""),
+                            fe_http_hosts=_parse_hosts(
+                                db_data.get("fe_http_hosts")
+                            ),
                             fe_http_port=int(db_data.get("fe_http_port", 8030)),
+                            be_hosts=_parse_hosts(db_data.get("be_hosts")),
+                            be_webserver_port=int(
+                                db_data.get("be_webserver_port", 8040)
+                            ),
+                            http_connect_timeout_seconds=float(
+                                db_data.get("http_connect_timeout_seconds", 3.0)
+                            ),
+                            http_read_timeout_seconds=float(
+                                db_data.get("http_read_timeout_seconds", 15.0)
+                            ),
+                            http_total_timeout_seconds=float(
+                                db_data.get("http_total_timeout_seconds", 30.0)
+                            ),
+                            http_max_response_bytes=int(
+                                db_data.get(
+                                    "http_max_response_bytes",
+                                    4 * 1024 * 1024,
+                                )
+                            ),
                         )
                     except (ValueError, TypeError):
                         return JSONResponse(
@@ -503,6 +559,10 @@ class TokenHandlers:
                                         <input type="text" id="db_host" name="db_host" placeholder="localhost">
                                     </div>
                                     <div class="form-group">
+                                        <label for="db_hosts">FE MySQL Hosts:</label>
+                                        <input type="text" id="db_hosts" name="db_hosts" placeholder="fe-1,fe-2,fe-3">
+                                    </div>
+                                    <div class="form-group">
                                         <label for="db_port">Port:</label>
                                         <input type="number" id="db_port" name="db_port" placeholder="9030">
                                     </div>
@@ -517,6 +577,10 @@ class TokenHandlers:
                                     <div class="form-group">
                                         <label for="db_database">Database:</label>
                                         <input type="text" id="db_database" name="db_database" placeholder="information_schema">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="db_fe_http_hosts">FE HTTP Hosts:</label>
+                                        <input type="text" id="db_fe_http_hosts" name="db_fe_http_hosts" placeholder="fe-1,fe-2,fe-3">
                                     </div>
                                     <div class="form-group">
                                         <label for="db_fe_http_port">FE HTTP Port:</label>
@@ -589,23 +653,33 @@ class TokenHandlers:
                         if (!data.custom_token) delete data.custom_token;
 
                         // Handle database configuration
-                        if (data.db_host) {{
+                        if (data.db_host || data.db_hosts) {{
+                            const sqlHosts = data.db_hosts
+                                ? data.db_hosts.split(',').map(host => host.trim()).filter(Boolean)
+                                : [];
+                            const httpHosts = data.db_fe_http_hosts
+                                ? data.db_fe_http_hosts.split(',').map(host => host.trim()).filter(Boolean)
+                                : [];
                             data.database_config = {{
-                                host: data.db_host,
+                                host: data.db_host || sqlHosts[0],
+                                hosts: sqlHosts,
                                 port: data.db_port ? parseInt(data.db_port) : 9030,
                                 user: data.db_user || 'root',
                                 password: data.db_password || '',
                                 database: data.db_database || 'information_schema',
+                                fe_http_hosts: httpHosts,
                                 fe_http_port: data.db_fe_http_port ? parseInt(data.db_fe_http_port) : 8030
                             }};
                         }}
 
                         // Remove individual database fields from data
                         delete data.db_host;
+                        delete data.db_hosts;
                         delete data.db_port;
                         delete data.db_user;
                         delete data.db_password;
                         delete data.db_database;
+                        delete data.db_fe_http_hosts;
                         delete data.db_fe_http_port;
 
                         try {{

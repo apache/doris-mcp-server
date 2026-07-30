@@ -34,6 +34,7 @@ DEFAULT_TOTAL_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_TIMEOUT_SECONDS = 60.0
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+MAX_CONFIGURED_HOSTS = 16
 
 _METADATA_HOSTS = frozenset(
     {
@@ -182,6 +183,53 @@ def _bounded_response_limit(value: Any) -> int:
     return min(parsed, MAX_RESPONSE_BYTES)
 
 
+def configured_fe_http_hosts(database_config: Any) -> tuple[str, ...]:
+    """Return ordered FE HTTP candidates without widening the allowlist."""
+    configured_hosts = getattr(database_config, "fe_http_hosts", []) or []
+    if not isinstance(configured_hosts, list) or any(
+        not isinstance(host, str) for host in configured_hosts
+    ):
+        raise DorisHTTPPolicyError("Configured Doris FE HTTP hosts are invalid")
+    if len(configured_hosts) > MAX_CONFIGURED_HOSTS:
+        raise DorisHTTPPolicyError("Too many Doris FE HTTP hosts are configured")
+
+    configured_host = getattr(database_config, "fe_http_host", "")
+    if configured_hosts:
+        candidates = (
+            [configured_host, *configured_hosts]
+            if configured_host
+            else configured_hosts
+        )
+    else:
+        if configured_host:
+            candidates = [configured_host]
+        else:
+            sql_hosts = getattr(database_config, "hosts", []) or []
+            if not isinstance(sql_hosts, list) or any(
+                not isinstance(host, str) for host in sql_hosts
+            ):
+                raise DorisHTTPPolicyError("Configured Doris FE SQL hosts are invalid")
+            if len(sql_hosts) > MAX_CONFIGURED_HOSTS:
+                raise DorisHTTPPolicyError(
+                    "Too many Doris FE SQL hosts are configured"
+                )
+            candidates = sql_hosts or [database_config.host]
+
+    return tuple(dict.fromkeys(_normalize_host(host) for host in candidates))
+
+
+def database_config_for_request(connection_manager: Any) -> Any:
+    """Resolve a token-bound endpoint config with legacy-manager fallback."""
+    resolver = getattr(
+        connection_manager,
+        "get_database_config_for_auth_context",
+        None,
+    )
+    if callable(resolver):
+        return resolver()
+    return connection_manager.config.database
+
+
 class DorisHTTPClient:
     """Fetch only configured Doris HTTP endpoints with SSRF controls."""
 
@@ -221,9 +269,7 @@ class DorisHTTPClient:
 
     @classmethod
     def from_database_config(cls, database_config: Any) -> DorisHTTPClient:
-        fe_host = _normalize_host(
-            getattr(database_config, "fe_http_host", "") or database_config.host
-        )
+        fe_hosts = configured_fe_http_hosts(database_config)
         fe_port = _validate_port(database_config.fe_http_port)
         be_port = _validate_port(getattr(database_config, "be_webserver_port", 8040))
         be_hosts = getattr(database_config, "be_hosts", []) or []
@@ -235,7 +281,7 @@ class DorisHTTPClient:
             user=str(database_config.user),
             password=str(database_config.password),
             allowed_endpoints={
-                "fe": {(fe_host, fe_port)},
+                "fe": {(host, fe_port) for host in fe_hosts},
                 "be": {(_normalize_host(host), be_port) for host in be_hosts},
             },
             connect_timeout_seconds=getattr(
@@ -259,6 +305,46 @@ class DorisHTTPClient:
                 DEFAULT_MAX_RESPONSE_BYTES,
             ),
         )
+
+    async def get_first_available(
+        self,
+        *,
+        role: Literal["fe", "be"],
+        hosts: list[str] | tuple[str, ...],
+        port: int,
+        path: str,
+        params: Mapping[str, str] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> DorisHTTPResponse:
+        """Try configured endpoints in order on transport or gateway failure."""
+        candidates = tuple(dict.fromkeys(_normalize_host(host) for host in hosts))
+        if not candidates:
+            raise DorisHTTPPolicyError("No Doris HTTP endpoint is configured")
+
+        last_error: DorisHTTPRequestError | None = None
+        last_response: DorisHTTPResponse | None = None
+        for host in candidates:
+            try:
+                response = await self.get(
+                    role=role,
+                    host=host,
+                    port=port,
+                    path=path,
+                    params=params,
+                    headers=headers,
+                )
+            except DorisHTTPRequestError as exc:
+                last_error = exc
+                continue
+            if response.status not in {502, 503, 504}:
+                return response
+            last_response = response
+
+        if last_response is not None:
+            return last_response
+        if last_error is not None:
+            raise last_error
+        raise DorisHTTPRequestError("All configured Doris HTTP endpoints failed")
 
     async def get(
         self,

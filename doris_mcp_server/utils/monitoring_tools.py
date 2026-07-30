@@ -28,6 +28,8 @@ from .doris_http_client import (
     DorisHTTPPolicyError,
     DorisHTTPRequestError,
     DorisHTTPResponseTooLarge,
+    configured_fe_http_hosts,
+    database_config_for_request,
 )
 from .logger import get_logger
 
@@ -686,7 +688,7 @@ class DorisMonitoringTools:
     async def get_be_nodes(self) -> list[dict[str, Any]]:
         """Return only BE HTTP nodes from the explicit configuration allowlist."""
         try:
-            db_config = self.connection_manager.config.database
+            db_config = database_config_for_request(self.connection_manager)
             be_hosts = getattr(db_config, "be_hosts", []) or []
             if be_hosts:
                 logger.info(f"Using configured BE hosts: {be_hosts}")
@@ -726,16 +728,25 @@ class DorisMonitoringTools:
         """Fetch metrics from an explicitly configured FE or BE node."""
         endpoint = f"{node_info.get('host')}:{node_info.get('port') or node_info.get('http_port')}"
         try:
-            db_config = self.connection_manager.config.database
+            db_config = database_config_for_request(self.connection_manager)
             port_key = "port" if node_type == "fe" else "http_port"
             http_client = DorisHTTPClient.from_database_config(db_config)
-            response = await http_client.get(
-                role=node_type,
-                host=node_info["host"],
-                port=int(node_info[port_key]),
-                path="/metrics",
-                headers={"Accept": "text/plain"},
-            )
+            if node_type == "fe":
+                response = await http_client.get_first_available(
+                    role="fe",
+                    hosts=node_info.get("hosts") or [node_info["host"]],
+                    port=int(node_info[port_key]),
+                    path="/metrics",
+                    headers={"Accept": "text/plain"},
+                )
+            else:
+                response = await http_client.get(
+                    role="be",
+                    host=node_info["host"],
+                    port=int(node_info[port_key]),
+                    path="/metrics",
+                    headers={"Accept": "text/plain"},
+                )
             if response.status == 200:
                 metrics_data = self._parse_prometheus_metrics(response.text())
                 return {
@@ -970,13 +981,15 @@ class DorisMonitoringTools:
     async def _get_fe_metrics(self, monitor_type: str, priority: str, format_type: str, include_raw_metrics: bool) -> dict[str, Any]:
         """Get FE monitoring metrics"""
         try:
-            db_config = self.connection_manager.config.database
-            fe_http_host = (
-                getattr(db_config, "fe_http_host", "") or db_config.host
-            )
+            db_config = database_config_for_request(self.connection_manager)
+            fe_http_hosts = configured_fe_http_hosts(db_config)
             fe_result = await self.fetch_metrics_from_node(
                 "fe",
-                {"host": fe_http_host, "port": db_config.fe_http_port}
+                {
+                    "host": fe_http_hosts[0],
+                    "hosts": list(fe_http_hosts),
+                    "port": db_config.fe_http_port,
+                },
             )
             if not fe_result.get("success"):
                 return fe_result

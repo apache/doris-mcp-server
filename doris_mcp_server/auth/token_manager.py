@@ -53,12 +53,21 @@ class DatabaseConfig:
     """Database connection configuration for token binding"""
 
     host: str
+    hosts: list[str] = field(default_factory=list)
     port: int = 9030
     user: str = ""
     password: str = ""
     database: str = "information_schema"
     charset: str = "UTF8"
+    fe_http_host: str = ""
+    fe_http_hosts: list[str] = field(default_factory=list)
     fe_http_port: int = 8030
+    be_hosts: list[str] = field(default_factory=list)
+    be_webserver_port: int = 8040
+    http_connect_timeout_seconds: float = 3.0
+    http_read_timeout_seconds: float = 15.0
+    http_total_timeout_seconds: float = 30.0
+    http_max_response_bytes: int = 4 * 1024 * 1024
 
 
 @dataclass
@@ -236,6 +245,33 @@ class TokenManager:
             raise ValueError(f"{setting} must be an RFC 3339 timestamp") from exc
         return as_utc(parsed)
 
+    @staticmethod
+    def _parse_hosts(value: Any, *, setting: str) -> list[str]:
+        """Parse an ordered hostname/IP list from JSON or a CSV query value."""
+        if value in (None, ""):
+            return []
+        values = value.split(",") if isinstance(value, str) else value
+        if not isinstance(values, list):
+            raise ValueError(f"{setting} must be a list or comma-separated string")
+        if len(values) > 16:
+            raise ValueError(f"{setting} cannot contain more than 16 entries")
+        hosts: list[str] = []
+        for raw_host in values:
+            if not isinstance(raw_host, str):
+                raise ValueError(f"{setting} entries must be strings")
+            host = raw_host.strip()
+            if (
+                not host
+                or "://" in host
+                or any(character in host for character in "/\\?#@%")
+            ):
+                raise ValueError(
+                    f"{setting} entries must be hostname or IP address values"
+                )
+            if host not in hosts:
+                hosts.append(host)
+        return hosts
+
     def _add_token_from_config(
         self,
         token_config: dict[str, Any],
@@ -274,14 +310,46 @@ class TokenManager:
             database_config = None
             if 'database_config' in token_config:
                 db_config = token_config['database_config']
+                hosts = self._parse_hosts(
+                    db_config.get('hosts'),
+                    setting=f"static token '{token_id}' database hosts",
+                )
+                fe_http_hosts = self._parse_hosts(
+                    db_config.get('fe_http_hosts'),
+                    setting=f"static token '{token_id}' FE HTTP hosts",
+                )
                 database_config = DatabaseConfig(
-                    host=db_config.get('host', 'localhost'),
+                    host=db_config.get('host') or (hosts[0] if hosts else 'localhost'),
+                    hosts=hosts,
                     port=db_config.get('port', 9030),
                     user=db_config.get('user', 'root'),
                     password=db_config.get('password', ''),
                     database=db_config.get('database', 'information_schema'),
                     charset=db_config.get('charset', 'UTF8'),
-                    fe_http_port=db_config.get('fe_http_port', 8030)
+                    fe_http_host=db_config.get('fe_http_host', ''),
+                    fe_http_hosts=fe_http_hosts,
+                    fe_http_port=db_config.get('fe_http_port', 8030),
+                    be_hosts=self._parse_hosts(
+                        db_config.get('be_hosts'),
+                        setting=f"static token '{token_id}' BE HTTP hosts",
+                    ),
+                    be_webserver_port=db_config.get('be_webserver_port', 8040),
+                    http_connect_timeout_seconds=db_config.get(
+                        'http_connect_timeout_seconds',
+                        3.0,
+                    ),
+                    http_read_timeout_seconds=db_config.get(
+                        'http_read_timeout_seconds',
+                        15.0,
+                    ),
+                    http_total_timeout_seconds=db_config.get(
+                        'http_total_timeout_seconds',
+                        30.0,
+                    ),
+                    http_max_response_bytes=db_config.get(
+                        'http_max_response_bytes',
+                        4 * 1024 * 1024,
+                    ),
                 )
 
             # Create token info
@@ -938,12 +1006,29 @@ class TokenManager:
         if token_info.database_config:
             token_config["database_config"] = {
                 "host": token_info.database_config.host,
+                "hosts": token_info.database_config.hosts,
                 "port": token_info.database_config.port,
                 "user": token_info.database_config.user,
                 "password": token_info.database_config.password,
                 "database": token_info.database_config.database,
                 "charset": token_info.database_config.charset,
-                "fe_http_port": token_info.database_config.fe_http_port
+                "fe_http_host": token_info.database_config.fe_http_host,
+                "fe_http_hosts": token_info.database_config.fe_http_hosts,
+                "fe_http_port": token_info.database_config.fe_http_port,
+                "be_hosts": token_info.database_config.be_hosts,
+                "be_webserver_port": token_info.database_config.be_webserver_port,
+                "http_connect_timeout_seconds": (
+                    token_info.database_config.http_connect_timeout_seconds
+                ),
+                "http_read_timeout_seconds": (
+                    token_info.database_config.http_read_timeout_seconds
+                ),
+                "http_total_timeout_seconds": (
+                    token_info.database_config.http_total_timeout_seconds
+                ),
+                "http_max_response_bytes": (
+                    token_info.database_config.http_max_response_bytes
+                ),
             }
 
         return token_config

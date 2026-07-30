@@ -151,6 +151,7 @@ curl --fail http://127.0.0.1:3000/ready
 | 环境变量 | 用途 | 默认值 |
 |:---------|:-----|:-------|
 | `DORIS_HOST` | Doris FE MySQL 主机 | `localhost` |
+| `DORIS_HOSTS` | 同一集群的有序 FE MySQL 故障切换主机，逗号分隔 | 空 |
 | `DORIS_PORT` | Doris FE MySQL 端口 | `9030` |
 | `DORIS_USER` | Doris 用户 | `root` |
 | `DORIS_PASSWORD` | Doris 密码 | 空 |
@@ -158,6 +159,7 @@ curl --fail http://127.0.0.1:3000/ready
 | `DORIS_MIN_CONNECTIONS` | 最小连接数 | `5` |
 | `DORIS_MAX_CONNECTIONS` | 最大连接数 | `20` |
 | `DORIS_FE_HTTP_HOST` | FE HTTP 工具使用的主机 | 回退到 `DORIS_HOST` |
+| `DORIS_FE_HTTP_HOSTS` | 同一集群的有序 FE HTTP 故障切换主机，逗号分隔 | 空 |
 | `DORIS_FE_HTTP_PORT` | FE HTTP 端口 | `8030` |
 | `DORIS_BE_HOSTS` | BE HTTP 主机白名单 | 空，表示禁用 BE HTTP 指标 |
 | `MAX_RESULT_ROWS` | 查询返回行数上限 | `10000` |
@@ -262,9 +264,37 @@ curl \
 请求通过该 Token 鉴权后，数据库操作使用它自己的连接池，不回退到全局服务账号。
 这适合多租户或按客户隔离 Doris 身份的部署。
 
+一个 HTTP 进程可以为不同 Token 绑定不同 Doris 集群；Token 是固定路由边界，
+工具参数不能临时切换集群。每套绑定还可以通过 `hosts` 和 `fe_http_hosts`
+配置同一集群内的多个 FE。stdio 进程只有一套全局数据库路由，需要连接不同
+集群时应分别启动多个进程。当前 Arrow Flight 客户端仍是进程级状态，因此
+`exec_adbc_query` 在 Token 绑定路由上会拒绝执行；应使用 `exec_query` 或为该
+集群单独启动 MCP 进程。
+
 `tokens.json` v2 只保存 Bearer Token 的摘要，不保存可恢复的明文。托管创建接口
 只返回一次明文，调用方必须立即存入客户端密钥存储。手工配置示例、迁移规则和
 文件格式见[英文 Token 绑定说明](README.md#token-bound-database-configuration-new-in-v060)。
+
+### 多 FE 故障切换
+
+同一 Doris 集群可以配置多个 FE：
+
+```bash
+DORIS_HOST=fe-1.internal
+DORIS_HOSTS=fe-1.internal,fe-2.internal,fe-3.internal
+DORIS_PORT=9030
+
+DORIS_FE_HTTP_HOST=fe-1.internal
+DORIS_FE_HTTP_HOSTS=fe-1.internal,fe-2.internal,fe-3.internal
+DORIS_FE_HTTP_PORT=8030
+```
+
+列表是有序故障切换，不是负载均衡或集群发现。全局连接池和静态 Token 连接池
+会在创建、恢复时依次尝试 FE；Doris OAuth 会在登录时依次尝试 FE，但服务端
+不会保留用户明文密码，已建立的用户连接池失效后不能自动重建，用户需要重新
+登录。Profile、Trace、表容量和 FE 监控只在网络错误或 `502`/`503`/`504` 时
+尝试下一节点。列表中的节点必须属于同一集群并共用端口和凭据。大型生产部署
+仍建议在前面使用稳定的负载均衡或 SQL 网关。
 
 ### 外部 OAuth/OIDC
 

@@ -36,7 +36,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, NotRequired, TypedDict
 
 import aiomysql
 from aiomysql import Connection, Pool
@@ -96,6 +96,7 @@ class DatabasePoolConfig(TypedDict):
     """Connection parameters shared by global and token-owned pools."""
 
     host: str
+    hosts: NotRequired[list[str]]
     port: int
     user: str
     password: str
@@ -533,8 +534,13 @@ class DorisConnectionManager:
         )
 
         # Store original database config for fallback
+        configured_hosts = self._ordered_hosts(
+            config.database.host,
+            getattr(config.database, "hosts", []),
+        )
         self.original_db_config: DatabasePoolConfig = {
-            "host": config.database.host,
+            "host": configured_hosts[0],
+            "hosts": configured_hosts,
             "port": config.database.port,
             "user": config.database.user,
             "password": config.database.password,
@@ -596,6 +602,25 @@ class DorisConnectionManager:
             db_config["charset"].upper(), db_config["charset"].lower()
         )
 
+    @staticmethod
+    def _ordered_hosts(primary: str, configured: object) -> list[str]:
+        hosts = (
+            [host.strip() for host in configured if isinstance(host, str) and host.strip()]
+            if isinstance(configured, list)
+            else []
+        )
+        return list(dict.fromkeys(([primary] if primary else []) + hosts))
+
+    def _host_candidates(self, db_config: Mapping[str, Any]) -> list[str]:
+        return self._ordered_hosts(
+            str(db_config.get("host", "")),
+            db_config.get("hosts", []),
+        )
+
+    def _set_active_global_host(self, host: str) -> None:
+        self.host = host
+        self.active_db_config["host"] = host
+
     def _is_config_empty(self, config_value: object) -> bool:
         """Check if a config value is empty (None, empty string, or 'null')"""
         return (
@@ -629,7 +654,7 @@ class DorisConnectionManager:
 
         token_db_config = self.token_manager.get_database_config_by_token(token)
         if token_db_config:
-            return {
+            db_config: DatabasePoolConfig = {
                 "host": token_db_config.host,
                 "port": token_db_config.port,
                 "user": token_db_config.user,
@@ -637,6 +662,13 @@ class DorisConnectionManager:
                 "database": token_db_config.database,
                 "charset": token_db_config.charset,
             }
+            token_hosts = getattr(token_db_config, "hosts", [])
+            if token_hosts:
+                db_config["hosts"] = self._ordered_hosts(
+                    token_db_config.host,
+                    token_hosts,
+                )
+            return db_config
         return None
 
     def _config_changed(
@@ -649,7 +681,7 @@ class DorisConnectionManager:
             return old_config != new_config
 
         # Compare key fields
-        for key in ["host", "port", "user", "password", "database"]:
+        for key in ["host", "hosts", "port", "user", "password", "database"]:
             if old_config.get(key) != new_config.get(key):
                 return True
         return False
@@ -705,7 +737,8 @@ class DorisConnectionManager:
 
     def _build_doris_user_db_config(self, user: str, password: str) -> dict:
         return {
-            "host": self.original_db_config["host"],
+            "host": self.host,
+            "hosts": self._host_candidates(self.original_db_config),
             "port": self.original_db_config["port"],
             "user": user,
             "password": password,
@@ -803,35 +836,41 @@ class DorisConnectionManager:
         retries = self._validate_doris_auth_retries(max_retries)
 
         last_error: Exception | None = None
+        candidate_config = self.original_db_config.copy()
+        candidate_config["host"] = self.host
+        hosts = self._host_candidates(candidate_config)
         for attempt in range(1, retries + 1):
-            conn = None
-            try:
-                conn = await aiomysql.connect(
-                    host=self.original_db_config["host"],
-                    port=self.original_db_config["port"],
-                    user=normalized_user,
-                    password=password,
-                    db="information_schema",
-                    charset=self.charset,
-                    connect_timeout=self.connect_timeout,
-                    autocommit=True,
-                )
-                return
-            except DorisUserAuthenticationError:
-                raise
-            except Exception as e:
-                last_error = e
-                self.logger.warning(
-                    "Doris user authentication failed for %s@%s:%s on attempt %s/%s: %s",
-                    normalized_user,
-                    self.original_db_config["host"],
-                    self.original_db_config["port"],
-                    attempt,
-                    retries,
-                    type(e).__name__,
-                )
-            finally:
-                await self._close_auth_connection(conn)
+            for host in hosts:
+                conn = None
+                try:
+                    conn = await aiomysql.connect(
+                        host=host,
+                        port=self.original_db_config["port"],
+                        user=normalized_user,
+                        password=password,
+                        db="information_schema",
+                        charset=self.charset,
+                        connect_timeout=self.connect_timeout,
+                        autocommit=True,
+                    )
+                    self._set_active_global_host(host)
+                    return
+                except DorisUserAuthenticationError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    self.logger.warning(
+                        "Doris user authentication failed for %s@%s:%s "
+                        "on attempt %s/%s (%s)",
+                        normalized_user,
+                        host,
+                        self.original_db_config["port"],
+                        attempt,
+                        retries,
+                        type(exc).__name__,
+                    )
+                finally:
+                    await self._close_auth_connection(conn)
 
         raise DorisUserAuthenticationError(
             f"Doris user authentication failed for {normalized_user}: {type(last_error).__name__}"
@@ -1125,6 +1164,12 @@ class DorisConnectionManager:
                         "database": token_db_config.database,
                         "charset": token_db_config.charset,
                     }
+                    token_hosts = getattr(token_db_config, "hosts", [])
+                    if token_hosts:
+                        db_config["hosts"] = self._ordered_hosts(
+                            token_db_config.host,
+                            token_hosts,
+                        )
                     config_source = "token-bound"
 
             # Fallback to global config if token has no specific config
@@ -1169,57 +1214,105 @@ class DorisConnectionManager:
         self,
         db_config: Mapping[str, Any],
     ) -> Pool:
-        """Create a connection pool with specified configuration
+        """Create a pool, failing over when multiple FE hosts are configured."""
+        pool, _ = await self._create_pool_with_candidates(db_config)
+        return pool
 
-        Args:
-            db_config: Database configuration dictionary
+    async def _probe_pool(self, pool: Pool) -> bool:
+        raw_connection = None
+        try:
+            raw_connection = await asyncio.wait_for(
+                pool.acquire(),
+                timeout=self.connect_timeout,
+            )
+            async with raw_connection.cursor() as cursor:
+                await cursor.execute("SELECT 1")
+                result = await cursor.fetchone()
+                return bool(result and result[0] == 1)
+        except Exception as exc:
+            self.logger.debug(
+                "Doris FE candidate health probe failed: %s",
+                type(exc).__name__,
+            )
+            return False
+        finally:
+            if raw_connection is not None:
+                try:
+                    pool.release(raw_connection)
+                except Exception:
+                    await self._force_close_raw_connection(
+                        raw_connection,
+                        "candidate health probe release failure",
+                    )
 
-        Returns:
-            Created connection pool
-        """
+    async def _create_pool_with_candidates(
+        self,
+        db_config: Mapping[str, Any],
+        *,
+        minsize: int = 0,
+        maxsize: int | None = None,
+        timeout: float | None = None,
+        require_health: bool | None = None,
+    ) -> tuple[Pool, str]:
+        """Create a pool against the first reachable FE in an ordered list."""
         # Convert charset to aiomysql compatible format
         charset_map = {"UTF8": "utf8", "UTF8MB4": "utf8mb4"}
         charset = charset_map.get(
             db_config["charset"].upper(), db_config["charset"].lower()
         )
+        candidates = self._host_candidates(db_config)
+        should_probe = len(candidates) > 1 if require_health is None else require_health
+        pool_timeout = timeout or (self.connect_timeout + 5)
+        last_error: Exception | None = None
 
-        self.logger.debug(
-            f"Creating pool for {db_config['user']}@{db_config['host']}:{db_config['port']}/{db_config['database']}"
-        )
+        for host in candidates:
+            pool: Pool | None = None
+            self.logger.debug(
+                "Creating pool for %s@%s:%s/%s",
+                db_config["user"],
+                host,
+                db_config["port"],
+                db_config["database"],
+            )
+            try:
+                pool = await asyncio.wait_for(
+                    aiomysql.create_pool(
+                        host=host,
+                        port=db_config["port"],
+                        user=db_config["user"],
+                        password=db_config["password"],
+                        db=db_config["database"],
+                        charset=charset,
+                        minsize=minsize,
+                        maxsize=maxsize or db_config.get("maxsize", self.maxsize),
+                        connect_timeout=self.connect_timeout,
+                        autocommit=True,
+                        pool_recycle=self.pool_recycle,
+                    ),
+                    timeout=pool_timeout,
+                )
+                if should_probe and not await self._probe_pool(pool):
+                    raise RuntimeError("Doris FE candidate failed its health probe")
+                self.logger.info(
+                    "Successfully created pool for %s@%s:%s",
+                    db_config["user"],
+                    host,
+                    db_config["port"],
+                )
+                return pool, host
+            except Exception as exc:
+                last_error = exc
+                await self._close_pool_safely(pool, f"failed FE candidate {host}")
+                self.logger.warning(
+                    "Doris FE candidate %s:%s failed during pool creation (%s)",
+                    host,
+                    db_config["port"],
+                    type(exc).__name__,
+                )
 
-        try:
-            pool = await asyncio.wait_for(
-                aiomysql.create_pool(
-                    host=db_config["host"],
-                    port=db_config["port"],
-                    user=db_config["user"],
-                    password=db_config["password"],
-                    db=db_config["database"],
-                    charset=charset,
-                    minsize=0,  # Don't pre-create connections
-                    maxsize=db_config.get("maxsize", self.maxsize),
-                    connect_timeout=self.connect_timeout,
-                    autocommit=True,
-                    pool_recycle=self.pool_recycle,
-                ),
-                timeout=self.connect_timeout + 5,  # Give extra time for pool creation
-            )
-            self.logger.info(
-                f"Successfully created pool for {db_config['user']}@{db_config['host']}:{db_config['port']}"
-            )
-            return pool
-        except TimeoutError:
-            self.logger.error(
-                f"Timeout creating pool for {db_config['user']}@{db_config['host']}:{db_config['port']}"
-            )
-            raise RuntimeError(
-                f"Timeout creating connection pool for {db_config['user']}@{db_config['host']}:{db_config['port']}"
-            )
-        except Exception as e:
-            self.logger.error(
-                f"Failed to create pool for {db_config['user']}@{db_config['host']}:{db_config['port']}: {type(e).__name__}: {e}"
-            )
-            raise
+        raise RuntimeError(
+            "Unable to create a Doris connection pool from the configured FE hosts"
+        ) from last_error
 
     async def get_connection_for_token(
         self,
@@ -1235,41 +1328,73 @@ class DorisConnectionManager:
         Returns:
             DorisConnection wrapper
         """
-        pool, db_config = await self.get_pool_for_token(token)
+        token_hash = self._get_token_hash(token)
+        last_error: Exception | None = None
+        for attempt in range(2):
+            pool, db_config = await self.get_pool_for_token(token)
+            try:
+                connection = await asyncio.wait_for(
+                    pool.acquire(), timeout=self.connect_timeout
+                )
+                if getattr(connection, "closed", False):
+                    pool.release(connection)
+                    raise RuntimeError("Token pool returned a closed connection")
 
-        try:
-            connection = await asyncio.wait_for(
-                pool.acquire(), timeout=self.connect_timeout
-            )
+                self.logger.debug(
+                    f"Session {session_id}: Acquired connection from token pool "
+                    f"(user: {db_config['user']}@{db_config['host']})"
+                )
 
-            self.logger.debug(
-                f"Session {session_id}: Acquired connection from token pool "
-                f"(user: {db_config['user']}@{db_config['host']})"
-            )
+                return DorisConnection(
+                    connection,
+                    session_id,
+                    self.security_manager,
+                    pool_kind="static_token",
+                    route_key=f"static_token:{token_hash}",
+                    owner_id=self._token_pool_owner_ids.get(
+                        token_hash, f"static_token:{token_hash}:0"
+                    ),
+                    generation=self._token_pool_generations.get(token_hash, 0),
+                    owner_pool=pool,
+                )
+            except Exception as exc:
+                last_error = exc
+                has_failover = len(self._host_candidates(db_config)) > 1
+                if attempt == 0 and has_failover:
+                    self.logger.warning(
+                        "Session %s: token pool acquisition failed; "
+                        "recreating it from configured FE candidates (%s)",
+                        session_id,
+                        type(exc).__name__,
+                    )
+                    await self._evict_token_pool_for_recovery(token_hash, pool)
+                    continue
+                self.logger.error(
+                    "Session %s: Failed to acquire connection from token pool (%s)",
+                    session_id,
+                    type(exc).__name__,
+                )
+                raise
 
-            token_hash = self._get_token_hash(token)
-            return DorisConnection(
-                connection,
-                session_id,
-                self.security_manager,
-                pool_kind="static_token",
-                route_key=f"static_token:{token_hash}",
-                owner_id=self._token_pool_owner_ids.get(
-                    token_hash, f"static_token:{token_hash}:0"
-                ),
-                generation=self._token_pool_generations.get(token_hash, 0),
-                owner_pool=pool,
-            )
+        raise RuntimeError("Token pool recovery failed") from last_error
 
-        except Exception as e:
-            self.logger.error(
-                "Session %s: Failed to acquire connection from token pool "
-                "(%s): %s",
-                session_id,
-                type(e).__name__,
-                str(e) or "<no message>",
+    async def _evict_token_pool_for_recovery(
+        self,
+        token_hash: str,
+        expected_pool: Pool,
+    ) -> None:
+        """Remove a failed token pool without evicting a concurrent replacement."""
+        pool_to_close: Pool | None = None
+        async with self._token_pools_lock:
+            if self.token_pools.get(token_hash) is expected_pool:
+                pool_to_close = self.token_pools.pop(token_hash)
+                self.token_configs.pop(token_hash, None)
+                self._token_pool_owner_ids.pop(token_hash, None)
+        if pool_to_close is not None:
+            await self._close_pool_safely(
+                pool_to_close,
+                f"failed static token pool {token_hash[:8]}",
             )
-            raise
 
     async def release_connection_for_token(
         self,
@@ -1469,20 +1594,7 @@ class DorisConnectionManager:
     async def _create_pool_with_current_config(self) -> None:
         """Create connection pool with current database configuration"""
         try:
-            self.pool = await aiomysql.create_pool(
-                host=self.host,
-                port=self.port,
-                user=self.user,
-                password=self.password,
-                db=self.database,
-                charset=self.charset,
-                minsize=self.minsize,
-                maxsize=self.maxsize,
-                pool_recycle=self.pool_recycle,
-                connect_timeout=self.connect_timeout,
-                autocommit=True,
-            )
-            self._mark_global_pool_created()
+            await self._create_global_pool()
 
             # Store the current config for comparison later
             self._last_pool_config = {
@@ -1516,6 +1628,21 @@ class DorisConnectionManager:
         except Exception as e:
             self.logger.error(f"Failed to create connection pool: {e}")
             raise
+
+    async def _create_global_pool(self, *, timeout: float | None = None) -> None:
+        """Create the global pool against the first healthy configured FE."""
+        candidate_config = self.original_db_config.copy()
+        candidate_config["host"] = self.host
+        pool, selected_host = await self._create_pool_with_candidates(
+            candidate_config,
+            minsize=self.minsize,
+            maxsize=self.maxsize,
+            timeout=timeout,
+            require_health=True,
+        )
+        self.pool = pool
+        self._set_active_global_host(selected_host)
+        self._mark_global_pool_created()
 
     async def _recreate_pool(self) -> None:
         """Recreate connection pool with current database configuration"""
@@ -1628,21 +1755,8 @@ class DorisConnectionManager:
                 )
                 return
 
-            # Create connection pool
-            self.pool = await aiomysql.create_pool(
-                host=self.host,
-                port=self.port,
-                user=self.user,
-                password=self.password,
-                db=self.database,
-                charset=self.charset,
-                minsize=self.minsize,
-                maxsize=self.maxsize,
-                pool_recycle=self.pool_recycle,
-                connect_timeout=self.connect_timeout,
-                autocommit=True,
-            )
-            self._mark_global_pool_created()
+            # Create connection pool against the first healthy configured FE.
+            await self._create_global_pool()
 
             # Test initial connection
             if not await self._test_pool_health():
@@ -1875,30 +1989,43 @@ class DorisConnectionManager:
         """
         import aiomysql
 
-        conn = None
-        try:
-            conn = await aiomysql.connect(
-                host=self.host,
-                port=self.port,
-                user=self.user,
-                password=self.password,
-                db=self.database,
-                charset=self.charset,
-                connect_timeout=self.connect_timeout,
-                autocommit=True,
-            )
+        last_error: Exception | None = None
+        for host in self._host_candidates(self.original_db_config):
+            conn = None
+            try:
+                conn = await aiomysql.connect(
+                    host=host,
+                    port=self.port,
+                    user=self.user,
+                    password=self.password,
+                    db=self.database,
+                    charset=self.charset,
+                    connect_timeout=self.connect_timeout,
+                    autocommit=True,
+                )
 
-            async with conn.cursor() as cursor:
-                await cursor.execute("SELECT 1")
-                result = await cursor.fetchone()
-                if not result or result[0] != 1:
-                    raise RuntimeError("Database connectivity test query failed")
+                async with conn.cursor() as cursor:
+                    await cursor.execute("SELECT 1")
+                    result = await cursor.fetchone()
+                    if not result or result[0] != 1:
+                        raise RuntimeError("Database connectivity test query failed")
+                self._set_active_global_host(host)
+                return
+            except Exception as exc:
+                last_error = exc
+                self.logger.warning(
+                    "Doris FE candidate %s:%s failed connectivity check (%s)",
+                    host,
+                    self.port,
+                    type(exc).__name__,
+                )
+            finally:
+                if conn:
+                    conn.close()
 
-        except Exception as e:
-            raise RuntimeError(f"Database connectivity test failed: {e}")
-        finally:
-            if conn:
-                conn.close()
+        raise RuntimeError(
+            "Database connectivity test failed for all configured Doris FE hosts"
+        ) from last_error
 
     async def _create_connection_pool(self) -> None:
         """
@@ -1907,29 +2034,7 @@ class DorisConnectionManager:
         Raises:
             Exception: If pool creation fails
         """
-        self.pool = await aiomysql.create_pool(
-            host=self.host,
-            port=self.port,
-            user=self.user,
-            password=self.password,
-            db=self.database,
-            charset=self.charset,
-            minsize=self.minsize,
-            maxsize=self.maxsize,
-            pool_recycle=self.pool_recycle,
-            connect_timeout=self.connect_timeout,
-            autocommit=True,
-        )
-        self._mark_global_pool_created()
-
-        # Test pool health
-        if not await self._test_pool_health():
-            # Clean up the pool if health test fails
-            if self.pool:
-                self.pool.close()
-                await self.pool.wait_closed()
-                self.pool = None
-            raise RuntimeError("Connection pool health check failed")
+        await self._create_global_pool()
 
     async def _test_pool_health(self) -> bool:
         """Test connection pool health"""
@@ -2144,23 +2249,7 @@ class DorisConnectionManager:
 
                         # Recreate pool with timeout
                         self.logger.debug("Creating new connection pool...")
-                        self.pool = await asyncio.wait_for(
-                            aiomysql.create_pool(
-                                host=self.host,
-                                port=self.port,
-                                user=self.user,
-                                password=self.password,
-                                db=self.database,
-                                charset=self.charset,
-                                minsize=self.minsize,
-                                maxsize=self.maxsize,
-                                pool_recycle=self.pool_recycle,
-                                connect_timeout=self.connect_timeout,
-                                autocommit=True,
-                            ),
-                            timeout=10.0,
-                        )
-                        self._mark_global_pool_created()
+                        await self._create_global_pool(timeout=10.0)
 
                         # Test recovered pool with timeout
                         if await asyncio.wait_for(
@@ -2241,6 +2330,19 @@ class DorisConnectionManager:
         except Exception as e:
             self.logger.debug(f"Could not get auth_context: {e}")
             return None
+
+    def get_database_config_for_auth_context(
+        self,
+        auth_context: AuthContext | None = None,
+    ) -> Any:
+        """Return the endpoint config for the current authenticated route."""
+        effective_context = self._get_effective_auth_context(auth_context)
+        token = getattr(effective_context, "token", "") if effective_context else ""
+        if token and self.token_manager:
+            token_config = self.token_manager.get_database_config_by_token(token)
+            if token_config is not None:
+                return token_config
+        return self.config.database
 
     async def _get_connection_for_auth_context(
         self,
