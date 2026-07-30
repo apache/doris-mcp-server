@@ -108,3 +108,19 @@ def test_fine_grained_access_control_guide_is_linked_and_complete():
     assert "root` and `admin" in guide
     assert "Doris-backed OAuth" in guide
     assert "Token-bound database configuration" in guide
+
+
+def test_custom_tool_provider_guide_is_linked_and_complete():
+    guide_path = PROJECT_ROOT / "docs" / "custom-tool-providers.md"
+    guide = guide_path.read_text(encoding="utf-8")
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    chinese_readme = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+    link = "docs/custom-tool-providers.md"
+
+    assert f"]({link})" in readme
+    assert f"]({link})" in chinese_readme
+    assert "doris_mcp_server.tool_providers" in guide
+    assert "MCP_TOOL_PROVIDERS" in guide
+    assert "ToolRateLimit" in guide
+    assert "fail closed" in guide
+    assert "FastGPT" in guide

@@ -16,18 +16,21 @@
 # under the License.
 """Immutable MCP tool catalog, separate from manager lifecycle and routing."""
 
+from collections.abc import Iterable
 from typing import Any
 
 from mcp.types import Tool
 
 from ..result_limits import configured_default_result_rows, configured_result_limits
 from ..utils.config import ADBCConfig
+from .tool_provider import CustomTool
 from .tool_registry import ToolDefinitionRegistry
 
 
 def build_tool_registry(
     handler_owner: Any,
     config: Any | None,
+    custom_tools: Iterable[tuple[str, CustomTool]] = (),
 ) -> ToolDefinitionRegistry:
     """Build immutable tool metadata and bind it to a handler owner."""
     adbc_config = getattr(config, "adbc", None) or ADBCConfig()
@@ -936,4 +939,8 @@ No parameters required. Returns connection status, configuration, and diagnostic
         ),
     ]
 
-    return ToolDefinitionRegistry.from_tools(tools, handler_owner)
+    return ToolDefinitionRegistry.from_tools(
+        tools,
+        handler_owner,
+        custom_tools=custom_tools,
+    )

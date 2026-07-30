@@ -305,3 +305,34 @@ def test_filter_tools_for_doris_oauth_hides_disabled_or_denied_tools():
     )
 
     assert [tool.name for tool in filtered] == ["get_db_list", "exec_query"]
+
+
+def test_external_oauth_hides_custom_tools_without_reviewed_policy():
+    context = AuthContext(
+        auth_method="external_oauth",
+        oauth_scopes=[
+            "tool:list",
+            "tool:call:get_db_list",
+            "tool:call:custom_business_api",
+        ],
+    )
+    tools = [
+        SimpleNamespace(name="get_db_list"),
+        SimpleNamespace(name="custom_business_api"),
+    ]
+
+    filtered = filter_tools_for_auth_context(context, tools)
+
+    assert [tool.name for tool in filtered] == ["get_db_list"]
+
+
+def test_external_oauth_rejects_custom_tool_call_without_reviewed_policy():
+    context = AuthContext(
+        auth_method="external_oauth",
+        oauth_scopes=["tool:call:custom_business_api"],
+    )
+
+    with pytest.raises(OperationAuthorizationError) as exc:
+        authorize_operation(context, "tool:custom_business_api")
+
+    assert exc.value.error_code == "UNKNOWN_OPERATION"

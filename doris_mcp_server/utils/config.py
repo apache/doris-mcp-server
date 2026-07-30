@@ -43,6 +43,10 @@ from ..result_limits import (
     DEFAULT_RESULT_ROWS,
     MIN_RESULT_BYTES,
 )
+from ..tools.tool_provider import (
+    ToolProviderError,
+    normalize_tool_provider_names,
+)
 from ..tools.tool_registry import (
     DORIS_OAUTH_EXPLAIN_TOOL_SET,
     DORIS_OAUTH_METADATA_TOOL_NAMES,
@@ -841,6 +845,7 @@ class DorisConfig:
     mcp_allowed_origins: list[str] = field(default_factory=list)
     enable_legacy_http_adapter: bool = False
     mcp_list_page_size: int = 100
+    mcp_tool_providers: list[str] = field(default_factory=list)
     mcp_state_handle_secret: str = field(
         default_factory=lambda: secrets.token_urlsafe(32),
         repr=False,
@@ -1461,6 +1466,13 @@ class DorisConfig:
                 config.mcp_list_page_size,
             )
             _mark_source(config, "mcp_list_page_size", "env")
+        if "MCP_TOOL_PROVIDERS" in os.environ:
+            config.mcp_tool_providers = [
+                value.strip()
+                for value in os.getenv("MCP_TOOL_PROVIDERS", "").split(",")
+                if value.strip()
+            ]
+            _mark_source(config, "mcp_tool_providers", "env")
         if "MCP_STATE_HANDLE_SECRET" in os.environ:
             config.mcp_state_handle_secret = os.getenv(
                 "MCP_STATE_HANDLE_SECRET",
@@ -1491,6 +1503,7 @@ class DorisConfig:
             "mcp_allowed_origins",
             "enable_legacy_http_adapter",
             "mcp_list_page_size",
+            "mcp_tool_providers",
             "mcp_state_handle_ttl_seconds",
             "temp_files_dir",
             "transport",
@@ -1567,6 +1580,7 @@ class DorisConfig:
             "mcp_allowed_origins": self.mcp_allowed_origins,
             "enable_legacy_http_adapter": self.enable_legacy_http_adapter,
             "mcp_list_page_size": self.mcp_list_page_size,
+            "mcp_tool_providers": self.mcp_tool_providers,
             "mcp_state_handle_ttl_seconds": self.mcp_state_handle_ttl_seconds,
             "temp_files_dir": self.temp_files_dir,
             "database": {
@@ -1773,6 +1787,15 @@ class DorisConfig:
 
         if not 1 <= self.mcp_list_page_size <= 1000:
             errors.append("MCP list page size must be in the range 1-1000")
+
+        raw_tool_providers: Any = self.mcp_tool_providers
+        if not isinstance(raw_tool_providers, list):
+            errors.append("MCP tool providers must be a list")
+        else:
+            try:
+                normalize_tool_provider_names(raw_tool_providers)
+            except ToolProviderError as exc:
+                errors.append(str(exc))
 
         if len(self.mcp_state_handle_secret.encode("utf-8")) < 32:
             errors.append("MCP state handle secret must contain at least 32 bytes")

@@ -220,6 +220,8 @@ export ENABLE_LEGACY_HTTP_ADAPTER=false
 
 # Bound each resources/list, tools/list, and prompts/list response.
 export MCP_LIST_PAGE_SIZE=100
+# Load only these installed custom tool providers. Empty disables extensions.
+export MCP_TOOL_PROVIDERS="orders_api"
 # A launch-local key is generated automatically. Configure one shared
 # high-entropy value when independently launched replicas share traffic.
 export MCP_STATE_HANDLE_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -316,6 +318,8 @@ cp .env.example .env
         modern traffic always uses `POST /mcp`
     *   `MCP_LIST_PAGE_SIZE`: Maximum resources, tools, or prompts returned
         per protocol page (default: 100; range: 1-1000)
+    *   `MCP_TOOL_PROVIDERS`: Comma-separated allowlist of installed
+        `doris_mcp_server.tool_providers` entry points (default: empty)
     *   `MCP_STATE_HANDLE_SECRET`: Optional shared high-entropy key (at least
         32 bytes) used to authenticate explicit cross-call state handles
     *   `MCP_STATE_HANDLE_TTL_SECONDS`: Lifetime of an explicit state handle
@@ -1497,6 +1501,12 @@ doris-mcp-server/
 ## Developing New Tools
 
 This section outlines the process for adding new MCP tools to the Doris MCP Server, based on the unified modular architecture with centralized tool management.
+
+Existing business APIs do not need to be built into this repository. Package
+them as explicitly installed, allowlisted custom tool providers instead. The
+[custom tool provider guide](docs/custom-tool-providers.md) defines the entry
+point contract, lifecycle, process-local QPS limits, authentication boundary,
+FastGPT integration, and production security checklist.
 
 ### 1. Leverage Existing Utility Modules
 
