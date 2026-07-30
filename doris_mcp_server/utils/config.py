@@ -34,6 +34,14 @@ from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from .._version import __version__
+from ..result_limits import (
+    ABSOLUTE_MAX_QUERY_TIMEOUT_SECONDS,
+    ABSOLUTE_MAX_RESULT_BYTES,
+    ABSOLUTE_MAX_RESULT_ROWS,
+    DEFAULT_MAX_RESULT_BYTES,
+    DEFAULT_MAX_RESULT_ROWS,
+    MIN_RESULT_BYTES,
+)
 from ..tools.tool_registry import (
     DORIS_OAUTH_EXPLAIN_TOOL_SET,
     DORIS_OAUTH_METADATA_TOOL_NAMES,
@@ -499,6 +507,7 @@ class PerformanceConfig:
     # Concurrency control configuration
     max_concurrent_queries: int = 50
     query_timeout: int = 300
+    max_result_bytes: int = DEFAULT_MAX_RESULT_BYTES
 
     # Connection pool optimization configuration
     connection_pool_size: int = 20
@@ -540,7 +549,7 @@ class ADBCConfig:
     """ADBC (Arrow Flight SQL) configuration"""
 
     # Default query parameters
-    default_max_rows: int = 100000
+    default_max_rows: int = DEFAULT_MAX_RESULT_ROWS
     default_timeout: int = 60
     default_return_format: str = "arrow"  # "arrow", "pandas", "dict"
 
@@ -1036,6 +1045,12 @@ class DorisConfig:
         config.performance.query_timeout = int(
             os.getenv("QUERY_TIMEOUT", str(config.performance.query_timeout))
         )
+        config.performance.max_result_bytes = int(
+            os.getenv(
+                "MAX_RESULT_BYTES",
+                str(config.performance.max_result_bytes),
+            )
+        )
         config.performance.max_response_content_size = int(
             os.getenv("MAX_RESPONSE_CONTENT_SIZE", str(config.performance.max_response_content_size))
         )
@@ -1348,6 +1363,7 @@ class DorisConfig:
                 "max_cache_size": self.performance.max_cache_size,
                 "max_concurrent_queries": self.performance.max_concurrent_queries,
                 "query_timeout": self.performance.query_timeout,
+                "max_result_bytes": self.performance.max_result_bytes,
                 "connection_pool_size": self.performance.connection_pool_size,
                 "idle_timeout": self.performance.idle_timeout,
                 "max_response_content_size": self.performance.max_response_content_size,
@@ -1480,6 +1496,11 @@ class DorisConfig:
 
         if self.security.max_result_rows <= 0:
             errors.append("Maximum result rows must be greater than 0")
+        elif self.security.max_result_rows > ABSOLUTE_MAX_RESULT_ROWS:
+            errors.append(
+                "Maximum result rows must not exceed "
+                f"{ABSOLUTE_MAX_RESULT_ROWS}"
+            )
 
         # Validate performance configuration
         if self.performance.cache_ttl <= 0:
@@ -1490,6 +1511,24 @@ class DorisConfig:
 
         if self.performance.query_timeout <= 0:
             errors.append("Query timeout must be greater than 0")
+        elif (
+            self.performance.query_timeout
+            > ABSOLUTE_MAX_QUERY_TIMEOUT_SECONDS
+        ):
+            errors.append(
+                "Query timeout must not exceed "
+                f"{ABSOLUTE_MAX_QUERY_TIMEOUT_SECONDS} seconds"
+            )
+
+        if not (
+            MIN_RESULT_BYTES
+            <= self.performance.max_result_bytes
+            <= ABSOLUTE_MAX_RESULT_BYTES
+        ):
+            errors.append(
+                "Maximum result bytes must be in the range "
+                f"{MIN_RESULT_BYTES}-{ABSOLUTE_MAX_RESULT_BYTES}"
+            )
 
         # Validate data quality configuration
         if self.data_quality.max_columns_per_batch <= 0:
@@ -1542,9 +1581,19 @@ class DorisConfig:
         # Validate ADBC configuration
         if self.adbc.default_max_rows <= 0:
             errors.append("ADBC default max rows must be greater than 0")
+        elif self.adbc.default_max_rows > self.security.max_result_rows:
+            errors.append(
+                "ADBC default max rows must not exceed the configured "
+                f"maximum result rows ({self.security.max_result_rows})"
+            )
 
         if self.adbc.default_timeout <= 0:
             errors.append("ADBC default timeout must be greater than 0")
+        elif self.adbc.default_timeout > self.performance.query_timeout:
+            errors.append(
+                "ADBC default timeout must not exceed the configured query "
+                f"timeout ({self.performance.query_timeout} seconds)"
+            )
 
         if self.adbc.default_return_format not in ["arrow", "pandas", "dict"]:
             errors.append("ADBC default return format must be one of arrow, pandas, or dict")

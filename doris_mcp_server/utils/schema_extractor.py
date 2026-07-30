@@ -2102,6 +2102,8 @@ class MetadataExtractor:
         catalog_name: str | None = None,
         max_rows: int = 100,
         timeout: int = 30,
+        *,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         """
         Execute SQL query and return results, supports catalog federation queries
@@ -2193,6 +2195,7 @@ class MetadataExtractor:
                 sql=sql,
                 connection_manager=self.connection_manager,
                 limit=max_rows,
+                max_bytes=max_bytes,
                 timeout=timeout,
                 db_name=db_name,
                 catalog_name=catalog_name,
@@ -2598,10 +2601,17 @@ class MetadataManager:
         catalog_name: str | None = None,
         max_rows: int = 100,
         timeout: int = 30,
+        *,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         """Execute SQL query and return results, supports catalog federation queries"""
         return await self.extractor.exec_query_for_mcp(
-            sql, db_name, catalog_name, max_rows, timeout
+            sql,
+            db_name,
+            catalog_name,
+            max_rows,
+            timeout,
+            max_bytes=max_bytes,
         )
 
     async def get_table_schema(

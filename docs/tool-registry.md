@@ -4,7 +4,7 @@
 
 | Tool | Policy | Risk | Handler | Audit event | Parameters |
 |---|---|---|---|---|---|
-| `exec_query` | `query` | `query` | `_exec_query_tool` | `mcp.tool.call.exec_query` | `catalog_name`, `db_name`, `max_rows`, `sql`*, `timeout` |
+| `exec_query` | `query` | `query` | `_exec_query_tool` | `mcp.tool.call.exec_query` | `catalog_name`, `db_name`, `max_bytes`, `max_rows`, `sql`*, `timeout` |
 | `get_table_schema` | `metadata` | `metadata` | `_get_table_schema_tool` | `mcp.tool.call.get_table_schema` | `catalog_name`, `db_name`, `table_name`* |
 | `get_db_table_list` | `metadata` | `metadata` | `_get_db_table_list_tool` | `mcp.tool.call.get_db_table_list` | `catalog_name`, `db_name` |
 | `get_db_list` | `metadata` | `metadata` | `_get_db_list_tool` | `mcp.tool.call.get_db_list` | `catalog_name` |
@@ -27,7 +27,7 @@
 | `analyze_data_flow_dependencies` | `restricted` | `high` | `_analyze_data_flow_dependencies_tool` | `mcp.tool.call.analyze_data_flow_dependencies` | `analysis_depth`, `catalog_name`, `db_name`, `include_views`, `target_table` |
 | `analyze_slow_queries_topn` | `restricted` | `high` | `_analyze_slow_queries_topn_tool` | `mcp.tool.call.analyze_slow_queries_topn` | `days`, `include_patterns`, `min_execution_time_ms`, `top_n` |
 | `analyze_resource_growth_curves` | `restricted` | `high` | `_analyze_resource_growth_curves_tool` | `mcp.tool.call.analyze_resource_growth_curves` | `days`, `detailed_response`, `include_predictions`, `resource_types` |
-| `exec_adbc_query` | `restricted` | `high` | `_exec_adbc_query_tool` | `mcp.tool.call.exec_adbc_query` | `max_rows`, `return_format`, `sql`*, `timeout` |
+| `exec_adbc_query` | `restricted` | `high` | `_exec_adbc_query_tool` | `mcp.tool.call.exec_adbc_query` | `max_bytes`, `max_rows`, `return_format`, `sql`*, `timeout` |
 | `get_adbc_connection_info` | `restricted` | `high` | `_get_adbc_connection_info_tool` | `mcp.tool.call.get_adbc_connection_info` | None |
 
 Required parameters are marked with `*`. Tool descriptions and JSON Schemas are exposed directly by MCP `tools/list` from the same registry entries.

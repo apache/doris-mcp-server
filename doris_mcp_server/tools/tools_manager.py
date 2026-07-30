@@ -31,6 +31,7 @@ from ..auth.operation_policy import (
     authorize_operation,
     filter_tools_for_auth_context,
 )
+from ..result_limits import configured_result_limits
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.analysis_tools import MemoryTracker, SQLAnalyzer, TableAnalyzer
 from ..utils.config import ADBCConfig
@@ -120,6 +121,15 @@ class DorisToolsManager:
         connection_manager = getattr(self, "connection_manager", None)
         config = getattr(connection_manager, "config", None)
         adbc_config = getattr(config, "adbc", None) or ADBCConfig()
+        result_limits = configured_result_limits(config)
+        adbc_default_max_rows = min(
+            adbc_config.default_max_rows,
+            result_limits.max_rows,
+        )
+        adbc_default_timeout = min(
+            adbc_config.default_timeout,
+            result_limits.timeout_seconds,
+        )
 
         tools = [
             Tool(
@@ -135,6 +145,8 @@ class DorisToolsManager:
 - catalog_name (string) [Optional] - Reference catalog name for context, defaults to current catalog
 
 - max_rows (integer) [Optional] - Maximum number of rows to return, default 100
+
+- max_bytes (integer) [Optional] - Maximum UTF-8 JSON bytes for returned row data
 
 - timeout (integer) [Optional] - Query timeout in seconds, default 30
 """,
@@ -157,11 +169,22 @@ class DorisToolsManager:
                             "type": "integer",
                             "description": "Maximum number of rows to return",
                             "default": 100,
+                            "minimum": 1,
+                            "maximum": result_limits.max_rows,
+                        },
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Maximum UTF-8 JSON bytes for returned row data",
+                            "default": result_limits.max_bytes,
+                            "minimum": 256,
+                            "maximum": result_limits.max_bytes,
                         },
                         "timeout": {
                             "type": "integer",
                             "description": "Timeout in seconds",
                             "default": 30,
+                            "minimum": 1,
+                            "maximum": result_limits.timeout_seconds,
                         },
                     },
                     "required": ["sql"],
@@ -936,8 +959,9 @@ class DorisToolsManager:
 [Parameter Content]:
 
 - sql (string) [Required] - SQL statement to execute
-- max_rows (integer) [Optional] - Maximum number of rows to return, default is {adbc_config.default_max_rows}
-- timeout (integer) [Optional] - Query timeout in seconds, default is {adbc_config.default_timeout}
+- max_rows (integer) [Optional] - Maximum number of rows to return, default is {adbc_default_max_rows}
+- max_bytes (integer) [Optional] - Maximum UTF-8 JSON bytes for returned row data, default is {result_limits.max_bytes}
+- timeout (integer) [Optional] - Query timeout in seconds, default is {adbc_default_timeout}
 - return_format (string) [Optional] - Format for returned data, default is "{adbc_config.default_return_format}"
   * "arrow": Return Arrow format with metadata
   * "pandas": Return Pandas DataFrame format
@@ -958,12 +982,23 @@ class DorisToolsManager:
                         "max_rows": {
                             "type": "integer",
                             "description": "Maximum number of rows to return",
-                            "default": adbc_config.default_max_rows,
+                            "minimum": 1,
+                            "maximum": result_limits.max_rows,
+                            "default": adbc_default_max_rows,
+                        },
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Maximum UTF-8 JSON result bytes",
+                            "minimum": 256,
+                            "maximum": result_limits.max_bytes,
+                            "default": result_limits.max_bytes,
                         },
                         "timeout": {
                             "type": "integer",
                             "description": "Query timeout in seconds",
-                            "default": adbc_config.default_timeout,
+                            "minimum": 1,
+                            "maximum": result_limits.timeout_seconds,
+                            "default": adbc_default_timeout,
                         },
                         "return_format": {
                             "type": "string",
@@ -1092,11 +1127,17 @@ No parameters required. Returns connection status, configuration, and diagnostic
         db_name = arguments.get("db_name")
         catalog_name = arguments.get("catalog_name")
         max_rows = arguments.get("max_rows", 100)
+        max_bytes = arguments.get("max_bytes")
         timeout = arguments.get("timeout", 30)
 
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.exec_query_for_mcp(
-            sql, db_name, catalog_name, max_rows, timeout
+            sql,
+            db_name,
+            catalog_name,
+            max_rows,
+            timeout,
+            max_bytes=max_bytes,
         )
 
     async def _get_table_schema_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1588,13 +1629,18 @@ No parameters required. Returns connection status, configuration, and diagnostic
     async def _exec_adbc_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """ADBC query execution tool routing"""
         sql = self._required_string(arguments, "sql")
-        max_rows = arguments.get("max_rows", 100000)
-        timeout = arguments.get("timeout", 60)
-        return_format = arguments.get("return_format", "arrow")
+        max_rows = arguments.get("max_rows")
+        max_bytes = arguments.get("max_bytes")
+        timeout = arguments.get("timeout")
+        return_format = arguments.get("return_format")
 
         # Delegate to ADBC query tools for processing
         return await self.adbc_query_tools.exec_adbc_query(
-            sql, max_rows, timeout, return_format
+            sql,
+            max_rows=max_rows,
+            timeout=timeout,
+            return_format=return_format,
+            max_bytes=max_bytes,
         )
 
     async def _get_adbc_connection_info_tool(

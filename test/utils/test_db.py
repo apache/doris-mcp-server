@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -153,6 +154,28 @@ def _make_doris_connection(cursor_description, fetchall_rows, rowcount=0):
     return DorisConnection(connection=raw_connection, session_id="test")
 
 
+def _make_bounded_doris_connection(cursor_description, fetchmany_rows):
+    cursor = MagicMock()
+    cursor.execute = AsyncMock(return_value=None)
+    cursor.fetchmany = AsyncMock(side_effect=fetchmany_rows)
+    cursor.description = cursor_description
+    cursor.rowcount = 0
+
+    cursor_ctx = MagicMock()
+    cursor_ctx.__aenter__ = AsyncMock(return_value=cursor)
+    cursor_ctx.__aexit__ = AsyncMock(return_value=None)
+
+    raw_connection = MagicMock()
+    raw_connection.cursor = MagicMock(return_value=cursor_ctx)
+    raw_connection.ensure_closed = AsyncMock()
+
+    return (
+        DorisConnection(connection=raw_connection, session_id="bounded"),
+        cursor,
+        raw_connection,
+    )
+
+
 class TestExecuteResultSetDetection:
     """Behavior contract for DorisConnection.execute().
 
@@ -270,3 +293,84 @@ class TestExecuteResultSetDetection:
 
         assert result.data == []
         assert result.row_count == affected
+
+
+class TestBoundedResultFetch:
+    async def test_row_limit_stops_streaming_and_closes_physical_connection(self):
+        conn, cursor, raw_connection = _make_bounded_doris_connection(
+            [("id", None, None, None, None, None, None)],
+            [[{"id": 1}, {"id": 2}, {"id": 3}]],
+        )
+
+        result = await conn.execute(
+            "WITH data AS (...) SELECT * FROM data",
+            max_rows=2,
+            max_bytes=4096,
+        )
+
+        assert result.data == [{"id": 1}, {"id": 2}]
+        assert result.row_count == 2
+        assert result.metadata["truncated"] is True
+        assert result.metadata["truncation_reason"] == "row_limit"
+        assert result.metadata["result_bytes"] <= 4096
+        cursor.fetchall.assert_not_called()
+        raw_connection.ensure_closed.assert_awaited_once()
+        assert conn.is_healthy is False
+
+    async def test_byte_limit_is_measured_after_masking(self):
+        conn, _, raw_connection = _make_bounded_doris_connection(
+            [("secret", None, None, None, None, None, None)],
+            [[{"secret": "x"}], []],
+        )
+        security_manager = MagicMock()
+        security_manager.validate_sql_security = AsyncMock(
+            return_value=MagicMock(
+                is_valid=True,
+                risk_level="low",
+                blocked_operations=[],
+            )
+        )
+        security_manager.apply_data_masking = AsyncMock(
+            return_value=[{"secret": "masked-value-that-is-too-large"}]
+        )
+        conn.security_manager = security_manager
+
+        result = await conn.execute(
+            "SELECT secret FROM t",
+            auth_context=object(),
+            max_rows=10,
+            max_bytes=24,
+        )
+
+        assert result.data == []
+        assert result.metadata["truncated"] is True
+        assert result.metadata["truncation_reason"] == "byte_limit"
+        assert result.metadata["result_bytes"] == 2
+        security_manager.apply_data_masking.assert_awaited_once()
+        raw_connection.ensure_closed.assert_awaited_once()
+
+    async def test_task_cancellation_closes_connection_and_propagates(self):
+        conn, cursor, raw_connection = _make_bounded_doris_connection(
+            [("id", None, None, None, None, None, None)],
+            [],
+        )
+        async def never_returns(*args, **kwargs):
+            del args, kwargs
+            await asyncio.Event().wait()
+
+        cursor.execute.side_effect = never_returns
+        task = asyncio.create_task(
+            conn.execute(
+                "SELECT SLEEP(30)",
+                max_rows=1,
+                max_bytes=4096,
+            )
+        )
+        await asyncio.sleep(0)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        raw_connection.ensure_closed.assert_awaited_once()
+        assert conn.is_healthy is False

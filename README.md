@@ -330,9 +330,11 @@ cp .env.example .env
     *   `ENABLE_SECURITY_CHECK`: Enable/disable SQL security validation (default: true)
     *   `BLOCKED_KEYWORDS`: Comma-separated list of blocked SQL keywords
     *   `ENABLE_MASKING`: Enable data masking (default: true)
-    *   `MAX_RESULT_ROWS`: Maximum result rows (default: 10000)
+    *   `MAX_RESULT_ROWS`: Deployment ceiling for returned query rows
+        (default: 10000; absolute hard cap: 100000)
 *   **ADBC Configuration (New in v0.5.0)**:
-    *   `ADBC_DEFAULT_MAX_ROWS`: Default maximum rows for ADBC queries (default: 100000)
+    *   `ADBC_DEFAULT_MAX_ROWS`: Default maximum rows for ADBC queries
+        (default: 10000; cannot exceed `MAX_RESULT_ROWS`)
     *   `ADBC_DEFAULT_TIMEOUT`: Default ADBC query timeout in seconds (default: 60)
     *   `ADBC_DEFAULT_RETURN_FORMAT`: Default return format - arrow/pandas/dict (default: arrow)
     *   `ADBC_CONNECTION_TIMEOUT`: ADBC connection timeout in seconds (default: 30)
@@ -341,6 +343,10 @@ cp .env.example .env
     *   `ENABLE_QUERY_CACHE`: Enable query caching (default: true)
     *   `CACHE_TTL`: Cache time-to-live in seconds (default: 300)
     *   `MAX_CONCURRENT_QUERIES`: Maximum concurrent queries (default: 50)
+    *   `QUERY_TIMEOUT`: Deployment ceiling for query execution time
+        (default and absolute hard cap: 300 seconds)
+    *   `MAX_RESULT_BYTES`: Deployment ceiling for UTF-8 JSON row data
+        (default: 1048576; allowed range: 256-16777216 bytes)
     *   `MAX_RESPONSE_CONTENT_SIZE`: Maximum response content size for LLM compatibility (default: 4096, New in v0.4.0)
 *   **Enhanced Logging Configuration (Improved in v0.5.0)**:
     *   `LOG_LEVEL`: Log level (DEBUG/INFO/WARNING/ERROR, default: INFO)
@@ -1847,7 +1853,7 @@ the request metadata, HTTP headers, migration steps, and deployment limits.
 3. **Optional ADBC Customization**:
    ```bash
    # Customize ADBC behavior (optional)
-   ADBC_DEFAULT_MAX_ROWS=200000
+   ADBC_DEFAULT_MAX_ROWS=10000
    ADBC_DEFAULT_TIMEOUT=120
    ADBC_DEFAULT_RETURN_FORMAT=pandas  # arrow/pandas/dict
    ```

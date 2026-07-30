@@ -33,6 +33,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 import sqlparse
 
+from ..result_limits import (
+    ResultLimitError,
+    ResultLimits,
+    configured_result_limits,
+    resolve_result_limits,
+)
 from .auth_credentials import EMPTY_CREDENTIAL
 from .datetime_utils import utc_now
 from .db import (
@@ -62,6 +68,8 @@ class QueryRequest:
     user_id: str
     parameters: dict[str, Any] | None = None
     timeout: int | None = None
+    max_rows: int | None = None
+    max_bytes: int | None = None
     cache_enabled: bool = True
 
 
@@ -338,7 +346,11 @@ class DorisQueryExecutor:
         config: Any | None = None,
     ) -> None:
         self.connection_manager = connection_manager
-        self.config = config or self._create_default_config()
+        self.config = (
+            config
+            or getattr(connection_manager, "config", None)
+            or self._create_default_config()
+        )
         self.logger = get_logger(__name__)
 
         # Initialize components
@@ -359,6 +371,7 @@ class DorisQueryExecutor:
         self.max_concurrent_queries = getattr(
             getattr(self.config, 'performance', None), 'max_concurrent_queries', 50
         ) if hasattr(self.config, 'performance') else 50
+        self.configured_result_limits = configured_result_limits(self.config)
 
         # Background tasks
         self._background_tasks: list[asyncio.Task[None]] = []
@@ -368,12 +381,19 @@ class DorisQueryExecutor:
         class DefaultConfig:
             def __init__(self) -> None:
                 self.performance = DefaultPerformanceConfig()
+                self.security = DefaultSecurityConfig()
 
         class DefaultPerformanceConfig:
             def __init__(self) -> None:
                 self.max_cache_size = 1000
                 self.cache_ttl = 300
                 self.max_concurrent_queries = 50
+                self.query_timeout = 300
+                self.max_result_bytes = 1024 * 1024
+
+        class DefaultSecurityConfig:
+            def __init__(self) -> None:
+                self.max_result_rows = 10_000
 
         return DefaultConfig()
 
@@ -475,13 +495,27 @@ class DorisQueryExecutor:
         if query_request.timeout:
             try:
                 result = await asyncio.wait_for(
-                    self.connection_manager.execute_query(query_request.session_id, optimized_sql, query_request.parameters, auth_context),
+                    self.connection_manager.execute_query(
+                        query_request.session_id,
+                        optimized_sql,
+                        query_request.parameters,
+                        auth_context,
+                        max_rows=query_request.max_rows,
+                        max_bytes=query_request.max_bytes,
+                    ),
                     timeout=query_request.timeout
                 )
             except TimeoutError:
                 raise Exception(f"Query timeout after {query_request.timeout} seconds")
         else:
-            result = await self.connection_manager.execute_query(query_request.session_id, optimized_sql, query_request.parameters, auth_context)
+            result = await self.connection_manager.execute_query(
+                query_request.session_id,
+                optimized_sql,
+                query_request.parameters,
+                auth_context,
+                max_rows=query_request.max_rows,
+                max_bytes=query_request.max_bytes,
+            )
 
         return result
 
@@ -505,6 +539,8 @@ class DorisQueryExecutor:
     async def execute_batch_sqls_for_mcp(
         self,
         sqls: list[str],
+        max_rows: int = 1000,
+        max_bytes: int | None = None,
         timeout: int = 30,
         session_id: str = "mcp_session",
         user_id: str = "mcp_user",
@@ -517,35 +553,53 @@ class DorisQueryExecutor:
                 "error": "SQL query is required",
                 "data": None
             }
-        query_requests = [
-            QueryRequest(
-                sql=sql,
-                session_id=session_id,
-                user_id=user_id,
-                timeout=timeout,
-                cache_enabled=False
-            )
-            for sql in sqls
-        ]
-        query_results = await self.execute_batch_queries(query_requests, auth_context)
+        limits = resolve_result_limits(
+            self.config,
+            max_rows=max_rows,
+            max_bytes=max_bytes,
+            timeout_seconds=timeout,
+        )
+        query_results: list[QueryResult] = []
+        remaining_rows = limits.max_rows
+        remaining_bytes = limits.max_bytes
+        async with asyncio.timeout(limits.timeout_seconds):
+            for sql in sqls:
+                if remaining_rows <= 0 or remaining_bytes < 256:
+                    break
+                result = await self.execute_query(
+                    QueryRequest(
+                        sql=sql,
+                        session_id=session_id,
+                        user_id=user_id,
+                        timeout=None,
+                        max_rows=remaining_rows,
+                        max_bytes=remaining_bytes,
+                        cache_enabled=False,
+                    ),
+                    auth_context,
+                )
+                query_results.append(result)
+                remaining_rows -= result.row_count
+                remaining_bytes -= int(result.metadata.get("result_bytes", 2))
+
         # Serialize data for JSON response
         results = [
-            {
-                "data": [self._serialize_row_data(data) for data in result.data],
-                "row_count": result.row_count,
-                "execution_time": result.execution_time,
-                "metadata": {
-                    "columns": result.metadata.get("columns", []),
-                    "query": result.sql
-                }
-            }
+            self._query_result_payload(result, limits)
             for result in query_results
         ]
 
         return {
             "success": True,
             "multiple_results": True,
-            "results": results
+            "results": results,
+            "metadata": {
+                "truncated": len(query_results) < len(sqls),
+                "limits": {
+                    "max_rows": limits.max_rows,
+                    "max_bytes": limits.max_bytes,
+                    "timeout_seconds": limits.timeout_seconds,
+                },
+            },
         }
 
     async def execute_batch_queries(
@@ -630,7 +684,16 @@ class DorisQueryExecutor:
         if callable(release_connection):
             await release_connection(session_id, connection)
 
-    def _query_result_payload(self, result: QueryResult) -> dict[str, Any]:
+    def _query_result_payload(
+        self,
+        result: QueryResult,
+        limits: ResultLimits,
+    ) -> dict[str, Any]:
+        boundary_metadata = {
+            key: result.metadata.get(key)
+            for key in ("result_bytes", "truncated", "truncation_reason")
+            if key in result.metadata
+        }
         return {
             "data": [self._serialize_row_data(data) for data in result.data],
             "row_count": result.row_count,
@@ -638,6 +701,12 @@ class DorisQueryExecutor:
             "metadata": {
                 "columns": result.metadata.get("columns", []),
                 "query": result.sql,
+                **boundary_metadata,
+                "limits": {
+                    "max_rows": limits.max_rows,
+                    "max_bytes": limits.max_bytes,
+                    "timeout_seconds": limits.timeout_seconds,
+                },
             },
         }
 
@@ -648,12 +717,19 @@ class DorisQueryExecutor:
         db_name: str | None = None,
         catalog_name: str | None = None,
         limit: int = 1000,
+        max_bytes: int | None = None,
         timeout: int = 30,
         session_id: str = "mcp_session",
         user_id: str = "mcp_user",
         auth_context: AuthContext | None = None,
     ) -> dict[str, Any]:
         """Execute optional catalog/db context and target SQL on one routed connection."""
+        limits = resolve_result_limits(
+            self.config,
+            max_rows=limit,
+            max_bytes=max_bytes,
+            timeout_seconds=timeout,
+        )
         try:
             context_statements = self._build_context_statements(db_name, catalog_name)
         except SQLSecurityError as exc:
@@ -681,29 +757,42 @@ class DorisQueryExecutor:
 
         connection = None
         try:
-            connection = await self._acquire_routed_connection(session_id, auth_context)
-            for context_sql in context_statements:
-                if timeout:
-                    await asyncio.wait_for(
-                        connection.execute(context_sql, auth_context=auth_context),
-                        timeout=timeout,
+            async with asyncio.timeout(limits.timeout_seconds):
+                connection = await self._acquire_routed_connection(
+                    session_id,
+                    auth_context,
+                )
+                query_results: list[QueryResult] = []
+                for context_sql in context_statements:
+                    await connection.execute(
+                        context_sql,
+                        auth_context=auth_context,
                     )
-                else:
-                    await connection.execute(context_sql, auth_context=auth_context)
 
-            query_results: list[QueryResult] = []
-            for statement in target_statements:
-                if timeout:
-                    result = await asyncio.wait_for(
-                        connection.execute(statement, auth_context=auth_context),
-                        timeout=timeout,
+                remaining_rows = limits.max_rows
+                remaining_bytes = limits.max_bytes
+                for statement in target_statements:
+                    statement_limits = ResultLimits(
+                        max_rows=max(1, remaining_rows),
+                        max_bytes=max(256, remaining_bytes),
+                        timeout_seconds=limits.timeout_seconds,
                     )
-                else:
-                    result = await connection.execute(statement, auth_context=auth_context)
-                query_results.append(result)
+                    result = await connection.execute(
+                        statement,
+                        auth_context=auth_context,
+                        max_rows=statement_limits.max_rows,
+                        max_bytes=statement_limits.max_bytes,
+                    )
+                    query_results.append(result)
+                    remaining_rows -= result.row_count
+                    remaining_bytes -= int(
+                        result.metadata.get("result_bytes", 2)
+                    )
+                    if remaining_rows <= 0 or remaining_bytes < 256:
+                        break
 
             if len(query_results) == 1:
-                payload = self._query_result_payload(query_results[0])
+                payload = self._query_result_payload(query_results[0], limits)
                 return {
                     "success": True,
                     **payload,
@@ -712,7 +801,10 @@ class DorisQueryExecutor:
             return {
                 "success": True,
                 "multiple_results": True,
-                "results": [self._query_result_payload(result) for result in query_results],
+                "results": [
+                    self._query_result_payload(result, limits)
+                    for result in query_results
+                ],
             }
         finally:
             if connection is not None:
@@ -776,6 +868,7 @@ class DorisQueryExecutor:
         self,
         sql: str,
         limit: int = 1000,
+        max_bytes: int | None = None,
         timeout: int = 30,
         session_id: str = "mcp_session",
         user_id: str = "mcp_user",
@@ -787,6 +880,21 @@ class DorisQueryExecutor:
 
         FIX for Issue #62 Bug 1: Now accepts auth_context parameter to support token-bound database configuration
         """
+        try:
+            limits = resolve_result_limits(
+                self.config,
+                max_rows=limit,
+                max_bytes=max_bytes,
+                timeout_seconds=timeout,
+            )
+        except ResultLimitError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+                "error_type": "invalid_result_limits",
+                "data": None,
+            }
+
         max_retries = 2
         retry_count = 0
 
@@ -876,8 +984,9 @@ class DorisQueryExecutor:
                         sql,
                         db_name=db_name,
                         catalog_name=catalog_name,
-                        limit=limit,
-                        timeout=timeout,
+                        limit=limits.max_rows,
+                        max_bytes=limits.max_bytes,
+                        timeout=limits.timeout_seconds,
                         session_id=session_id,
                         user_id=user_id,
                         auth_context=auth_context,
@@ -889,9 +998,15 @@ class DorisQueryExecutor:
                     if s.strip()
                 ]
                 if len(all_statements) > 1:
-                    return await self.execute_batch_sqls_for_mcp(sqls=all_statements, timeout=timeout,
-                                                                 session_id=session_id, user_id=user_id,
-                                                                 auth_context=auth_context)
+                    return await self.execute_batch_sqls_for_mcp(
+                        sqls=all_statements,
+                        max_rows=limits.max_rows,
+                        max_bytes=limits.max_bytes,
+                        timeout=limits.timeout_seconds,
+                        session_id=session_id,
+                        user_id=user_id,
+                        auth_context=auth_context,
+                    )
 
                 # Add LIMIT if not present and it's a single SELECT query.
                 # Split first so a multi-statement SQL block is not turned into
@@ -900,34 +1015,25 @@ class DorisQueryExecutor:
                 if get_first_sql_keyword(sql) == "SELECT" and "LIMIT" not in sql_upper:
                     if sql.endswith(";"):
                         sql = sql[:-1]
-                    sql = f"{sql} LIMIT {limit}"
+                    sql = f"{sql} LIMIT {limits.max_rows}"
 
                 # Create query request
                 query_request = QueryRequest(
                     sql=sql,
                     session_id=session_id,
                     user_id=user_id,
-                    timeout=timeout,
+                    timeout=limits.timeout_seconds,
+                    max_rows=limits.max_rows,
+                    max_bytes=limits.max_bytes,
                     cache_enabled=False  # Disable cache for MCP calls to ensure fresh data
                 )
 
                 # Execute query with retry logic
                 result = await self.execute_query(query_request, auth_context)
 
-                # Serialize data for JSON response
-                serialized_data = []
-                for row in result.data:
-                    serialized_data.append(self._serialize_row_data(row))
-
                 return {
                     "success": True,
-                    "data": serialized_data,
-                    "row_count": result.row_count,
-                    "execution_time": result.execution_time,
-                    "metadata": {
-                        "columns": result.metadata.get("columns", []),
-                        "query": sql
-                    }
+                    **self._query_result_payload(result, limits),
                 }
 
             except Exception as e:
@@ -1170,6 +1276,7 @@ async def execute_sql_query(
 
         # Extract parameters from kwargs or use defaults
         limit = kwargs.get("limit", 1000)
+        max_bytes = kwargs.get("max_bytes")
         timeout = kwargs.get("timeout", 30)
         session_id = kwargs.get("session_id", "mcp_session")
         user_id = kwargs.get("user_id", "mcp_user")
@@ -1181,6 +1288,7 @@ async def execute_sql_query(
         result = await executor.execute_sql_for_mcp(
             sql=sql,
             limit=limit,
+            max_bytes=max_bytes,
             timeout=timeout,
             session_id=session_id,
             user_id=user_id,

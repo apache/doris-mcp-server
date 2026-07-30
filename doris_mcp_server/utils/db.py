@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 import aiomysql
 from aiomysql import Connection, Pool
 
+from ..result_limits import json_array_row_size
 from .config import DorisConfig
 from .datetime_utils import utc_now
 from .logger import get_logger
@@ -174,6 +175,8 @@ class DorisConnection:
         auth_context: AuthContext | None = None,
         *,
         mask_result: bool = True,
+        max_rows: int | None = None,
+        max_bytes: int | None = None,
     ) -> QueryResult:
         """Execute SQL after validation, with optional result masking.
 
@@ -199,14 +202,37 @@ class DorisConnection:
                     "blocked_operations": validation_result.blocked_operations,
                 }
 
-            async with self.connection.cursor(aiomysql.DictCursor) as cursor:
+            bounded_result = max_rows is not None or max_bytes is not None
+            cursor_type = (
+                aiomysql.SSDictCursor if bounded_result else aiomysql.DictCursor
+            )
+            async with self.connection.cursor(cursor_type) as cursor:
                 await cursor.execute(sql, params)
 
                 # cursor.description is set by the DB driver for any statement that returns rows,
                 # avoiding a brittle hardcoded keyword list (e.g. missing WITH/CTE, comments before keywords).
+                result_bytes: int | None = None
+                truncated = False
+                truncation_reason: str | None = None
                 if cursor.description:
-                    data = await cursor.fetchall()
-                    row_count = len(data)
+                    if bounded_result:
+                        (
+                            final_data,
+                            result_bytes,
+                            truncated,
+                            truncation_reason,
+                        ) = await self._fetch_bounded_rows(
+                            cursor,
+                            auth_context=auth_context,
+                            mask_result=mask_result,
+                            max_rows=max_rows,
+                            max_bytes=max_bytes,
+                        )
+                        data = final_data
+                        row_count = len(final_data)
+                    else:
+                        data = await cursor.fetchall()
+                        row_count = len(data)
                 else:
                     data = []
                     row_count = cursor.rowcount
@@ -223,6 +249,8 @@ class DorisConnection:
                 # If security manager exists and has auth context, apply data masking
                 final_data = list(data) if data else []
                 if (
+                    not bounded_result
+                    and
                     self.security_manager
                     and auth_context
                     and final_data
@@ -240,6 +268,21 @@ class DorisConnection:
                 }
                 if security_result:
                     metadata["security_check"] = security_result
+                if bounded_result:
+                    metadata.update(
+                        {
+                            "result_bytes": result_bytes or 2,
+                            "truncated": truncated,
+                            "truncation_reason": truncation_reason,
+                        }
+                    )
+
+                if truncated:
+                    # An unbuffered cursor still has unread rows.  Closing the
+                    # physical connection avoids draining an attacker-sized
+                    # result and prevents it from returning to the pool.
+                    self.is_healthy = False
+                    await self.connection.ensure_closed()
 
                 return QueryResult(
                     data=final_data,
@@ -249,10 +292,77 @@ class DorisConnection:
                     sql=sql,
                 )
 
+        except asyncio.CancelledError:
+            # MCP cancellation and asyncio timeouts both arrive here as task
+            # cancellation.  A running MySQL command cannot safely be returned
+            # to the pool, so terminate its physical connection first.
+            self.is_healthy = False
+            try:
+                await self.connection.ensure_closed()
+            finally:
+                raise
         except Exception as e:
             self.is_healthy = False
             logging.error(f"Query execution failed: {e}")
             raise
+
+    async def _fetch_bounded_rows(
+        self,
+        cursor: Any,
+        *,
+        auth_context: AuthContext | None,
+        mask_result: bool,
+        max_rows: int | None,
+        max_bytes: int | None,
+    ) -> tuple[list[dict[str, Any]], int, bool, str | None]:
+        """Fetch a result incrementally under row and serialized-byte budgets."""
+        row_budget = max_rows if max_rows is not None else 100_000
+        byte_budget = max_bytes if max_bytes is not None else 16 * 1024 * 1024
+        final_data: list[dict[str, Any]] = []
+        result_bytes = 2  # JSON array brackets.
+        truncation_reason: str | None = None
+
+        while truncation_reason is None:
+            remaining_rows = row_budget - len(final_data)
+            fetch_size = min(128, remaining_rows + 1)
+            rows = list(await cursor.fetchmany(fetch_size))
+            if not rows:
+                break
+
+            processed_rows = [dict(row) for row in rows]
+            if (
+                self.security_manager
+                and auth_context
+                and processed_rows
+                and mask_result
+            ):
+                processed_rows = list(
+                    await self.security_manager.apply_data_masking(
+                        processed_rows,
+                        auth_context,
+                    )
+                )
+
+            for row in processed_rows:
+                if len(final_data) >= row_budget:
+                    truncation_reason = "row_limit"
+                    break
+                row_size = json_array_row_size(row, first=not final_data)
+                if result_bytes + row_size > byte_budget:
+                    truncation_reason = "byte_limit"
+                    break
+                final_data.append(row)
+                result_bytes += row_size
+
+            if len(rows) < fetch_size:
+                break
+
+        return (
+            final_data,
+            result_bytes,
+            truncation_reason is not None,
+            truncation_reason,
+        )
 
     async def ping(self) -> bool:
         """Check connection health status with enhanced at_eof error detection"""
@@ -2460,6 +2570,9 @@ class DorisConnectionManager:
         sql: str,
         params: Mapping[str, Any] | tuple[Any, ...] | None = None,
         auth_context: AuthContext | None = None,
+        *,
+        max_rows: int | None = None,
+        max_bytes: int | None = None,
     ) -> QueryResult:
         """Execute query using the same routed acquire/release contract as get_connection()."""
         connection = None
@@ -2471,7 +2584,13 @@ class DorisConnectionManager:
             )
 
             # Execute query
-            result = await connection.execute(sql, params, effective_auth_context)
+            result = await connection.execute(
+                sql,
+                params,
+                effective_auth_context,
+                max_rows=max_rows,
+                max_bytes=max_bytes,
+            )
 
             return result
 
