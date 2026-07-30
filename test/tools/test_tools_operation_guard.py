@@ -32,12 +32,22 @@ class FakeRoutedConnection:
         self.session_id = session_id
         self.auth_context = auth_context
 
-    async def execute(self, sql, params=None, auth_context=None):
+    async def execute(
+        self,
+        sql,
+        params=None,
+        auth_context=None,
+        *,
+        max_rows=None,
+        max_bytes=None,
+    ):
         return await self.manager.execute_query(
             self.session_id,
             sql,
             params,
             auth_context or self.auth_context,
+            max_rows=max_rows,
+            max_bytes=max_bytes,
         )
 
 
@@ -81,7 +91,16 @@ class FakeRoutedConnectionManager:
     async def release_connection(self, session_id, connection):
         self.connection_releases += 1
 
-    async def execute_query(self, session_id, sql, params=None, auth_context=None):
+    async def execute_query(
+        self,
+        session_id,
+        sql,
+        params=None,
+        auth_context=None,
+        *,
+        max_rows=None,
+        max_bytes=None,
+    ):
         if getattr(auth_context, "auth_method", "") != "doris_oauth":
             raise AssertionError("Doris OAuth tool path did not pass AuthContext")
         if getattr(auth_context, "doris_user", "") != "alice":
@@ -92,6 +111,8 @@ class FakeRoutedConnectionManager:
                 "sql": sql,
                 "params": params,
                 "doris_user": auth_context.doris_user,
+                "max_rows": max_rows,
+                "max_bytes": max_bytes,
             }
         )
         if sql.strip().upper().startswith("EXPLAIN"):

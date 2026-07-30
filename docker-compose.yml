@@ -42,6 +42,8 @@ services:
       - ENABLE_TOKEN_AUTH=true
       - TOKEN_ADMIN_FILE=/run/secrets/mcp_static_token
       - MAX_RESULT_ROWS=10000
+      - MAX_RESULT_BYTES=1048576
+      - QUERY_TIMEOUT=300
       
       # Performance configuration
       - ENABLE_QUERY_CACHE=true

@@ -271,7 +271,16 @@ async def test_execute_query_releases_to_captured_doris_user_owner(manager, monk
 
     await manager.create_or_replace_doris_user_pool("alice", "pw1")
 
-    async def fake_execute(self, sql, params=None, auth_context=None):
+    async def fake_execute(
+        self,
+        sql,
+        params=None,
+        auth_context=None,
+        *,
+        max_rows=None,
+        max_bytes=None,
+    ):
+        del max_rows, max_bytes
         return QueryResult(data=[{"ok": 1}], metadata={}, execution_time=0.0, row_count=1, sql=sql)
 
     monkeypatch.setattr(DorisConnection, "execute", fake_execute)

@@ -376,17 +376,146 @@ async def _exec_query(
     sql: str,
     *,
     timeout: int = 5,
+    max_rows: int = 20,
+    max_bytes: int | None = None,
 ) -> tuple[Any, dict[str, Any]]:
+    arguments: dict[str, Any] = {
+        "sql": sql,
+        "max_rows": max_rows,
+        "timeout": timeout,
+    }
+    if max_bytes is not None:
+        arguments["max_bytes"] = max_bytes
     result = await client.call_tool(
         "exec_query",
-        {
-            "sql": sql,
-            "max_rows": 20,
-            "timeout": timeout,
-        },
+        arguments,
     )
     assert isinstance(result.structured_content, dict)
     return result, result.structured_content
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_result_boundaries_and_cancellation(
+    transport: str,
+    doris_sandbox: DorisSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    environment.update(
+        {
+            "MAX_RESULT_ROWS": "5",
+            "MAX_RESULT_BYTES": "256",
+            "QUERY_TIMEOUT": "5",
+        }
+    )
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.executemany(
+            f"INSERT INTO {doris_sandbox.qualified_table} VALUES (%s, %s)",
+            [
+                (index, f"{doris_sandbox.marker}-{index}-" + ("x" * 32))
+                for index in range(1, 7)
+            ],
+        )
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=10,
+    ) as client:
+        tools = {
+            tool.name: tool
+            for tool in (await client.list_tools(cache_mode="bypass")).tools
+        }
+        query_schema = tools["exec_query"].input_schema["properties"]
+        assert query_schema["max_rows"]["maximum"] == 5
+        assert query_schema["max_bytes"]["maximum"] == 256
+        assert query_schema["timeout"]["maximum"] == 5
+
+        with pytest.raises(MCPError) as excessive_rows:
+            await client.call_tool(
+                "exec_query",
+                {
+                    "sql": f"SELECT * FROM {doris_sandbox.qualified_table}",
+                    "max_rows": 6,
+                    "max_bytes": 256,
+                    "timeout": 5,
+                },
+            )
+        assert excessive_rows.value.code == -32602
+
+        row_result, row_payload = await _exec_query(
+            client,
+            f"SELECT id FROM {doris_sandbox.qualified_table} ORDER BY id",
+            max_rows=2,
+            max_bytes=256,
+            timeout=5,
+        )
+        assert row_result.is_error is False
+        assert len(row_payload["data"]) == 2
+        assert row_payload["metadata"]["result_bytes"] <= 256
+        assert row_payload["metadata"]["limits"] == {
+            "max_rows": 2,
+            "max_bytes": 256,
+            "timeout_seconds": 5,
+        }
+
+        byte_result, byte_payload = await _exec_query(
+            client,
+            (
+                "SELECT id, marker "
+                f"FROM {doris_sandbox.qualified_table} ORDER BY id"
+            ),
+            max_rows=5,
+            max_bytes=256,
+            timeout=5,
+        )
+        assert byte_result.is_error is False
+        assert byte_payload["metadata"]["result_bytes"] <= 256
+        assert byte_payload["metadata"]["truncated"] is True
+        assert byte_payload["metadata"]["truncation_reason"] == "byte_limit"
+        assert 0 < len(byte_payload["data"]) < 5
+
+        if transport == "stdio":
+            cancelled_query = asyncio.create_task(
+                client.call_tool(
+                    "exec_query",
+                    {
+                        "sql": "SELECT SLEEP(5) AS slept",
+                        "max_rows": 1,
+                        "max_bytes": 256,
+                        "timeout": 5,
+                    },
+                )
+            )
+            await asyncio.sleep(0.2)
+            cancelled_query.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled_query
+        else:
+            timed_out, timed_out_payload = await _exec_query(
+                client,
+                "SELECT SLEEP(5) AS slept",
+                max_rows=1,
+                max_bytes=256,
+                timeout=1,
+            )
+            assert timed_out.is_error is True
+            assert timed_out_payload["error_type"] == "timeout"
+
+        recovery_started = time.monotonic()
+        recovered_result, recovered_payload = await _exec_query(
+            client,
+            "SELECT 1 AS recovered",
+            max_rows=1,
+            max_bytes=256,
+            timeout=5,
+        )
+        assert time.monotonic() - recovery_started < 3
+        assert recovered_result.is_error is False
+        assert recovered_payload["data"] == [{"recovered": 1}]
 
 
 async def _collect_list_pages(

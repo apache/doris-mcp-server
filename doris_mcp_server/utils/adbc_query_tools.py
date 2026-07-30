@@ -20,13 +20,19 @@ Apache Doris ADBC Query Tools
 High-performance data querying using Apache Arrow Flight SQL protocol
 """
 
+import asyncio
 import os
 import socket
 import time
 from datetime import datetime
-from importlib.util import find_spec
-from typing import Any, cast
+from typing import Any
 
+from ..result_limits import (
+    ResultLimitError,
+    ResultLimits,
+    json_array_row_size,
+    resolve_result_limits,
+)
 from ..utils.db import DorisConnectionManager
 from ..utils.logger import get_logger
 from ..utils.security import AuthContext
@@ -61,28 +67,6 @@ def _convert_numpy_types(obj: Any) -> Any:
         return obj
 
 
-def _convert_dataframe_to_json_serializable(
-    df: Any,
-) -> list[dict[str, Any]]:
-    """Convert DataFrame to JSON serializable format"""
-    if find_spec("numpy") is None or find_spec("pandas") is None:
-        # Fallback to basic dict conversion
-        return cast(list[dict[str, Any]], df.to_dict("records"))
-
-    # Convert DataFrame to records
-    records = df.to_dict('records')
-
-    # Convert each record's values
-    converted_records = []
-    for record in records:
-        converted_record = {}
-        for key, value in record.items():
-            converted_record[key] = _convert_numpy_types(value)
-        converted_records.append(converted_record)
-
-    return converted_records
-
-
 class DorisADBCQueryTools:
     """ADBC Query Tools for high-performance data transfer using Arrow Flight SQL"""
 
@@ -91,13 +75,16 @@ class DorisADBCQueryTools:
         self.adbc_client: Any | None = None
         self.flight_sql_module: Any | None = None
         self.adbc_manager_module: Any | None = None
+        # ADBC connections and cursors are not safe to replace concurrently.
+        self._query_lock = asyncio.Lock()
 
     async def exec_adbc_query(
         self,
         sql: str,
         max_rows: int | None = None,
         timeout: int | None = None,
-        return_format: str | None = None
+        return_format: str | None = None,
+        max_bytes: int | None = None,
     ) -> dict[str, Any]:
         """
         Execute SQL query using ADBC (Arrow Flight SQL) protocol
@@ -107,18 +94,42 @@ class DorisADBCQueryTools:
             max_rows: Maximum number of rows to return (uses config default if None)
             timeout: Query timeout in seconds (uses config default if None)
             return_format: Format for returned data ("arrow", "pandas", "dict", uses config default if None)
+            max_bytes: Maximum UTF-8 JSON bytes for returned row data
 
         Returns:
             Query results in specified format with metadata
         """
         try:
-            start_time = time.time()
-
             # Use configuration defaults if parameters not specified
             adbc_config = self.connection_manager.config.adbc
-            max_rows = max_rows if max_rows is not None else adbc_config.default_max_rows
-            timeout = timeout if timeout is not None else adbc_config.default_timeout
-            return_format = return_format if return_format is not None else adbc_config.default_return_format
+            try:
+                limits = resolve_result_limits(
+                    self.connection_manager.config,
+                    max_rows=(
+                        max_rows
+                        if max_rows is not None
+                        else adbc_config.default_max_rows
+                    ),
+                    max_bytes=max_bytes,
+                    timeout_seconds=(
+                        timeout
+                        if timeout is not None
+                        else adbc_config.default_timeout
+                    ),
+                )
+            except ResultLimitError as exc:
+                return {
+                    "success": False,
+                    "error": str(exc),
+                    "error_type": "invalid_result_limits",
+                    "timestamp": datetime.now().isoformat(),
+                }
+            return_format = (
+                return_format
+                if return_format is not None
+                else adbc_config.default_return_format
+            )
+            start_time = time.time()
 
             # Step 1: Check environment variables and port availability
             port_check_result = await self._check_arrow_flight_ports()
@@ -130,15 +141,21 @@ class DorisADBCQueryTools:
             if not import_result["success"]:
                 return import_result
 
-            # Step 3: Create ADBC connection
-            connection_result = await self._create_adbc_connection()
-            if not connection_result["success"]:
-                return connection_result
+            async with self._query_lock:
+                # Step 3: Create a per-call ADBC connection.
+                connection_result = await self._create_adbc_connection()
+                if not connection_result["success"]:
+                    return connection_result
 
-            # Step 4: Execute query using ADBC
-            query_result = await self._execute_query_with_adbc(
-                sql, max_rows, timeout, return_format
-            )
+                try:
+                    # Step 4: Execute query using ADBC.
+                    query_result = await self._execute_query_with_adbc(
+                        sql,
+                        limits,
+                        return_format,
+                    )
+                finally:
+                    await self._close_adbc_client()
 
             execution_time = time.time() - start_time
 
@@ -157,6 +174,16 @@ class DorisADBCQueryTools:
                 "error_type": "execution_error",
                 "timestamp": datetime.now().isoformat()
             }
+
+    async def _close_adbc_client(self) -> None:
+        """Close and clear the current ADBC connection without blocking MCP."""
+        client, self.adbc_client = self.adbc_client, None
+        if client is None:
+            return
+        try:
+            await asyncio.to_thread(client.close)
+        except Exception as exc:
+            logger.debug(f"Failed to close ADBC client: {exc}")
 
     async def _check_arrow_flight_ports(self) -> dict[str, Any]:
         """Check Arrow Flight SQL port configuration and availability"""
@@ -397,11 +424,10 @@ class DorisADBCQueryTools:
     async def _execute_query_with_adbc(
         self,
         sql: str,
-        max_rows: int,
-        timeout: int,
-        return_format: str
+        limits: ResultLimits,
+        return_format: str,
     ) -> dict[str, Any]:
-        """Execute query using ADBC"""
+        """Execute an ADBC query with bounded output and real cancellation."""
         try:
             if not self.adbc_client:
                 return {
@@ -425,79 +451,34 @@ class DorisADBCQueryTools:
                     }
 
             cursor = self.adbc_client.cursor()
-            start_time = time.time()
-
-            # Execute query
-            cursor.execute(sql)
-
-            # Get results based on return format
-            if return_format == "arrow":
-                # Return Arrow format
-                arrow_data = cursor.fetchallarrow()
-
-                # Limit rows
-                if len(arrow_data) > max_rows:
-                    arrow_data = arrow_data.slice(0, max_rows)
-
-                # Convert Arrow data to serializable format
-                preview_df = arrow_data.to_pandas().head(10) if len(arrow_data) > 0 else None
-                result_data = {
-                    "format": "arrow",
-                    "num_rows": len(arrow_data),
-                    "num_columns": len(arrow_data.schema),
-                    "column_names": arrow_data.schema.names,
-                    "column_types": [str(field.type) for field in arrow_data.schema],
-                    "data_preview": _convert_dataframe_to_json_serializable(preview_df) if preview_df is not None else [],
-                    "total_bytes": arrow_data.nbytes if hasattr(arrow_data, 'nbytes') else 0
+            worker = asyncio.create_task(
+                asyncio.to_thread(
+                    self._execute_query_with_adbc_sync,
+                    cursor,
+                    sql,
+                    limits,
+                    return_format,
+                )
+            )
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(worker),
+                    timeout=limits.timeout_seconds,
+                )
+            except TimeoutError:
+                await self._cancel_adbc_worker(cursor, worker)
+                return {
+                    "success": False,
+                    "error": (
+                        "ADBC query execution timed out after "
+                        f"{limits.timeout_seconds} seconds"
+                    ),
+                    "error_type": "timeout",
+                    "sql": sql,
                 }
-
-            elif return_format == "pandas":
-                # Return Pandas DataFrame
-                df = cursor.fetch_df()
-
-                # Limit rows
-                if len(df) > max_rows:
-                    df = df.head(max_rows)
-
-                result_data = {
-                    "format": "pandas",
-                    "num_rows": len(df),
-                    "num_columns": len(df.columns),
-                    "column_names": df.columns.tolist(),
-                    "column_types": df.dtypes.astype(str).tolist(),
-                    "data": _convert_dataframe_to_json_serializable(df),
-                    "memory_usage": int(df.memory_usage(deep=True).sum())
-                }
-
-            else:  # return_format == "dict"
-                # Return dictionary format
-                arrow_data = cursor.fetchallarrow()
-                df = arrow_data.to_pandas()
-
-                # Limit rows
-                if len(df) > max_rows:
-                    df = df.head(max_rows)
-
-                result_data = {
-                    "format": "dict",
-                    "num_rows": len(df),
-                    "num_columns": len(df.columns),
-                    "column_names": df.columns.tolist(),
-                    "column_types": df.dtypes.astype(str).tolist(),
-                    "data": _convert_dataframe_to_json_serializable(df)
-                }
-
-            execution_time = time.time() - start_time
-
-            cursor.close()
-
-            return {
-                "success": True,
-                "result": result_data,
-                "execution_time": round(execution_time, 3),
-                "sql": sql,
-                "max_rows_applied": len(result_data.get("data", [])) >= max_rows
-            }
+            except asyncio.CancelledError:
+                await self._cancel_adbc_worker(cursor, worker)
+                raise
 
         except Exception as e:
             logger.error(f"ADBC query execution failed: {str(e)}")
@@ -507,6 +488,137 @@ class DorisADBCQueryTools:
                 "error_type": "query_execution_error",
                 "sql": sql
             }
+
+    async def _cancel_adbc_worker(
+        self,
+        cursor: Any,
+        worker: asyncio.Task[dict[str, Any]],
+    ) -> None:
+        """Request driver cancellation and reap the worker thread."""
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(cursor.adbc_cancel),
+                timeout=2,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to cancel ADBC query: {exc}")
+
+        try:
+            await asyncio.wait_for(asyncio.shield(worker), timeout=5)
+        except (asyncio.CancelledError, Exception) as exc:
+            # The driver owns the worker thread.  Keep the result consumed even
+            # if a non-cooperative implementation takes longer to unwind.
+            logger.debug(f"ADBC query worker did not stop promptly: {exc}")
+            worker.add_done_callback(self._consume_adbc_worker_result)
+
+    @staticmethod
+    def _consume_adbc_worker_result(worker: asyncio.Task[dict[str, Any]]) -> None:
+        try:
+            worker.result()
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    @staticmethod
+    def _execute_query_with_adbc_sync(
+        cursor: Any,
+        sql: str,
+        limits: ResultLimits,
+        return_format: str,
+    ) -> dict[str, Any]:
+        """Run blocking ADBC calls in a worker and stream bounded batches."""
+        start_time = time.time()
+        rows: list[dict[str, Any]] = []
+        result_bytes = 2  # JSON array brackets
+        truncated = False
+        truncation_reason: str | None = None
+
+        try:
+            cursor.execute(sql)
+            description = cursor.description or []
+            column_names = [str(column[0]) for column in description]
+            column_types = [str(column[1]) for column in description]
+
+            while not truncated:
+                fetch_size = min(256, limits.max_rows + 1 - len(rows))
+                batch = cursor.fetchmany(max(fetch_size, 1))
+                if not batch:
+                    break
+
+                for raw_row in batch:
+                    if len(rows) >= limits.max_rows:
+                        truncated = True
+                        truncation_reason = "max_rows"
+                        break
+
+                    if isinstance(raw_row, dict):
+                        row = {
+                            str(key): _convert_numpy_types(value)
+                            for key, value in raw_row.items()
+                        }
+                    else:
+                        row = {
+                            name: _convert_numpy_types(value)
+                            for name, value in zip(
+                                column_names,
+                                raw_row,
+                                strict=False,
+                            )
+                        }
+
+                    contribution = json_array_row_size(
+                        row,
+                        first=not rows,
+                    )
+                    if result_bytes + contribution > limits.max_bytes:
+                        truncated = True
+                        truncation_reason = "max_bytes"
+                        break
+
+                    rows.append(row)
+                    result_bytes += contribution
+
+            common_result = {
+                "format": return_format,
+                "num_rows": len(rows),
+                "num_columns": len(column_names),
+                "column_names": column_names,
+                "column_types": column_types,
+            }
+            if return_format == "arrow":
+                result_data = {
+                    **common_result,
+                    "data_preview": rows[:10],
+                    "total_bytes": result_bytes,
+                }
+            elif return_format == "pandas":
+                result_data = {
+                    **common_result,
+                    "data": rows,
+                    "memory_usage": result_bytes,
+                }
+            else:
+                result_data = {
+                    **common_result,
+                    "data": rows,
+                }
+
+            return {
+                "success": True,
+                "result": result_data,
+                "execution_time": round(time.time() - start_time, 3),
+                "sql": sql,
+                "max_rows_applied": truncation_reason == "max_rows",
+                "result_bytes": result_bytes,
+                "truncated": truncated,
+                "truncation_reason": truncation_reason,
+                "limits": {
+                    "max_rows": limits.max_rows,
+                    "max_bytes": limits.max_bytes,
+                    "timeout_seconds": limits.timeout_seconds,
+                },
+            }
+        finally:
+            cursor.close()
 
     async def get_adbc_connection_info(self) -> dict[str, Any]:
         """Get ADBC connection information and status"""
