@@ -122,6 +122,11 @@ def _normalized_key(key: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(key).casefold())
 
 
+def is_sensitive_key(key: object) -> bool:
+    """Return whether a semantic field name is treated as credential data."""
+    return _normalized_key(key) in _SENSITIVE_KEYS
+
+
 def redact_sql_literals(value: str) -> str:
     """Remove values and comments from SQL while retaining diagnostic shape."""
     if not _SQL_KEYWORD_RE.search(value):

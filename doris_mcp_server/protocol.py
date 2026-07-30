@@ -73,6 +73,7 @@ from .state_handles import (
     DEFAULT_STATE_HANDLE_TTL_SECONDS,
     StateHandleCodec,
 )
+from .trace_context import TraceContextSanitizingMiddleware
 from .utils.redaction import (
     redact_error_payload,
     redact_sensitive_text,
@@ -558,6 +559,10 @@ def create_doris_mcp_server(
         on_list_prompts=list_prompts,
         on_get_prompt=get_prompt,
     )
+    # The SDK's OpenTelemetry middleware extracts W3C carrier values. Run the
+    # value-safe sanitizer before it so malformed tracestate/baggage cannot be
+    # echoed by dependency warning logs and never reaches the handler layer.
+    server.middleware.insert(0, TraceContextSanitizingMiddleware(logger))
 
     async def hide_unhandled_errors(
         ctx: ServerRequestContext,
