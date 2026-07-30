@@ -84,3 +84,11 @@ def test_release_docs_and_commands_match_product_version():
     assert "--transport http" in makefile
     assert "start-sse" not in makefile
     assert "--transport sse" not in makefile
+
+
+def test_readme_language_switcher_is_bidirectional():
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    chinese_readme = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
+
+    assert "[English](README.md) | [简体中文](README.zh-CN.md)" in readme
+    assert "[English](README.md) | 简体中文" in chinese_readme
