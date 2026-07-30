@@ -14,32 +14,22 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Stateless, permission-bound pagination for MCP list operations."""
+"""Explicit, permission-bound continuation handles for MCP list operations."""
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 from hmac import compare_digest
-from typing import Any, Generic, Literal, TypeVar
+from typing import Generic, Literal, TypeVar
 
+from .state_handles import StateHandleCodec, StateHandleError
 from .utils.security import AuthContext
 
 DEFAULT_LIST_PAGE_SIZE = 100
 MAX_LIST_PAGE_SIZE = 1000
-_CURSOR_VERSION = 1
-_MAX_CURSOR_LENGTH = 2048
-_CURSOR_FIELDS = {
-    "version",
-    "collection",
-    "after",
-    "snapshot",
-    "authorization",
-}
 
 CursorCollection = Literal["resources", "tools", "prompts"]
 T = TypeVar("T")
@@ -61,91 +51,21 @@ class PaginationPage(Generic[T]):
     next_cursor: str | None
 
 
-def _canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value,
+def _handle_scope(collection: CursorCollection) -> str:
+    return f"{collection}:list"
+
+
+def _handle_resource(collection: CursorCollection) -> str:
+    return f"mcp://{collection}"
+
+
+def _snapshot_digest(identifiers: list[str]) -> str:
+    payload = json.dumps(
+        identifiers,
         ensure_ascii=False,
         separators=(",", ":"),
-        sort_keys=True,
     ).encode("utf-8")
-
-
-def _digest(value: Any) -> str:
-    return sha256(_canonical_json(value)).hexdigest()
-
-
-def _authorization_fingerprint(auth_context: AuthContext | None) -> str:
-    if auth_context is None:
-        return _digest({"authMethod": "anonymous", "principal": "anonymous"})
-
-    security_level = getattr(auth_context.security_level, "value", "")
-    return _digest(
-        {
-            "authMethod": auth_context.auth_method,
-            "tokenId": auth_context.token_id,
-            "userId": auth_context.user_id,
-            "roles": sorted(auth_context.roles),
-            "permissions": sorted(auth_context.permissions),
-            "securityLevel": security_level,
-            "dorisUser": auth_context.doris_user,
-            "oauthClientId": auth_context.oauth_client_id,
-            "oauthScopes": sorted(auth_context.oauth_scopes),
-            "oauthTokenId": auth_context.oauth_token_id,
-            "oauthIssuer": auth_context.oauth_issuer,
-            "oauthResource": auth_context.oauth_resource,
-            "oauthAudiences": sorted(auth_context.oauth_audiences),
-            "poolKey": auth_context.pool_key,
-            "dorisOAuthDatabaseTools": {
-                "enabled": auth_context.doris_oauth_db_tools_enabled,
-                "allowlist": sorted(auth_context.doris_oauth_db_tool_allowlist),
-            },
-            "dorisOAuthQueryTools": {
-                "enabled": auth_context.doris_oauth_query_tools_enabled,
-                "allowlist": sorted(auth_context.doris_oauth_query_tool_allowlist),
-            },
-            "dorisOAuthExplainTools": {
-                "enabled": auth_context.doris_oauth_explain_tools_enabled,
-                "allowlist": sorted(auth_context.doris_oauth_explain_tool_allowlist),
-            },
-        }
-    )
-
-
-def _encode_cursor(payload: dict[str, Any]) -> str:
-    return (
-        base64.urlsafe_b64encode(_canonical_json(payload)).decode("ascii").rstrip("=")
-    )
-
-
-def _decode_cursor(cursor: str) -> dict[str, Any]:
-    if not cursor or len(cursor) > _MAX_CURSOR_LENGTH:
-        raise PaginationCursorError("invalid")
-    try:
-        padding = "=" * (-len(cursor) % 4)
-        raw = base64.b64decode(
-            (cursor + padding).encode("ascii"),
-            altchars=b"-_",
-            validate=True,
-        )
-        payload = json.loads(raw.decode("utf-8"))
-    except (
-        UnicodeEncodeError,
-        UnicodeDecodeError,
-        binascii.Error,
-        json.JSONDecodeError,
-    ) as exc:
-        raise PaginationCursorError("invalid") from exc
-
-    if not isinstance(payload, dict) or set(payload) != _CURSOR_FIELDS:
-        raise PaginationCursorError("invalid")
-    if payload.get("version") != _CURSOR_VERSION:
-        raise PaginationCursorError("invalid")
-    if not all(
-        isinstance(payload.get(field), str)
-        for field in ("collection", "after", "snapshot", "authorization")
-    ):
-        raise PaginationCursorError("invalid")
-    return payload
+    return sha256(payload).hexdigest()
 
 
 def paginate(
@@ -156,8 +76,9 @@ def paginate(
     page_size: int,
     identifier: Callable[[T], str],
     auth_context: AuthContext | None,
+    handle_codec: StateHandleCodec,
 ) -> PaginationPage[T]:
-    """Return a deterministic keyset page or reject an unsafe continuation."""
+    """Return a deterministic page or reject an unsafe explicit handle."""
     if not 1 <= page_size <= MAX_LIST_PAGE_SIZE:
         raise ValueError(f"page_size must be in the range 1-{MAX_LIST_PAGE_SIZE}")
 
@@ -166,20 +87,35 @@ def paginate(
     if len(identifiers) != len(set(identifiers)):
         raise RuntimeError(f"{collection} list contains duplicate identifiers")
 
-    snapshot = _digest(identifiers)
-    authorization = _authorization_fingerprint(auth_context)
+    snapshot = _snapshot_digest(identifiers)
     start = 0
 
     if cursor is not None:
-        payload = _decode_cursor(cursor)
-        if payload["collection"] != collection:
-            raise PaginationCursorError("wrong_collection")
-        if not compare_digest(payload["authorization"], authorization):
-            raise PaginationCursorError("authorization_context_changed")
-        if not compare_digest(payload["snapshot"], snapshot):
+        try:
+            claims = handle_codec.resolve(
+                cursor,
+                expected_kind="list-page",
+                expected_scope=_handle_scope(collection),
+                expected_resource=_handle_resource(collection),
+                auth_context=auth_context,
+            )
+        except StateHandleError as exc:
+            reason = (
+                "wrong_collection"
+                if exc.reason in {"wrong_resource", "wrong_scope"}
+                else exc.reason
+            )
+            raise PaginationCursorError(reason) from exc
+        if set(claims.state) != {"after", "snapshot"}:
+            raise PaginationCursorError("invalid")
+        after = claims.state.get("after")
+        claimed_snapshot = claims.state.get("snapshot")
+        if not isinstance(after, str) or not isinstance(claimed_snapshot, str):
+            raise PaginationCursorError("invalid")
+        if not compare_digest(claimed_snapshot, snapshot):
             raise PaginationCursorError("stale")
         try:
-            start = identifiers.index(payload["after"]) + 1
+            start = identifiers.index(after) + 1
         except ValueError as exc:
             raise PaginationCursorError("stale") from exc
         if start >= len(ordered):
@@ -189,14 +125,15 @@ def paginate(
     end = start + len(page_items)
     next_cursor = None
     if page_items and end < len(ordered):
-        next_cursor = _encode_cursor(
-            {
-                "version": _CURSOR_VERSION,
-                "collection": collection,
+        next_cursor = handle_codec.issue(
+            kind="list-page",
+            scope=_handle_scope(collection),
+            resource=_handle_resource(collection),
+            state={
                 "after": identifiers[end - 1],
                 "snapshot": snapshot,
-                "authorization": authorization,
-            }
+            },
+            auth_context=auth_context,
         )
 
     return PaginationPage(items=page_items, next_cursor=next_cursor)

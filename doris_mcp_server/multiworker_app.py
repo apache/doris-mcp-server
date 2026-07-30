@@ -164,6 +164,8 @@ async def initialize_worker() -> None:
             version=config.server_version,
             logger=logger,
             list_page_size=config.mcp_list_page_size,
+            state_handle_secret=config.mcp_state_handle_secret,
+            state_handle_ttl_seconds=config.mcp_state_handle_ttl_seconds,
         )
 
         # Create the exact modern/legacy HTTP boundary for this worker.

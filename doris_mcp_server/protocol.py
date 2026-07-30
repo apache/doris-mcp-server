@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Protocol, TypeVar
 
@@ -67,6 +68,10 @@ from .schema_validation import (
     ToolArgumentsValidationError,
     ToolOutputValidationError,
     ToolSchemaGuard,
+)
+from .state_handles import (
+    DEFAULT_STATE_HANDLE_TTL_SECONDS,
+    StateHandleCodec,
 )
 from .utils.redaction import (
     redact_error_payload,
@@ -243,6 +248,7 @@ def _paginate_list_or_raise(
     cursor: str | None,
     page_size: int,
     identifier: Callable[[_ListItemT], str],
+    handle_codec: StateHandleCodec,
 ) -> PaginationPage[_ListItemT]:
     try:
         return paginate(
@@ -252,6 +258,7 @@ def _paginate_list_or_raise(
             page_size=page_size,
             identifier=identifier,
             auth_context=get_current_auth_context(),
+            handle_codec=handle_codec,
         )
     except PaginationCursorError as exc:
         raise MCPError(
@@ -288,6 +295,8 @@ def create_doris_mcp_server(
     version: str,
     logger: logging.Logger,
     list_page_size: int = DEFAULT_LIST_PAGE_SIZE,
+    state_handle_secret: str | bytes | None = None,
+    state_handle_ttl_seconds: int = DEFAULT_STATE_HANDLE_TTL_SECONDS,
     schema_limits: SchemaLimits = DEFAULT_SCHEMA_LIMITS,
     required_client_capabilities: Mapping[str, ClientCapabilities] | None = None,
     required_tool_capabilities: Mapping[str, ClientCapabilities] | None = None,
@@ -295,6 +304,14 @@ def create_doris_mcp_server(
     """Create the one low-level SDK v2 server used by every transport."""
     if not 1 <= list_page_size <= MAX_LIST_PAGE_SIZE:
         raise ValueError(f"list_page_size must be in the range 1-{MAX_LIST_PAGE_SIZE}")
+    handle_codec = StateHandleCodec(
+        (
+            state_handle_secret
+            if state_handle_secret is not None
+            else secrets.token_urlsafe(32)
+        ),
+        default_ttl_seconds=state_handle_ttl_seconds,
+    )
     schema_guard = ToolSchemaGuard(schema_limits)
 
     async def list_resources(
@@ -311,6 +328,7 @@ def create_doris_mcp_server(
                 cursor=params.cursor if params else None,
                 page_size=list_page_size,
                 identifier=lambda resource: str(resource.uri),
+                handle_codec=handle_codec,
             )
         except (MCPError, OperationAuthorizationError):
             raise
@@ -371,6 +389,7 @@ def create_doris_mcp_server(
                 cursor=params.cursor if params else None,
                 page_size=list_page_size,
                 identifier=lambda tool: tool.name,
+                handle_codec=handle_codec,
             )
         except (MCPError, OperationAuthorizationError):
             raise
@@ -457,6 +476,7 @@ def create_doris_mcp_server(
                 cursor=params.cursor if params else None,
                 page_size=list_page_size,
                 identifier=lambda prompt: prompt.name,
+                handle_codec=handle_codec,
             )
         except (MCPError, OperationAuthorizationError):
             raise

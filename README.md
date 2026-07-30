@@ -210,6 +210,10 @@ export ENABLE_LEGACY_HTTP_ADAPTER=false
 
 # Bound each resources/list, tools/list, and prompts/list response.
 export MCP_LIST_PAGE_SIZE=100
+# A launch-local key is generated automatically. Configure one shared
+# high-entropy value when independently launched replicas share traffic.
+export MCP_STATE_HANDLE_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export MCP_STATE_HANDLE_TTL_SECONDS=300
 
 # Token Management Interface (Security-Critical)
 export TOKEN_ADMIN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -288,6 +292,10 @@ cp .env.example .env
         modern traffic always uses `POST /mcp`
     *   `MCP_LIST_PAGE_SIZE`: Maximum resources, tools, or prompts returned
         per protocol page (default: 100; range: 1-1000)
+    *   `MCP_STATE_HANDLE_SECRET`: Optional shared high-entropy key (at least
+        32 bytes) used to authenticate explicit cross-call state handles
+    *   `MCP_STATE_HANDLE_TTL_SECONDS`: Lifetime of an explicit state handle
+        (default: 300 seconds; range: 1-3600)
 *   **Authentication Configuration (Enhanced in v0.6.0)**:
     *   `ENABLE_TOKEN_AUTH`: Enable token-based authentication (default: false)
     *   `ENABLE_JWT_AUTH`: Enable JWT authentication (default: false)
@@ -527,11 +535,22 @@ Results are ordered by their stable resource URI, tool name, or prompt name.
 When `nextCursor` is present, pass that opaque value as the next request's
 `cursor`; do not parse or construct cursors.
 
-A cursor is bound to its list type, the current visible-list snapshot, and the
-current authorization context. Reusing it for another list, after visibility
-changes, or under another principal returns `Invalid Params`. Restart the
-listing without a cursor in that case. This prevents a multi-page traversal
-from silently duplicating, dropping, or crossing permission-scoped entries.
+A cursor is an HMAC-authenticated explicit state handle bound to its list type,
+scope, resource, current visible-list snapshot, authorization context, and
+expiry. It does not depend on an MCP protocol session, transport connection, or
+worker-local memory. Reusing it for another list, after visibility changes,
+after expiry, after modification, or under another principal returns
+`Invalid Params`. Restart the listing without a cursor in that case. This
+prevents a multi-page traversal from silently duplicating, dropping, or
+crossing permission-scoped entries.
+
+The server generates a launch-local handle secret by default and passes it to
+all workers created by the same CLI process. Set one shared
+`MCP_STATE_HANDLE_SECRET` on independently launched replicas when a load
+balancer can route consecutive pages to different instances. Handle payloads
+contain bounded continuation metadata and are signed rather than encrypted;
+credentials, SQL text, and query results must never be placed in them. See
+[ADR 0002](docs/decisions/0002-explicit-state-handles.md).
 
 List failures are never represented as successful empty collections. A Doris
 metadata outage returns `List backend unavailable`; a Doris metadata permission

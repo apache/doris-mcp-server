@@ -43,6 +43,33 @@ def test_mcp_list_page_size_is_configurable_and_bounded(monkeypatch):
     assert "MCP list page size must be in the range 1-1000" in configured.validate()
 
 
+def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
+    monkeypatch,
+):
+    secret = "test-shared-state-handle-secret-value"
+    monkeypatch.setenv("MCP_STATE_HANDLE_SECRET", secret)
+    monkeypatch.setenv("MCP_STATE_HANDLE_TTL_SECONDS", "45")
+
+    configured = DorisConfig.from_env()
+    assert configured.mcp_state_handle_secret == secret
+    assert configured.mcp_state_handle_ttl_seconds == 45
+    assert "mcp_state_handle_secret" not in configured.to_dict()
+    assert configured.to_dict()["mcp_state_handle_ttl_seconds"] == 45
+    assert configured.validate() == []
+
+    configured.mcp_state_handle_secret = "short"
+    assert (
+        "MCP state handle secret must contain at least 32 bytes"
+        in configured.validate()
+    )
+    configured.mcp_state_handle_secret = secret
+    configured.mcp_state_handle_ttl_seconds = 3601
+    assert (
+        "MCP state handle TTL must be in the range 1-3600 seconds"
+        in configured.validate()
+    )
+
+
 def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config = DorisConfig()
     config.database.host = "127.0.0.1"
@@ -55,6 +82,8 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.mcp_allowed_origins = ["https://client.example.test"]
     config.enable_legacy_http_adapter = True
     config.mcp_list_page_size = 17
+    config.mcp_state_handle_secret = "parent-shared-state-handle-secret-value"
+    config.mcp_state_handle_ttl_seconds = 45
 
     worker_env = _multiworker_environment(
         config,
@@ -82,6 +111,11 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.mcp_allowed_origins == ["https://client.example.test"]
     assert child_config.enable_legacy_http_adapter is True
     assert child_config.mcp_list_page_size == 17
+    assert (
+        child_config.mcp_state_handle_secret
+        == "parent-shared-state-handle-secret-value"
+    )
+    assert child_config.mcp_state_handle_ttl_seconds == 45
     assert child_config.server_name == "doris-mcp-server"
     assert child_config.server_version == __version__
     assert child_config.transport == "http"

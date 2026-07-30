@@ -14,7 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-"""Stable, permission-bound pagination for MCP list operations."""
+"""Explicit, permission-bound pagination handles for MCP list operations."""
 
 from __future__ import annotations
 
@@ -214,6 +214,18 @@ async def test_cursor_rejects_wrong_collection_malformed_and_stale_snapshots():
         assert malformed.value.code == INVALID_PARAMS
         assert malformed.value.data == {"cursorError": "invalid"}
 
+        tampered_parts = first_tools.next_cursor.split(".")
+        tampered_parts[1] = (
+            "A" if tampered_parts[1][0] != "A" else "B"
+        ) + tampered_parts[1][1:]
+        with pytest.raises(MCPError) as tampered:
+            await client.list_tools(
+                cursor=".".join(tampered_parts),
+                cache_mode="bypass",
+            )
+        assert tampered.value.code == INVALID_PARAMS
+        assert tampered.value.data == {"cursorError": "invalid"}
+
         managers.tools.tools.append(
             Tool(
                 name="foxtrot",
@@ -272,3 +284,56 @@ async def test_cursor_is_bound_to_the_authorization_context():
     assert changed_context.value.data == {
         "cursorError": "authorization_context_changed"
     }
+
+
+@pytest.mark.asyncio
+async def test_cursor_crosses_server_instances_with_shared_secret_not_session():
+    secret = "pagination-shared-state-handle-secret-value"
+    first_server, _ = create_pagination_server(
+        page_size=1,
+        state_handle_secret=secret,
+    )
+    second_server, _ = create_pagination_server(
+        page_size=1,
+        state_handle_secret=secret,
+    )
+    first_entry = first_server.get_request_handler("tools/list")
+    second_entry = second_server.get_request_handler("tools/list")
+    assert first_entry is not None
+    assert second_entry is not None
+    context = SimpleNamespace(protocol_version=LATEST_PROTOCOL_VERSION)
+
+    first_request = AuthContext(
+        token_id="token-a",
+        user_id="user-a",
+        permissions=["tool:list"],
+        roles=["analyst"],
+        auth_method="token",
+        session_id="transport-session-one",
+    )
+    token = set_current_auth_context(first_request)
+    try:
+        first_page = await first_entry.handler(context, PaginatedRequestParams())
+    finally:
+        reset_auth_context(token)
+    assert first_page.next_cursor is not None
+
+    second_request = AuthContext(
+        token_id="token-a",
+        user_id="user-a",
+        permissions=["tool:list"],
+        roles=["analyst"],
+        auth_method="token",
+        session_id="transport-session-two",
+    )
+    token = set_current_auth_context(second_request)
+    try:
+        second_page = await second_entry.handler(
+            context,
+            PaginatedRequestParams(cursor=first_page.next_cursor),
+        )
+    finally:
+        reset_auth_context(token)
+
+    assert [tool.name for tool in first_page.tools] == ["alpha"]
+    assert [tool.name for tool in second_page.tools] == ["bravo"]
