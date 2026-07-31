@@ -149,6 +149,23 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ),
             ("table_metadata_readable",),
         ),
+        (
+            (
+                "SELECT COLUMN_NAME, DATA_TYPE "
+                "FROM information_schema.columns LIMIT 1"
+            ),
+            (
+                "information_schema.columns",
+                "table_context_sections_readable",
+            ),
+        ),
+        (
+            (
+                "SELECT PARTITION_NAME, TABLE_ROWS, DATA_LENGTH "
+                "FROM information_schema.partitions LIMIT 1"
+            ),
+            ("table_partition_statistics_readable",),
+        ),
     ),
     "doris_query": (
         (

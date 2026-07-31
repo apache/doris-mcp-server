@@ -226,7 +226,18 @@ def test_table_context_has_four_sections_and_five_deterministic_steps() -> None:
 
     assert plan is not None
     section_enum = _wire_input(child)["properties"]["sections"]["items"]["enum"]
+    output = child.to_wire()["output_schema"]
+    data_schema = output["properties"]["data"]
     assert tuple(section_enum) == ("schema", "comments", "indexes", "basic")
+    for section in ("schema", "comments", "indexes", "basic"):
+        section_schema = data_schema["properties"][section]
+        assert section_schema["required"] == [
+            "status",
+            "data",
+            "warnings",
+            "source",
+        ]
+        assert section_schema["additionalProperties"] is False
     assert tuple(step.name for step in plan.steps) == (
         "schema",
         "table_comments",

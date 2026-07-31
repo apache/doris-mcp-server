@@ -948,7 +948,7 @@ FEATURE_DEFINITIONS = (
     _feature(
         "doris_catalog",
         "get_table_size",
-        A,
+        M,
         _variant(
             "partition_statistics",
             probes=("table_partition_statistics_readable",),

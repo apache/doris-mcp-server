@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -418,7 +419,7 @@ class CapabilityEvaluator:
                     limitations=(),
                 )
             evidence_sources.extend(probe.evidence_sources)
-            evidence_sources.append(probe.probe_id)
+            evidence_sources.append(_public_evidence_source_id(probe.probe_id))
             if probe.status is CapabilityProbeStatus.MISCONFIGURED:
                 return _CandidateFailure(
                     status=AvailabilityStatus.MISCONFIGURED,
@@ -880,6 +881,12 @@ def _ordered_unique(values: tuple[str, ...] | list[str]) -> tuple[str, ...]:
 
 def _normalized_source_ids(values: tuple[str, ...]) -> tuple[str, ...]:
     return _ordered_unique([value.lower() for value in values])
+
+
+def _public_evidence_source_id(value: str) -> str:
+    """Normalize private probe keys into public Manifest identifiers."""
+    normalized = re.sub(r"[^a-z0-9_]+", "_", value.lower()).strip("_")
+    return normalized or "runtime_probe"
 
 
 def _select_failure(

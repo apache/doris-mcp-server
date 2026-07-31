@@ -193,6 +193,44 @@ def test_evaluator_requires_version_probes_handler_and_call_permission() -> None
     assert allowed.callable is True
 
 
+def test_evaluator_normalizes_system_object_probe_evidence_for_manifest() -> None:
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(
+            "doris_catalog.get_table_context"
+        ),  # type: ignore[arg-type]
+    )
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_catalog")
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_catalog",
+        "get_table_context",
+    )
+    probes = {
+        probe_id: CapabilityProbeEvidence(
+            probe_id=probe_id,
+            status=CapabilityProbeStatus.SUPPORTED,
+            reason_code="TEST_PROBE_SUPPORTED",
+            evidence_sources=("test_probe",),
+        )
+        for probe_id in (
+            "information_schema.columns",
+            "table_context_sections_readable",
+        )
+    }
+
+    availability = evaluator.evaluate(
+        snapshot=_snapshot(probes=probes),
+        providers=CapabilityProviderRegistry({}).snapshot(),
+        domain=domain,
+        child=child,
+        auth_context=None,
+    )
+
+    assert availability.callable is True
+    assert "information_schema_columns" in availability.evidence_sources
+    assert "information_schema.columns" not in availability.evidence_sources
+
+
 def test_evaluator_distinguishes_provider_misconfiguration() -> None:
     bound = _BoundHandlers("doris_query.diagnose_query_performance")
     evaluator = CapabilityEvaluator(
