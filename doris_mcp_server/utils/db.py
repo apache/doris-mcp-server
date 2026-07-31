@@ -2618,6 +2618,23 @@ class DorisConnectionManager:
                 raw_connection,
                 "unhealthy routed connection",
             )
+            if owner_pool is not None:
+                try:
+                    owner_pool.release(raw_connection)
+                    self.logger.debug(
+                        "Discarded unhealthy %s connection for route=%s owner=%s",
+                        getattr(connection, "pool_kind", ""),
+                        getattr(connection, "route_key", ""),
+                        getattr(connection, "owner_id", ""),
+                    )
+                except Exception as release_error:
+                    self.logger.warning(
+                        "Failed to discard unhealthy connection for route=%s "
+                        "owner=%s: %s",
+                        getattr(connection, "route_key", ""),
+                        getattr(connection, "owner_id", ""),
+                        release_error,
+                    )
             return
         if owner_pool is None:
             self.logger.warning(

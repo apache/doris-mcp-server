@@ -34,6 +34,7 @@ from ..utils.doris_http_client import (
     DorisHTTPClient,
     DorisHTTPPolicyError,
     DorisHTTPRequestError,
+    DorisHTTPResponse,
     configured_fe_http_hosts,
     database_config_for_request,
 )
@@ -177,6 +178,44 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ("audit_log_readable",),
         ),
     ),
+    "doris_cluster": (
+        (
+            'SHOW PROC "/current_queries"',
+            (
+                "legacy_task_views_readable",
+                "unified_task_progress_readable",
+            ),
+        ),
+        (
+            (
+                "SELECT BE_ID, METRIC_NAME "
+                "FROM information_schema.file_cache_statistics LIMIT 1"
+            ),
+            (
+                "information_schema.file_cache_statistics",
+                "file_cache_metrics_readable",
+            ),
+        ),
+        (
+            ("SELECT * FROM information_schema.doris_be_compaction_tasks LIMIT 1"),
+            (
+                "information_schema.doris_be_compaction_tasks",
+                "compaction_system_table_or_http_api",
+            ),
+        ),
+        (
+            "SHOW WORKLOAD GROUPS",
+            ("workload_group_metadata_and_metrics_readable",),
+        ),
+        (
+            "SHOW COMPUTE GROUPS",
+            ("compute_group_metadata_readable",),
+        ),
+        (
+            ("SELECT `time` FROM internal.__internal_schema.audit_log LIMIT 1"),
+            ("metrics_history_readable",),
+        ),
+    ),
 }
 
 
@@ -298,6 +337,8 @@ class DorisCapabilityDetector:
                     probes["profile_or_audit_readable"] = _combine_query_evidence_probe(
                         probes
                     )
+                elif domain_name == "doris_cluster":
+                    probes.update(await self._safe_probe_cluster_services(auth_context))
                 completed_route = self.route_identity(auth_context)
                 if completed_route.fingerprint != base.route.fingerprint:
                     raise CapabilityRouteChangedError(
@@ -716,6 +757,111 @@ class DorisCapabilityDetector:
                 endpoint_reason="ADBC_RUNTIME_PROBE_FAILED",
             )
 
+    async def _safe_probe_cluster_services(
+        self,
+        auth_context: Any | None,
+    ) -> dict[str, CapabilityProbeEvidence]:
+        try:
+            async with asyncio.timeout(self._optional_probe_timeout()):
+                return await self._probe_cluster_services(auth_context)
+        except TimeoutError:
+            return _cluster_http_probe_failure(
+                status=CapabilityProbeStatus.DEGRADED,
+                reason_code="CLUSTER_HTTP_PROBE_TIMED_OUT",
+            )
+        except DorisHTTPPolicyError:
+            return _cluster_http_probe_failure(
+                status=CapabilityProbeStatus.MISCONFIGURED,
+                reason_code="CLUSTER_HTTP_ENDPOINT_MISCONFIGURED",
+            )
+        except DorisHTTPRequestError:
+            return _cluster_http_probe_failure(
+                status=CapabilityProbeStatus.DEGRADED,
+                reason_code="CLUSTER_HTTP_ENDPOINT_UNREACHABLE",
+            )
+        except Exception:
+            return _cluster_http_probe_failure(
+                status=CapabilityProbeStatus.UNKNOWN,
+                reason_code="CLUSTER_HTTP_PROBE_FAILED",
+            )
+
+    async def _probe_cluster_services(
+        self,
+        auth_context: Any | None,
+    ) -> dict[str, CapabilityProbeEvidence]:
+        if getattr(auth_context, "auth_method", "") == "doris_oauth":
+            return _cluster_http_probe_failure(
+                status=CapabilityProbeStatus.MISCONFIGURED,
+                reason_code="CLUSTER_HTTP_CREDENTIAL_ROUTE_UNAVAILABLE",
+            )
+        config_resolver = getattr(
+            self._connection_manager,
+            "get_database_config_for_auth_context",
+            None,
+        )
+        db_config = (
+            config_resolver(auth_context)
+            if callable(config_resolver)
+            else database_config_for_request(self._connection_manager)
+        )
+        client = DorisHTTPClient.from_database_config(db_config)
+        fe_hosts = configured_fe_http_hosts(db_config)
+        raw_be_hosts = getattr(db_config, "be_hosts", []) or []
+        if not isinstance(raw_be_hosts, list) or any(
+            not isinstance(host, str) for host in raw_be_hosts
+        ):
+            return _cluster_http_probe_failure(
+                status=CapabilityProbeStatus.MISCONFIGURED,
+                reason_code="BE_METRICS_ENDPOINT_MISCONFIGURED",
+            )
+        be_hosts = tuple(dict.fromkeys(raw_be_hosts))
+        fe_response, be_response = await asyncio.gather(
+            client.get_first_available(
+                role="fe",
+                hosts=fe_hosts,
+                port=db_config.fe_http_port,
+                path="/metrics",
+                headers={"Accept": "text/plain"},
+            ),
+            (
+                client.get_first_available(
+                    role="be",
+                    hosts=be_hosts,
+                    port=db_config.be_webserver_port,
+                    path="/metrics",
+                    headers={"Accept": "text/plain"},
+                )
+                if be_hosts
+                else _missing_be_metrics_response()
+            ),
+        )
+        fe_status, fe_reason = _classify_metrics_response(
+            fe_response.status,
+            configured=True,
+        )
+        be_status, be_reason = _classify_metrics_response(
+            be_response.status,
+            configured=bool(be_hosts),
+        )
+        fe_names = (
+            _prometheus_metric_names(fe_response.text())
+            if fe_status is CapabilityProbeStatus.SUPPORTED
+            else frozenset()
+        )
+        be_names = (
+            _prometheus_metric_names(be_response.text())
+            if be_status is CapabilityProbeStatus.SUPPORTED
+            else frozenset()
+        )
+        return _cluster_http_probe_evidence(
+            fe_status=fe_status,
+            fe_reason=fe_reason,
+            be_status=be_status,
+            be_reason=be_reason,
+            fe_metric_names=fe_names,
+            be_metric_names=be_names,
+        )
+
     def _optional_probe_timeout(self) -> float:
         return max(
             0.25,
@@ -746,6 +892,277 @@ def _classify_probe_error(
             "PROBE_CONNECTION_FAILED",
         )
     return CapabilityProbeStatus.UNKNOWN, "RUNTIME_PROBE_FAILED"
+
+
+async def _missing_be_metrics_response() -> DorisHTTPResponse:
+    return DorisHTTPResponse(
+        status=0,
+        headers={},
+        body=b"",
+        url="",
+    )
+
+
+def _classify_metrics_response(
+    status_code: int,
+    *,
+    configured: bool,
+) -> tuple[CapabilityProbeStatus, str]:
+    if not configured:
+        return (
+            CapabilityProbeStatus.MISCONFIGURED,
+            "METRICS_ENDPOINT_NOT_CONFIGURED",
+        )
+    if status_code == 200:
+        return CapabilityProbeStatus.SUPPORTED, "METRICS_ENDPOINT_READABLE"
+    if status_code in {401, 403}:
+        return CapabilityProbeStatus.UNKNOWN, "METRICS_ENDPOINT_PERMISSION_DENIED"
+    if status_code in {502, 503, 504}:
+        return CapabilityProbeStatus.DEGRADED, "METRICS_ENDPOINT_UNREACHABLE"
+    return CapabilityProbeStatus.UNSUPPORTED, "METRICS_ENDPOINT_UNSUPPORTED"
+
+
+def _prometheus_metric_names(payload: str) -> frozenset[str]:
+    names: set[str] = set()
+    for raw_line in payload.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        token = line.split(maxsplit=1)[0]
+        name = token.split("{", 1)[0]
+        if name:
+            names.add(name)
+        if len(names) >= 10_000:
+            break
+    return frozenset(names)
+
+
+def _cluster_http_probe_failure(
+    *,
+    status: CapabilityProbeStatus,
+    reason_code: str,
+) -> dict[str, CapabilityProbeEvidence]:
+    probe_ids = (
+        "fe_metrics",
+        "be_metrics",
+        "metrics_endpoints_readable",
+        "memory_tracker_metrics_readable",
+        "legacy_compaction_status_readable",
+        "connection_limit_metrics",
+        "routine_load_metrics",
+        "file_cache_queue_metrics",
+        "enhanced_metrics_present",
+        "file_cache_queue_metrics_present",
+        "condition_cache",
+        "parquet_page_cache",
+        "advanced_cache_metrics_present",
+    )
+    return {
+        probe_id: CapabilityProbeEvidence(
+            probe_id=probe_id,
+            status=status,
+            reason_code=reason_code,
+            evidence_sources=("doris_http_metrics", "runtime_probe"),
+        )
+        for probe_id in probe_ids
+    }
+
+
+def _cluster_http_probe_evidence(
+    *,
+    fe_status: CapabilityProbeStatus,
+    fe_reason: str,
+    be_status: CapabilityProbeStatus,
+    be_reason: str,
+    fe_metric_names: frozenset[str],
+    be_metric_names: frozenset[str],
+) -> dict[str, CapabilityProbeEvidence]:
+    probes: dict[str, CapabilityProbeEvidence] = {
+        "fe_metrics": CapabilityProbeEvidence(
+            probe_id="fe_metrics",
+            status=fe_status,
+            reason_code=fe_reason,
+            evidence_sources=("doris_fe_metrics", "runtime_probe"),
+        ),
+        "be_metrics": CapabilityProbeEvidence(
+            probe_id="be_metrics",
+            status=be_status,
+            reason_code=be_reason,
+            evidence_sources=("doris_be_metrics", "runtime_probe"),
+        ),
+    }
+    combined_status, combined_reason = _combine_endpoint_status(
+        fe_status,
+        be_status,
+    )
+    probes["metrics_endpoints_readable"] = CapabilityProbeEvidence(
+        probe_id="metrics_endpoints_readable",
+        status=combined_status,
+        reason_code=combined_reason,
+        evidence_sources=(
+            "doris_fe_metrics",
+            "doris_be_metrics",
+            "runtime_probe",
+        ),
+    )
+
+    all_names = fe_metric_names | be_metric_names
+    memory_present = _has_metric_marker(
+        be_metric_names,
+        ("memory", "mem_tracker", "jemalloc"),
+    )
+    probes["memory_tracker_metrics_readable"] = _metric_presence_evidence(
+        "memory_tracker_metrics_readable",
+        endpoint_status=be_status,
+        present=memory_present,
+        present_reason="MEMORY_TRACKER_METRICS_READABLE",
+        absent_reason="MEMORY_TRACKER_METRICS_NOT_PRESENT",
+        source="doris_be_metrics",
+    )
+
+    compaction_present = _has_metric_marker(all_names, ("compaction",))
+    if compaction_present:
+        probes["legacy_compaction_status_readable"] = CapabilityProbeEvidence(
+            probe_id="legacy_compaction_status_readable",
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="LEGACY_COMPACTION_SUMMARY_READABLE",
+            evidence_sources=("doris_metrics", "runtime_probe"),
+        )
+    else:
+        probes["legacy_compaction_status_readable"] = _metric_presence_evidence(
+            "legacy_compaction_status_readable",
+            endpoint_status=combined_status,
+            present=False,
+            present_reason="LEGACY_COMPACTION_SUMMARY_READABLE",
+            absent_reason="LEGACY_COMPACTION_METRICS_NOT_PRESENT",
+            source="doris_metrics",
+        )
+
+    marker_contracts = {
+        "connection_limit_metrics": ("connection", "limit"),
+        "routine_load_metrics": ("routine_load",),
+        "file_cache_queue_metrics": ("file_cache", "queue"),
+        "condition_cache": ("condition_cache",),
+        "parquet_page_cache": ("parquet", "page_cache"),
+    }
+    for probe_id, markers in marker_contracts.items():
+        probes[probe_id] = _metric_presence_evidence(
+            probe_id,
+            endpoint_status=combined_status,
+            present=all(marker in " ".join(all_names) for marker in markers),
+            present_reason=f"{probe_id.upper()}_PRESENT",
+            absent_reason=f"{probe_id.upper()}_NOT_PRESENT",
+            source="doris_metrics",
+        )
+
+    queue_probe = probes["file_cache_queue_metrics"]
+    probes["file_cache_queue_metrics_present"] = CapabilityProbeEvidence(
+        probe_id="file_cache_queue_metrics_present",
+        status=queue_probe.status,
+        reason_code=queue_probe.reason_code,
+        evidence_sources=queue_probe.evidence_sources,
+    )
+    enhanced_candidates = (
+        probes["connection_limit_metrics"],
+        probes["routine_load_metrics"],
+        probes["file_cache_queue_metrics"],
+    )
+    probes["enhanced_metrics_present"] = _combine_metric_presence(
+        "enhanced_metrics_present",
+        enhanced_candidates,
+        supported_reason="ENHANCED_METRICS_PRESENT",
+    )
+    advanced_candidates = (
+        probes["condition_cache"],
+        probes["parquet_page_cache"],
+    )
+    probes["advanced_cache_metrics_present"] = _combine_metric_presence(
+        "advanced_cache_metrics_present",
+        advanced_candidates,
+        supported_reason="ADVANCED_CACHE_METRICS_PRESENT",
+    )
+    return probes
+
+
+def _combine_endpoint_status(
+    *statuses: CapabilityProbeStatus,
+) -> tuple[CapabilityProbeStatus, str]:
+    if all(status is CapabilityProbeStatus.SUPPORTED for status in statuses):
+        return (
+            CapabilityProbeStatus.SUPPORTED,
+            "FE_BE_METRICS_ENDPOINTS_READABLE",
+        )
+    for status in (
+        CapabilityProbeStatus.MISCONFIGURED,
+        CapabilityProbeStatus.DEGRADED,
+        CapabilityProbeStatus.UNKNOWN,
+        CapabilityProbeStatus.UNSUPPORTED,
+    ):
+        if status in statuses:
+            return status, f"FE_BE_METRICS_{status.value.upper()}"
+    return CapabilityProbeStatus.UNKNOWN, "FE_BE_METRICS_UNKNOWN"
+
+
+def _has_metric_marker(
+    names: frozenset[str],
+    markers: tuple[str, ...],
+) -> bool:
+    return any(any(marker in name.casefold() for marker in markers) for name in names)
+
+
+def _metric_presence_evidence(
+    probe_id: str,
+    *,
+    endpoint_status: CapabilityProbeStatus,
+    present: bool,
+    present_reason: str,
+    absent_reason: str,
+    source: str,
+) -> CapabilityProbeEvidence:
+    if present:
+        status = CapabilityProbeStatus.SUPPORTED
+        reason = present_reason
+    elif endpoint_status is CapabilityProbeStatus.SUPPORTED:
+        status = CapabilityProbeStatus.UNSUPPORTED
+        reason = absent_reason
+    else:
+        status = endpoint_status
+        reason = absent_reason
+    return CapabilityProbeEvidence(
+        probe_id=probe_id,
+        status=status,
+        reason_code=reason,
+        evidence_sources=(source, "runtime_probe"),
+    )
+
+
+def _combine_metric_presence(
+    probe_id: str,
+    candidates: tuple[CapabilityProbeEvidence, ...],
+    *,
+    supported_reason: str,
+) -> CapabilityProbeEvidence:
+    if all(
+        candidate.status is CapabilityProbeStatus.SUPPORTED for candidate in candidates
+    ):
+        status = CapabilityProbeStatus.SUPPORTED
+        reason = supported_reason
+    else:
+        status = next(
+            (
+                candidate.status
+                for candidate in candidates
+                if candidate.status is not CapabilityProbeStatus.SUPPORTED
+            ),
+            CapabilityProbeStatus.UNKNOWN,
+        )
+        reason = f"{probe_id.upper()}_INCOMPLETE"
+    return CapabilityProbeEvidence(
+        probe_id=probe_id,
+        status=status,
+        reason_code=reason,
+        evidence_sources=("doris_metrics", "runtime_probe"),
+    )
 
 
 def _profile_api_code(payload: Mapping[str, Any] | None) -> int | None:
@@ -880,6 +1297,8 @@ def _frontend_versions(
 ) -> tuple[DorisVersion, tuple[DorisVersion, ...]]:
     observed: list[tuple[DorisVersion, bool]] = []
     for row in rows:
+        if not _component_is_active(row):
+            continue
         version = _component_version(_row_value(row, "Version", "FeVersion"))
         observed.append(
             (
@@ -907,8 +1326,15 @@ def _backend_versions(
     rows: Sequence[Mapping[str, Any]],
 ) -> tuple[DorisVersion, ...]:
     return tuple(
-        _component_version(_row_value(row, "Version", "BeVersion")) for row in rows
+        _component_version(_row_value(row, "Version", "BeVersion"))
+        for row in rows
+        if _component_is_active(row)
     )
+
+
+def _component_is_active(row: Mapping[str, Any]) -> bool:
+    alive = _row_value(row, "Alive")
+    return alive is None or str(alive).strip() == "" or _truthy(alive)
 
 
 def _cluster_fingerprint(
