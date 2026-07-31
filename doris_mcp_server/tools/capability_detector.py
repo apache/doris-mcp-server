@@ -216,6 +216,45 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ("metrics_history_readable",),
         ),
     ),
+    "doris_pipeline": (
+        (
+            "SHOW LOAD LIMIT 1",
+            ("batch_load_metadata_readable",),
+        ),
+        (
+            "SHOW STREAM LOAD LIMIT 1",
+            ("stream_load_metadata_readable",),
+        ),
+        (
+            "SHOW ALL ROUTINE LOAD",
+            ("routine_load_metadata_readable",),
+        ),
+        (
+            'SELECT Id, Name, Status FROM jobs("type"="insert") LIMIT 1',
+            (
+                "insert_job_metadata_readable",
+                "continuous_load_metadata_readable",
+            ),
+        ),
+        (
+            'SELECT Id, Name, Status FROM jobs("type"="mv") LIMIT 1',
+            ("materialized_view_job_metadata_readable",),
+        ),
+        (
+            'SELECT TaskId, Status FROM tasks("type"="mv") LIMIT 1',
+            ("materialized_view_task_metadata_readable",),
+        ),
+        (
+            (
+                "SELECT `time`, stmt "
+                "FROM internal.__internal_schema.audit_log LIMIT 1"
+            ),
+            (
+                "pipeline_audit_log_readable",
+                "audit_log_readable",
+            ),
+        ),
+    ),
 }
 
 
@@ -306,32 +345,33 @@ class DorisCapabilityDetector:
                     "Doris route changed before domain capability probing"
                 )
 
-            session_id = (
-                f"capability-domain:{domain_name}:{requested_route.fingerprint[:12]}"
-            )
             async with asyncio.timeout(self._probe_timeout_seconds):
-                async with (
-                    self._connection_manager.get_connection_context_for_auth_context(
-                        session_id,
-                        auth_context,
-                    ) as connection
+                probes = dict(base.probes)
+                for index, (sql, probe_ids) in enumerate(
+                    _DOMAIN_PROBES.get(domain_name, ())
                 ):
                     current_route = self.route_identity(auth_context)
                     if current_route.fingerprint != base.route.fingerprint:
                         raise CapabilityRouteChangedError(
                             "Doris route changed during domain capability probing"
                         )
-                    probes = dict(base.probes)
-                    for sql, probe_ids in _DOMAIN_PROBES.get(
-                        domain_name,
-                        (),
+                    session_id = (
+                        f"capability-domain:{domain_name}:{index}:"
+                        f"{requested_route.fingerprint[:12]}"
+                    )
+                    async with (
+                        self._connection_manager
+                        .get_connection_context_for_auth_context(
+                            session_id,
+                            auth_context,
+                        ) as connection
                     ):
                         evidence = await self._probe_statement(
                             connection,
                             sql,
                             probe_ids,
                         )
-                        probes.update(evidence)
+                    probes.update(evidence)
                 if domain_name == "doris_query":
                     probes.update(await self._probe_query_services(auth_context))
                     probes["profile_or_audit_readable"] = _combine_query_evidence_probe(
@@ -339,6 +379,8 @@ class DorisCapabilityDetector:
                     )
                 elif domain_name == "doris_cluster":
                     probes.update(await self._safe_probe_cluster_services(auth_context))
+                elif domain_name == "doris_pipeline":
+                    probes.update(_combine_pipeline_evidence_probes(probes))
                 completed_route = self.route_identity(auth_context)
                 if completed_route.fingerprint != base.route.fingerprint:
                     raise CapabilityRouteChangedError(
@@ -1262,6 +1304,133 @@ def _combine_query_evidence_probe(
         reason_code=reason,
         evidence_sources=("runtime_probe",),
     )
+
+
+def _combine_pipeline_evidence_probes(
+    probes: Mapping[str, CapabilityProbeEvidence],
+) -> dict[str, CapabilityProbeEvidence]:
+    ingestion_source_ids = (
+        "batch_load_metadata_readable",
+        "stream_load_metadata_readable",
+        "routine_load_metadata_readable",
+    )
+    all_ingestion_source_ids = (
+        *ingestion_source_ids,
+        "insert_job_metadata_readable",
+    )
+    ingestion = _combine_any_runtime_probe(
+        "stream_broker_routine_load_readable",
+        probes,
+        ingestion_source_ids,
+        supported_reason="LOAD_JOB_METADATA_READABLE",
+    )
+    ingestion_status = _combine_any_runtime_probe(
+        "ingestion_status_readable",
+        probes,
+        all_ingestion_source_ids,
+        supported_reason="INGESTION_STATUS_READABLE",
+    )
+    materialized_views = _combine_any_runtime_probe(
+        "materialized_view_tasks_readable",
+        probes,
+        (
+            "materialized_view_job_metadata_readable",
+            "materialized_view_task_metadata_readable",
+        ),
+        supported_reason="MATERIALIZED_VIEW_METADATA_READABLE",
+    )
+
+    freshness_candidates = tuple(
+        probe
+        for probe_id in (
+            "routine_load_metadata_readable",
+            "pipeline_audit_log_readable",
+        )
+        if (probe := probes.get(probe_id)) is not None
+    )
+    if any(
+        probe.probe_id == "routine_load_metadata_readable"
+        and probe.status is CapabilityProbeStatus.SUPPORTED
+        for probe in freshness_candidates
+    ):
+        freshness_status = CapabilityProbeStatus.SUPPORTED
+        freshness_reason = "LOAD_OFFSET_OR_TIME_EVIDENCE_READABLE"
+    elif any(
+        probe.status is CapabilityProbeStatus.SUPPORTED
+        for probe in freshness_candidates
+    ):
+        freshness_status = CapabilityProbeStatus.DEGRADED
+        freshness_reason = "AUDIT_TIME_FALLBACK_READABLE"
+    else:
+        freshness_status, freshness_reason = _best_candidate_status(
+            freshness_candidates,
+            reason_prefix="FRESHNESS_EVIDENCE",
+        )
+    freshness = CapabilityProbeEvidence(
+        probe_id="freshness_evidence_readable",
+        status=freshness_status,
+        reason_code=freshness_reason,
+        evidence_sources=("runtime_probe",),
+    )
+    load_offset = CapabilityProbeEvidence(
+        probe_id="load_offset_or_time_evidence_readable",
+        status=freshness_status,
+        reason_code=freshness_reason,
+        evidence_sources=("runtime_probe",),
+    )
+    return {
+        ingestion.probe_id: ingestion,
+        ingestion_status.probe_id: ingestion_status,
+        materialized_views.probe_id: materialized_views,
+        freshness.probe_id: freshness,
+        load_offset.probe_id: load_offset,
+    }
+
+
+def _combine_any_runtime_probe(
+    probe_id: str,
+    probes: Mapping[str, CapabilityProbeEvidence],
+    candidate_ids: Sequence[str],
+    *,
+    supported_reason: str,
+) -> CapabilityProbeEvidence:
+    candidates = tuple(
+        probe
+        for candidate_id in candidate_ids
+        if (probe := probes.get(candidate_id)) is not None
+    )
+    if any(
+        probe.status is CapabilityProbeStatus.SUPPORTED for probe in candidates
+    ):
+        status = CapabilityProbeStatus.SUPPORTED
+        reason = supported_reason
+    else:
+        status, reason = _best_candidate_status(
+            candidates,
+            reason_prefix=probe_id.upper(),
+        )
+    return CapabilityProbeEvidence(
+        probe_id=probe_id,
+        status=status,
+        reason_code=reason,
+        evidence_sources=("runtime_probe",),
+    )
+
+
+def _best_candidate_status(
+    candidates: Sequence[CapabilityProbeEvidence],
+    *,
+    reason_prefix: str,
+) -> tuple[CapabilityProbeStatus, str]:
+    for status in (
+        CapabilityProbeStatus.DEGRADED,
+        CapabilityProbeStatus.MISCONFIGURED,
+        CapabilityProbeStatus.UNKNOWN,
+        CapabilityProbeStatus.UNSUPPORTED,
+    ):
+        if any(probe.status is status for probe in candidates):
+            return status, f"{reason_prefix}_{status.value.upper()}"
+    return CapabilityProbeStatus.UNKNOWN, f"{reason_prefix}_UNKNOWN"
 
 
 def _row_value(

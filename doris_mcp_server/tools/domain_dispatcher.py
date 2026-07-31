@@ -45,6 +45,7 @@ from ..state_handles import StateHandleCodec, StateHandleError
 from ..utils.catalog_metadata import CatalogMetadataFailure
 from ..utils.cluster_runtime import ClusterRuntimeFailure
 from ..utils.logger import get_audit_logger, get_logger
+from ..utils.pipeline_runtime import PipelineRuntimeFailure
 from ..utils.query_runtime import QueryRuntimeFailure
 from . import domain_catalog as domain_catalog_module
 from .domain_catalog import (
@@ -168,7 +169,8 @@ def _build_bindings(
     for domain in catalog.domains:
         for child in domain.children:
             feature_id = f"{domain.name}.{child.name}"
-            if feature_id in bindings:
+            existing = bindings.get(feature_id)
+            if isinstance(existing, tuple):
                 continue
             handler_name = _formal_handler_name(domain.name, child.name)
             if callable(getattr(owner, handler_name, None)):
@@ -648,6 +650,29 @@ class DomainDispatcher:
                 (
                     DomainErrorCode.CHILD_ARGUMENTS_INVALID
                     if exc.reason_code == "CLUSTER_ARGUMENT_INVALID"
+                    else DomainErrorCode.CHILD_EXECUTION_FAILED
+                ),
+                str(exc),
+                child_tool=child.name,
+                manifest_version=manifest.manifest_version,
+                retryable=exc.retryable,
+                details={
+                    "rediscover": False,
+                    "reason_code": exc.reason_code,
+                    "status_code": exc.status_code,
+                },
+            )
+        except PipelineRuntimeFailure as exc:
+            self._audit(feature_id, arguments, "error", started)
+            return self._error(
+                domain.name,
+                (
+                    DomainErrorCode.CHILD_ARGUMENTS_INVALID
+                    if exc.reason_code
+                    in {
+                        "PIPELINE_ARGUMENT_INVALID",
+                        "PIPELINE_DATABASE_REQUIRED",
+                    }
                     else DomainErrorCode.CHILD_EXECUTION_FAILED
                 ),
                 str(exc),
