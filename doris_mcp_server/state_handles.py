@@ -137,13 +137,16 @@ def _encode_base64url(value: bytes) -> str:
 def _decode_base64url(value: str) -> bytes:
     try:
         padding = "=" * (-len(value) % 4)
-        return base64.b64decode(
+        decoded = base64.b64decode(
             (value + padding).encode("ascii"),
             altchars=b"-_",
             validate=True,
         )
     except (UnicodeEncodeError, binascii.Error) as exc:
         raise StateHandleError("invalid") from exc
+    if _encode_base64url(decoded) != value:
+        raise StateHandleError("invalid")
+    return decoded
 
 
 def _validate_claim(name: str, value: str) -> None:

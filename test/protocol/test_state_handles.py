@@ -209,6 +209,20 @@ def test_handle_rejects_expiry_and_tampering_before_exposing_state():
             auth_context=_auth_context(),
         )
 
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    parts = handle.split(".")
+    tail_index = alphabet.index(parts[2][-1])
+    noncanonical_tail = alphabet[(tail_index & ~0b11) | ((tail_index + 1) & 0b11)]
+    parts[2] = parts[2][:-1] + noncanonical_tail
+    with pytest.raises(StateHandleError, match="invalid"):
+        codec.resolve(
+            ".".join(parts),
+            expected_kind="list-page",
+            expected_scope="tools:list",
+            expected_resource="mcp://tools",
+            auth_context=_auth_context(),
+        )
+
 
 def test_handle_enforces_secret_ttl_claim_and_payload_limits():
     with pytest.raises(ValueError, match="at least 32 bytes"):

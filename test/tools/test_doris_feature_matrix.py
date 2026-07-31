@@ -411,6 +411,24 @@ def test_master_fe_scope_does_not_inherit_an_unrelated_old_be_version() -> None:
     assert result.compatible is True
 
 
+def test_table_size_uses_master_fe_metadata_with_unknown_backend_version() -> None:
+    result = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="get_table_size",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe="Doris version doris-4.0.5",
+            backends=(
+                "Doris version doris-4.0.5",
+                "",
+            ),
+        ),
+    )
+
+    assert result.version_scope is CapabilityVersionScope.MASTER_FE
+    assert result.effective_version == "4.0.5"
+    assert result.compatible is True
+
+
 @pytest.mark.parametrize(
     "child_name",
     [

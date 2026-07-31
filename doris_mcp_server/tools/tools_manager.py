@@ -19,6 +19,7 @@ Apache Doris MCP Tools Manager
 Responsible for tool registration, management, scheduling and routing, does not contain specific business logic implementation
 """
 
+import secrets
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
@@ -27,6 +28,7 @@ from mcp.types import Tool
 
 from ..auth.operation_policy import authorize_operation
 from ..result_limits import configured_default_result_rows
+from ..state_handles import StateHandleCodec
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.analysis_tools import MemoryTracker, SQLAnalyzer, TableAnalyzer
 from ..utils.data_exploration_tools import DataExplorationTools
@@ -47,6 +49,7 @@ from .capability_registry import (
     CapabilityProviderRegistry,
     CapabilityRegistry,
 )
+from .catalog_handlers import CatalogToolHandlersMixin
 from .domain_catalog import CURRENT_FLAT_TOOL_NAMES
 from .domain_dispatcher import (
     BoundHandlerAvailabilityProvider,
@@ -67,7 +70,10 @@ from .tool_registry import ToolRegistryError
 logger = get_logger(__name__)
 
 
-class DorisToolsManager(DomainManifestManagerMixin):
+class DorisToolsManager(
+    CatalogToolHandlersMixin,
+    DomainManifestManagerMixin,
+):
     """Apache Doris Tools Manager"""
 
     def __init__(
@@ -87,6 +93,7 @@ class DorisToolsManager(DomainManifestManagerMixin):
         self.metadata_extractor = MetadataExtractor(
             connection_manager=connection_manager
         )
+        self._initialize_catalog_handlers(connection_manager)
         self.monitoring_tools = DorisMonitoringTools(connection_manager)
         self.memory_tracker = MemoryTracker(connection_manager)
 
@@ -151,9 +158,29 @@ class DorisToolsManager(DomainManifestManagerMixin):
         self._tool_exposure_mode = ToolExposureMode.parse(
             tool_exposure_mode or configured_mode
         )
+        state_handle_secret = getattr(
+            config,
+            "mcp_state_handle_secret",
+            None,
+        )
+        if not isinstance(state_handle_secret, str | bytes) or len(
+            state_handle_secret
+        ) < 32:
+            state_handle_secret = secrets.token_urlsafe(32)
+        state_handle_ttl = getattr(
+            config,
+            "mcp_state_handle_ttl_seconds",
+            300,
+        )
+        if not isinstance(state_handle_ttl, int):
+            state_handle_ttl = 300
         self._domain_dispatcher = DomainDispatcher(
             self,
             self._domain_manifest_service,
+            state_handle_codec=StateHandleCodec(
+                state_handle_secret,
+                default_ttl_seconds=state_handle_ttl,
+            ),
         )
         self._validate_custom_tool_names()
 
@@ -287,75 +314,6 @@ class DorisToolsManager(DomainManifestManagerMixin):
             max_bytes=max_bytes,
         )
 
-    async def _get_table_schema_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Get table schema tool routing"""
-        table_name = self._required_string(arguments, "table_name")
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_table_schema_for_mcp(
-            table_name, db_name, catalog_name
-        )
-
-    async def _get_db_table_list_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Get database table list tool routing"""
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_db_table_list_for_mcp(
-            db_name, catalog_name
-        )
-
-    async def _get_db_list_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Get database list tool routing"""
-        catalog_name = arguments.get("catalog_name")
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_db_list_for_mcp(catalog_name)
-
-    async def _get_table_comment_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Get table comment tool routing"""
-        table_name = self._required_string(arguments, "table_name")
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_table_comment_for_mcp(
-            table_name, db_name, catalog_name
-        )
-
-    async def _get_table_column_comments_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Get table column comments tool routing"""
-        table_name = self._required_string(arguments, "table_name")
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_table_column_comments_for_mcp(
-            table_name, db_name, catalog_name
-        )
-
-    async def _get_table_indexes_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Get table indexes tool routing"""
-        table_name = self._required_string(arguments, "table_name")
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_table_indexes_for_mcp(
-            table_name, db_name, catalog_name
-        )
-
     async def _get_recent_audit_logs_tool(
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -365,14 +323,6 @@ class DorisToolsManager(DomainManifestManagerMixin):
 
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_recent_audit_logs_for_mcp(days, limit)
-
-    async def _get_catalog_list_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Get catalog list tool routing"""
-        # random_string parameter is required in the source project, but not actually used in business logic
-        # Here we ignore it and directly call business logic
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.get_catalog_list_for_mcp()
 
     async def _get_sql_explain_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """SQL Explain tool routing"""
@@ -396,19 +346,6 @@ class DorisToolsManager(DomainManifestManagerMixin):
         # Delegate to SQL analyzer for processing
         return await self.sql_analyzer.get_sql_profile(
             sql, db_name, catalog_name, timeout
-        )
-
-    async def _get_table_data_size_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Table data size tool routing"""
-        db_name = arguments.get("db_name")
-        table_name = arguments.get("table_name")
-        single_replica = arguments.get("single_replica", False)
-
-        # Delegate to SQL analyzer for processing
-        return await self.sql_analyzer.get_table_data_size(
-            db_name, table_name, single_replica
         )
 
     async def _get_monitoring_metrics_tool(
@@ -537,29 +474,6 @@ class DorisToolsManager(DomainManifestManagerMixin):
         return await self._get_memory_stats_tool(arguments)
 
     # ==================== v0.5.0 Advanced Analytics Tools Private Methods ====================
-
-    async def _get_table_basic_info_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Get table basic information tool routing"""
-        try:
-            table_name = self._required_string(arguments, "table_name")
-            catalog_name = arguments.get("catalog_name")
-            db_name = arguments.get("db_name")
-
-            # Delegate to atomic data quality tools
-            result = await self.data_quality_tools.get_table_basic_info(
-                table_name=table_name, catalog_name=catalog_name, db_name=db_name
-            )
-
-            return result
-
-        except Exception as e:
-            return {
-                "error": str(e),
-                "analysis_type": "table_basic_info",
-                "timestamp": datetime.now().isoformat(),
-            }
 
     async def _analyze_columns_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Analyze columns tool routing"""

@@ -807,19 +807,33 @@ async def test_table_context_composite_merges_selected_sections() -> None:
     assert result.mode == "result"
     child_result = cast_mapping(result.to_wire()["data"])
     assert child_result["status"] == "partial"
-    assert child_result["data"]["schema"] == {"columns": ["id"]}
-    assert child_result["data"]["comments"] == {
+    assert child_result["data"]["schema"] == {
+        "status": "success",
+        "data": {"columns": ["id"]},
+        "warnings": [],
+        "source": "_get_table_schema_tool",
+    }
+    assert child_result["data"]["comments"]["data"] == {
         "table": {"comment": "orders"},
         "columns": {"id": "key"},
     }
-    assert "indexes" not in child_result["data"]
-    assert child_result["data"]["basic"]["row_count"] == 1
+    assert child_result["data"]["indexes"]["status"] == "unavailable"
+    assert child_result["data"]["indexes"]["data"] == {}
+    assert (
+        child_result["data"]["indexes"]["warnings"]
+        == [
+            "Optional indexes section is unavailable "
+            "(CATALOG_EXECUTION_FAILED)."
+        ]
+    )
+    assert child_result["data"]["basic"]["data"]["row_count"] == 1
     assert len(child_result["evidence"]) == 5
     manager._get_table_schema_tool.assert_awaited_once_with(
         {
             "catalog_name": "internal",
             "db_name": "analytics",
             "table_name": "orders",
+            "_formal_catalog": True,
         }
     )
 
@@ -849,6 +863,40 @@ async def test_table_context_required_schema_failure_is_execution_error() -> Non
 
 
 @pytest.mark.asyncio
+async def test_table_context_required_schema_distinguishes_missing_object() -> None:
+    manager = _manager("doris_catalog.get_table_context")
+    manager._get_table_schema_tool = AsyncMock(
+        return_value={
+            "success": False,
+            "error": "not visible",
+            "error_code": "DORIS_METADATA_NOT_VISIBLE",
+            "status_code": 404,
+        }
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_catalog",
+        {
+            "child_tool": "get_table_context",
+            "arguments": {
+                "database": "analytics",
+                "table": "missing",
+                "sections": ["schema"],
+            },
+        },
+        None,
+    )
+
+    assert result.mode == "error"
+    assert result.error.code is DomainErrorCode.CHILD_EXECUTION_FAILED
+    assert (
+        result.error.details["reason_code"]
+        == "CATALOG_OBJECT_NOT_FOUND"
+    )
+    assert result.error.details["status_code"] == 404
+
+
+@pytest.mark.asyncio
 async def test_table_context_skips_unrequested_optional_sections() -> None:
     manager = _manager("doris_catalog.get_table_context")
     manager._get_table_schema_tool = AsyncMock(
@@ -869,7 +917,14 @@ async def test_table_context_skips_unrequested_optional_sections() -> None:
     )
 
     assert result.mode == "result"
-    assert result.to_wire()["data"]["data"] == {"schema": {"columns": ["id"]}}
+    assert result.to_wire()["data"]["data"] == {
+        "schema": {
+            "status": "success",
+            "data": {"columns": ["id"]},
+            "warnings": [],
+            "source": "_get_table_schema_tool",
+        }
+    }
 
 
 @pytest.mark.asyncio
@@ -903,13 +958,27 @@ async def test_table_context_includes_schema_for_comments_only_selection() -> No
     assert result.mode == "result"
     child_result = cast_mapping(result.to_wire()["data"])
     assert child_result["data"] == {
-        "schema": {"columns": ["id"]},
+        "schema": {
+            "status": "success",
+            "data": {"columns": ["id"]},
+            "warnings": [],
+            "source": "_get_table_schema_tool",
+        },
         "comments": {
-            "table": {"comment": "orders"},
-            "columns": {"id": "key"},
+            "status": "success",
+            "data": {
+                "table": {"comment": "orders"},
+                "columns": {"id": "key"},
+            },
+            "warnings": [],
+            "source": (
+                "_get_table_comment_tool,"
+                "_get_table_column_comments_tool"
+            ),
         },
     }
-    assert child_result["metadata"]["sections"] == ["comments", "schema"]
+    assert child_result["metadata"]["sections"] == ["schema", "comments"]
+    assert child_result["metadata"]["requested_sections"] == ["comments"]
     manager._get_table_indexes_tool.assert_not_awaited()
     manager._get_table_basic_info_tool.assert_not_awaited()
 
@@ -946,7 +1015,7 @@ async def test_table_context_internal_guards_reject_invalid_composition() -> Non
         )
 
 
-def test_collection_result_normalization_filters_and_warns() -> None:
+def test_collection_result_normalization_filters_and_paginates() -> None:
     manager = _manager()
     child = DORIS_DOMAIN_CATALOG.resolve_child(
         "doris_catalog",
@@ -958,26 +1027,300 @@ def test_collection_result_normalization_filters_and_warns() -> None:
         {
             "success": True,
             "result": [
-                "internal",
-                {"name": "iceberg"},
-                {"name": "hive"},
+                {"name": "internal", "scope": "internal"},
+                *[
+                    {"name": f"external_{index:03d}", "scope": "external"}
+                    for index in range(101)
+                ],
             ],
         },
         {
-            "pattern": "i*",
-            "page": "cursor",
-            "types": ["internal", "hms"],
+            "pattern": "*",
+            "include_external": True,
         },
         (),
     )
 
-    assert result["status"] == "partial"
-    assert result["data"]["items"] == [
-        {"name": "internal"},
-        {"name": "iceberg"},
+    assert result["status"] == "success"
+    assert len(result["data"]["items"]) == 100
+    assert result["data"]["truncated"] is True
+    assert isinstance(result["data"]["next_cursor"], str)
+
+    next_page = manager.domain_dispatcher._normalize_child_result(
+        child,
+        {
+            "success": True,
+            "result": [
+                {"name": "internal", "scope": "internal"},
+                *[
+                    {"name": f"external_{index:03d}", "scope": "external"}
+                    for index in range(101)
+                ],
+            ],
+        },
+        {
+            "pattern": "*",
+            "include_external": True,
+            "page": result["data"]["next_cursor"],
+        },
+        (),
+    )
+    assert len(next_page["data"]["items"]) == 2
+    assert next_page["data"]["next_cursor"] is None
+    assert next_page["data"]["truncated"] is False
+
+    internal_only = manager.domain_dispatcher._normalize_child_result(
+        child,
+        {
+            "success": True,
+            "result": [
+                {"name": "internal", "scope": "internal"},
+                {"name": "iceberg", "scope": "external"},
+            ],
+        },
+        {"include_external": False},
+        (),
+    )
+    assert internal_only["data"]["items"] == [
+        {"name": "internal", "scope": "internal"}
     ]
-    assert result["data"]["next_cursor"] is None
-    assert len(result["warnings"]) == 2
+
+
+def test_table_collection_filters_exact_normalized_object_types() -> None:
+    manager = _manager()
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_catalog",
+        "list_tables",
+    )
+
+    result = manager.domain_dispatcher._normalize_child_result(
+        child,
+        {
+            "success": True,
+            "result": [
+                {"name": "orders", "type": "table"},
+                {"name": "orders_view", "type": "view"},
+                {"name": "orders_mv", "type": "materialized_view"},
+            ],
+        },
+        {
+            "database": "analytics",
+            "types": ["view", "materialized_view"],
+        },
+        (),
+    )
+
+    assert result["data"]["items"] == [
+        {"name": "orders_mv", "type": "materialized_view"},
+        {"name": "orders_view", "type": "view"},
+    ]
+
+
+def test_collection_cursor_is_bound_to_the_exact_request() -> None:
+    manager = _manager()
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_catalog",
+        "list_tables",
+    )
+    raw = {
+        "success": True,
+        "result": [
+            {"name": f"table_{index:03d}", "type": "table"}
+            for index in range(101)
+        ],
+    }
+    first = manager.domain_dispatcher._normalize_child_result(
+        child,
+        raw,
+        {"database": "analytics"},
+        (),
+    )
+
+    with pytest.raises(
+        ChildArgumentsAdapterError,
+        match="invalid",
+    ):
+        manager.domain_dispatcher._normalize_child_result(
+            child,
+            raw,
+            {
+                "database": "other_database",
+                "page": first["data"]["next_cursor"],
+            },
+            (),
+        )
+
+
+def test_collection_cursor_is_bound_to_the_authorization_principal() -> None:
+    manager = _manager()
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_catalog",
+        "list_tables",
+    )
+    raw = {
+        "success": True,
+        "result": [
+            {"name": f"table_{index:03d}", "type": "table"}
+            for index in range(101)
+        ],
+    }
+    alice = AuthContext(auth_method="basic", user_id="alice")
+    bob = AuthContext(auth_method="basic", user_id="bob")
+    first = manager.domain_dispatcher._normalize_child_result(
+        child,
+        raw,
+        {"database": "analytics"},
+        (),
+        alice,
+    )
+
+    with pytest.raises(ChildArgumentsAdapterError, match="invalid"):
+        manager.domain_dispatcher._normalize_child_result(
+            child,
+            raw,
+            {
+                "database": "analytics",
+                "page": first["data"]["next_cursor"],
+            },
+            (),
+            bob,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "reason_code"),
+    [
+        (
+            {
+                "success": False,
+                "error": "hidden backend message",
+                "error_code": "DORIS_METADATA_PERMISSION_DENIED",
+                "status_code": 403,
+            },
+            "CATALOG_PERMISSION_DENIED",
+        ),
+        (
+            {
+                "success": False,
+                "error": "table does not exist",
+                "error_code": "DORIS_METADATA_NOT_VISIBLE",
+                "status_code": 404,
+            },
+            "CATALOG_OBJECT_NOT_FOUND",
+        ),
+    ],
+)
+async def test_catalog_atomic_failures_have_stable_reason_codes(
+    raw: dict[str, Any],
+    reason_code: str,
+) -> None:
+    manager = _manager("doris_catalog.list_tables")
+    manager._get_db_table_list_tool = AsyncMock(return_value=raw)
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_catalog",
+        {
+            "child_tool": "list_tables",
+            "arguments": {"database": "analytics"},
+        },
+        None,
+    )
+
+    assert result.mode == "error"
+    assert result.error.code is DomainErrorCode.CHILD_EXECUTION_FAILED
+    assert result.error.details["reason_code"] == reason_code
+    assert "hidden backend message" not in result.error.message
+
+
+@pytest.mark.asyncio
+async def test_table_size_preserves_partition_degradation_as_partial_result() -> None:
+    manager = _manager("doris_catalog.get_table_size")
+    manager._get_table_data_size_tool = AsyncMock(
+        return_value={
+            "success": True,
+            "result": {
+                "row_count": 10,
+                "data_size_bytes": 100,
+                "partitions": [],
+            },
+            "warnings": [
+                "Partition statistics are unavailable "
+                "(CATALOG_SECTION_UNSUPPORTED)."
+            ],
+            "metadata": {
+                "partition_status": "unavailable",
+                "partition_reason_code": "CATALOG_SECTION_UNSUPPORTED",
+            },
+        }
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_catalog",
+        {
+            "child_tool": "get_table_size",
+            "arguments": {
+                "database": "analytics",
+                "table": "orders",
+                "include_partitions": True,
+            },
+        },
+        None,
+    )
+
+    assert result.mode == "result"
+    child_result = result.to_wire()["data"]
+    assert child_result["status"] == "partial"
+    assert child_result["data"]["row_count"] == 10
+    assert child_result["metadata"]["partition_status"] == "unavailable"
+    manager._get_table_data_size_tool.assert_awaited_once_with(
+        {
+            "db_name": "analytics",
+            "table_name": "orders",
+            "include_partitions": True,
+            "single_replica": False,
+            "_formal_catalog": True,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_table_context_marks_unsupported_optional_section() -> None:
+    manager = _manager("doris_catalog.get_table_context")
+    manager._get_table_schema_tool = AsyncMock(
+        return_value={"success": True, "result": {"columns": ["id"]}}
+    )
+    manager._get_table_indexes_tool = AsyncMock(
+        return_value={
+            "success": False,
+            "error": "unsupported",
+            "error_code": "CATALOG_SECTION_UNSUPPORTED",
+            "status_code": 501,
+        }
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_catalog",
+        {
+            "child_tool": "get_table_context",
+            "arguments": {
+                "database": "analytics",
+                "table": "orders",
+                "sections": ["indexes"],
+            },
+        },
+        None,
+    )
+
+    assert result.mode == "result"
+    indexes = result.to_wire()["data"]["data"]["indexes"]
+    assert indexes["status"] == "unavailable"
+    assert indexes["data"] == {}
+    assert "CATALOG_SECTION_UNSUPPORTED" in indexes["warnings"][0]
+    assert (
+        result.to_wire()["data"]["evidence"][1]["reason_code"]
+        == "CATALOG_SECTION_UNSUPPORTED"
+    )
 
 
 def test_query_result_normalization_handles_malformed_legacy_shapes() -> None:
@@ -1058,13 +1401,17 @@ def test_detail_result_normalization_adds_formal_evidence() -> None:
                 "types": ["table"],
                 "page": "cursor",
             },
-            {"catalog_name": "internal", "db_name": "db"},
+            {
+                "catalog_name": "internal",
+                "db_name": "db",
+                "_formal_catalog": True,
+            },
             0,
         ),
         (
             "adapt:remove_random_string",
             {"include_external": True},
-            {},
+            {"_formal_catalog": True},
             0,
         ),
         (
@@ -1083,9 +1430,11 @@ def test_detail_result_normalization_adds_formal_evidence() -> None:
             {
                 "db_name": "db",
                 "table_name": "t",
+                "include_partitions": True,
                 "single_replica": False,
+                "_formal_catalog": True,
             },
-            1,
+            0,
         ),
         (
             "adapt:monitoring_arguments",

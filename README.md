@@ -772,6 +772,24 @@ The Doris MCP Server supports **catalog federation**, enabling interaction with 
 *   **Cross-Catalog SQL Queries**: Use
     `doris_query.execute_query` with three-part table naming.
 *   **Catalog Discovery**: Use `doris_catalog.list_catalogs`.
+*   **Typed Object Discovery**: `list_tables` distinguishes tables, views, and
+    materialized views. Its `page` value is an opaque, expiring continuation
+    handle bound to the exact request and authorization principal.
+*   **Deterministic Table Context**: `get_table_context` always reads `schema`
+    first and can add `comments`, `indexes`, and `basic`. Every returned section
+    contains `status`, `data`, `warnings`, and `source`; an unsupported optional
+    section produces a partial result instead of discarding the available
+    schema.
+*   **Bounded Size Metadata**: `get_table_size` reads table row and byte
+    statistics and optionally partition statistics. If partition metadata is
+    unavailable, the table-level result remains available with
+    `status: "partial"`.
+
+Catalog execution failures use the normal child error envelope. The
+`error.details.reason_code` value distinguishes
+`CATALOG_OBJECT_NOT_FOUND`, `CATALOG_PERMISSION_DENIED`,
+`CATALOG_SECTION_UNSUPPORTED`, and `CATALOG_BACKEND_UNAVAILABLE` without
+returning raw backend error text.
 
 #### Three-Part Naming Requirement:
 

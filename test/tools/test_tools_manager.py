@@ -219,6 +219,126 @@ class TestDorisToolsManager:
         assert result == expected
         mock_execute.assert_awaited_once_with()
 
+    @pytest.mark.asyncio
+    async def test_formal_catalog_discovery_routes_to_strict_reader(
+        self,
+        tools_manager,
+    ):
+        expected = {"success": True, "result": [{"name": "orders"}]}
+        tools_manager.catalog_metadata.list_catalogs = AsyncMock(
+            return_value=expected
+        )
+        tools_manager.catalog_metadata.list_databases = AsyncMock(
+            return_value=expected
+        )
+        tools_manager.catalog_metadata.list_tables = AsyncMock(
+            return_value=expected
+        )
+
+        catalogs = await tools_manager._get_catalog_list_tool(
+            {"_formal_catalog": True}
+        )
+        databases = await tools_manager._get_db_list_tool(
+            {"catalog_name": "lake", "_formal_catalog": True}
+        )
+        tables = await tools_manager._get_db_table_list_tool(
+            {
+                "catalog_name": "lake",
+                "db_name": "analytics",
+                "_formal_catalog": True,
+            }
+        )
+
+        assert catalogs == databases == tables == expected
+        tools_manager.catalog_metadata.list_catalogs.assert_awaited_once_with()
+        tools_manager.catalog_metadata.list_databases.assert_awaited_once_with(
+            catalog_name="lake"
+        )
+        tools_manager.catalog_metadata.list_tables.assert_awaited_once_with(
+            database_name="analytics",
+            catalog_name="lake",
+        )
+
+    @pytest.mark.asyncio
+    async def test_formal_table_context_routes_all_five_section_handlers(
+        self,
+        tools_manager,
+    ):
+        expected = {"success": True, "result": {}}
+        tools_manager.catalog_metadata.get_table_schema = AsyncMock(
+            return_value=expected
+        )
+        tools_manager.catalog_metadata.get_table_comment = AsyncMock(
+            return_value=expected
+        )
+        tools_manager.catalog_metadata.get_column_comments = AsyncMock(
+            return_value=expected
+        )
+        tools_manager.catalog_metadata.get_table_indexes = AsyncMock(
+            return_value=expected
+        )
+        tools_manager.catalog_metadata.get_table_basic = AsyncMock(
+            return_value=expected
+        )
+        arguments = {
+            "catalog_name": "internal",
+            "db_name": "analytics",
+            "table_name": "orders",
+            "_formal_catalog": True,
+        }
+
+        results = [
+            await tools_manager._get_table_schema_tool(dict(arguments)),
+            await tools_manager._get_table_comment_tool(dict(arguments)),
+            await tools_manager._get_table_column_comments_tool(
+                dict(arguments)
+            ),
+            await tools_manager._get_table_indexes_tool(dict(arguments)),
+            await tools_manager._get_table_basic_info_tool(dict(arguments)),
+        ]
+
+        assert results == [expected] * 5
+        for method in (
+            tools_manager.catalog_metadata.get_table_schema,
+            tools_manager.catalog_metadata.get_table_comment,
+            tools_manager.catalog_metadata.get_column_comments,
+            tools_manager.catalog_metadata.get_table_indexes,
+            tools_manager.catalog_metadata.get_table_basic,
+        ):
+            method.assert_awaited_once_with(
+                table_name="orders",
+                database_name="analytics",
+                catalog_name="internal",
+            )
+
+    @pytest.mark.asyncio
+    async def test_formal_table_size_preserves_partition_request(
+        self,
+        tools_manager,
+    ):
+        expected = {"success": True, "result": {"row_count": 1}}
+        tools_manager.catalog_metadata.get_table_size = AsyncMock(
+            return_value=expected
+        )
+
+        result = await tools_manager._get_table_data_size_tool(
+            {
+                "catalog_name": "internal",
+                "db_name": "analytics",
+                "table_name": "orders",
+                "include_partitions": True,
+                "_formal_catalog": True,
+            }
+        )
+
+        assert result == expected
+        tools_manager.catalog_metadata.get_table_size.assert_awaited_once_with(
+            table_name="orders",
+            database_name="analytics",
+            catalog_name="internal",
+            include_partitions=True,
+        )
+
 
     @pytest.mark.asyncio
     async def test_invalid_tool_name(self, tools_manager):

@@ -97,6 +97,22 @@ class _ProbeConnection:
             ): [
                 {"table_metadata_probe": 1}
             ],
+            (
+                "SELECT COLUMN_NAME, DATA_TYPE "
+                "FROM information_schema.columns LIMIT 1"
+            ): [
+                {"COLUMN_NAME": "id", "DATA_TYPE": "bigint"}
+            ],
+            (
+                "SELECT PARTITION_NAME, TABLE_ROWS, DATA_LENGTH "
+                "FROM information_schema.partitions LIMIT 1"
+            ): [
+                {
+                    "PARTITION_NAME": "p1",
+                    "TABLE_ROWS": 1,
+                    "DATA_LENGTH": 8,
+                }
+            ],
         }
         return SimpleNamespace(
             data=self.row_overrides.get(sql, rows.get(sql, []))
@@ -164,6 +180,14 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
     assert catalog.probed_domains == frozenset({"doris_catalog"})
     assert (
         catalog.probe("database_metadata_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        catalog.probe("table_context_sections_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        catalog.probe("table_partition_statistics_readable").status
         is CapabilityProbeStatus.SUPPORTED
     )
     assert connection.statements.count("SELECT @@version_comment;") == 1

@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import hmac
 import json
 import math
 import secrets
@@ -39,6 +41,8 @@ from ..schema_validation import (
     ToolOutputValidationError,
     ToolSchemaGuard,
 )
+from ..state_handles import StateHandleCodec, StateHandleError
+from ..utils.catalog_metadata import CatalogMetadataFailure
 from ..utils.logger import get_audit_logger, get_logger
 from . import domain_catalog as domain_catalog_module
 from .domain_catalog import (
@@ -97,6 +101,10 @@ class ToolNotFoundError(LookupError):
 
 class ChildArgumentsAdapterError(ValueError):
     """Raised when formal arguments cannot use the active handler adapter."""
+
+
+_COLLECTION_PAGE_SIZE = 100
+_TABLE_CONTEXT_SECTION_ORDER = ("schema", "comments", "indexes", "basic")
 
 
 class ChildHandlerOwner(Protocol):
@@ -264,6 +272,7 @@ class DomainDispatcher:
         *,
         catalog: DorisDomainCatalog | None = None,
         schema_guard: ToolSchemaGuard | None = None,
+        state_handle_codec: StateHandleCodec | None = None,
     ) -> None:
         catalog = catalog or domain_catalog_module.DORIS_DOMAIN_CATALOG
         catalog.validate_integrity()
@@ -271,6 +280,9 @@ class DomainDispatcher:
         self._manifest_service = manifest_service
         self._catalog = catalog
         self._schema_guard = schema_guard or ToolSchemaGuard()
+        self._state_handle_codec = state_handle_codec or StateHandleCodec(
+            secrets.token_urlsafe(32)
+        )
         self._flat_children: dict[str, tuple[str, ChildToolDefinition]] = {}
         self._schemas: dict[str, CompiledToolSchema] = {}
         self._bindings = _build_bindings(owner, catalog)
@@ -525,6 +537,7 @@ class DomainDispatcher:
                     raw,
                     arguments,
                     adapter_warnings,
+                    auth_context,
                 )
             else:
                 data = await self._call_table_context(
@@ -550,6 +563,33 @@ class DomainDispatcher:
                 details={
                     "rediscover": False,
                     "violations": violations,
+                },
+            )
+        except CatalogMetadataFailure as exc:
+            self._audit(feature_id, arguments, "error", started)
+            if exc.reason_code == "CATALOG_ARGUMENT_INVALID":
+                return self._error(
+                    domain.name,
+                    DomainErrorCode.CHILD_ARGUMENTS_INVALID,
+                    str(exc),
+                    child_tool=child.name,
+                    manifest_version=manifest.manifest_version,
+                    details={
+                        "rediscover": False,
+                        "reason_code": exc.reason_code,
+                    },
+                )
+            return self._error(
+                domain.name,
+                DomainErrorCode.CHILD_EXECUTION_FAILED,
+                str(exc),
+                child_tool=child.name,
+                manifest_version=manifest.manifest_version,
+                retryable=exc.retryable,
+                details={
+                    "rediscover": False,
+                    "reason_code": exc.reason_code,
+                    "status_code": exc.status_code,
                 },
             )
         except ToolOutputValidationError:
@@ -631,7 +671,7 @@ class DomainDispatcher:
         if raw.get("success") is False or (
             "error" in raw and raw.get("success") is not True
         ):
-            raise RuntimeError("child handler reported failure")
+            raise _failure_from_legacy_response(raw)
         return raw, warnings
 
     async def _call_table_context(
@@ -656,6 +696,7 @@ class DomainDispatcher:
             "catalog_name": arguments.get("catalog"),
             "db_name": arguments.get("database"),
             "table_name": arguments.get("table"),
+            "_formal_catalog": True,
         }
         legacy_arguments = {
             key: value
@@ -663,32 +704,71 @@ class DomainDispatcher:
             if value is not None
         }
 
-        data: dict[str, Any] = {}
+        section_states: dict[str, dict[str, Any]] = {}
         evidence: list[dict[str, Any]] = []
         warnings: list[str] = []
-        comments: dict[str, Any] = {}
         for migration in migrations:
             section = cast(str, migration.target_section)
             if section not in effective_sections:
                 continue
             handler = getattr(self._owner, migration.legacy_handler_name)
-            raw = await handler(dict(legacy_arguments))
-            success = isinstance(raw, dict) and not (
-                raw.get("success") is False
-                or ("error" in raw and raw.get("success") is not True)
+            state = section_states.setdefault(
+                section,
+                {
+                    "data": {},
+                    "sources": [],
+                    "warnings": [],
+                    "successes": 0,
+                    "failures": 0,
+                },
             )
+            failure: CatalogMetadataFailure | None = None
+            try:
+                raw = await handler(dict(legacy_arguments))
+                if not isinstance(raw, dict):
+                    raise TypeError("child handler must return an object")
+                if raw.get("success") is False or (
+                    "error" in raw and raw.get("success") is not True
+                ):
+                    failure = _failure_from_legacy_response(raw)
+            except CatalogMetadataFailure as exc:
+                raw = {}
+                failure = exc
+            except Exception:
+                raw = {}
+                failure = CatalogMetadataFailure(
+                    "Doris catalog metadata execution failed.",
+                    reason_code="CATALOG_EXECUTION_FAILED",
+                    status_code=502,
+                )
+
+            success = failure is None
             evidence.append(
                 {
                     "section": section,
                     "handler": migration.legacy_handler_name,
                     "success": success,
+                    "reason_code": (
+                        None if failure is None else failure.reason_code
+                    ),
                 }
             )
-            if not success:
+            state["sources"].append(migration.legacy_handler_name)
+            if failure is not None:
                 if section == "schema":
-                    raise RuntimeError("required schema section failed")
-                warnings.append(f"Optional {section} section is unavailable.")
+                    raise failure
+                state["failures"] += 1
+                warning = (
+                    f"Optional {section} section is unavailable "
+                    f"({failure.reason_code})."
+                )
+                state["warnings"].append(warning)
+                warnings.append(warning)
                 continue
+            state["successes"] += 1
+            handler_warnings = _legacy_warnings(raw)
+            state["warnings"].extend(handler_warnings)
+            warnings.extend(handler_warnings)
             value = _unwrap_legacy_result(raw)
             if section == "comments":
                 comment_key = (
@@ -697,18 +777,53 @@ class DomainDispatcher:
                     == "get_table_column_comments"
                     else "table"
                 )
-                comments[comment_key] = _as_object(value)
+                cast(dict[str, Any], state["data"])[comment_key] = _as_object(
+                    value
+                )
             else:
-                data[section] = _as_object(value)
-        if comments:
-            data["comments"] = comments
-        if "schema" not in data:
+                state["data"] = _as_object(value)
+
+        schema_state = section_states.get("schema")
+        if not schema_state or not schema_state["successes"]:
             raise RuntimeError("required schema section was not executed")
+        data: dict[str, Any] = {}
+        for section in _TABLE_CONTEXT_SECTION_ORDER:
+            if section not in effective_sections:
+                continue
+            section_state = section_states.get(section)
+            if section_state is None:
+                continue
+            section_warnings = list(
+                dict.fromkeys(section_state["warnings"])
+            )
+            if not section_state["successes"]:
+                status = "unavailable"
+            elif section_state["failures"] or section_warnings:
+                status = "partial"
+            else:
+                status = "success"
+            data[section] = {
+                "status": status,
+                "data": section_state["data"],
+                "warnings": section_warnings,
+                "source": ",".join(section_state["sources"]),
+            }
         return {
             "status": "partial" if warnings else "success",
             "data": data,
-            "warnings": warnings,
-            "metadata": {"sections": sorted(effective_sections)},
+            "warnings": list(dict.fromkeys(warnings)),
+            "metadata": {
+                "sections": [
+                    section
+                    for section in _TABLE_CONTEXT_SECTION_ORDER
+                    if section in effective_sections
+                ],
+                "requested_sections": [
+                    section
+                    for section in _TABLE_CONTEXT_SECTION_ORDER
+                    if section in requested_sections
+                ],
+            },
             "evidence": evidence,
         }
 
@@ -718,6 +833,7 @@ class DomainDispatcher:
         raw: dict[str, Any],
         arguments: dict[str, Any],
         adapter_warnings: tuple[str, ...],
+        auth_context: Any | None = None,
     ) -> dict[str, Any]:
         output = cast(
             dict[str, Any],
@@ -732,6 +848,7 @@ class DomainDispatcher:
             data_schema.get("properties", {}),
         )
         warnings = list(adapter_warnings)
+        warnings.extend(_legacy_warnings(raw))
         metadata = _legacy_metadata(raw)
 
         if {"items", "next_cursor", "truncated"} <= set(data_properties):
@@ -748,19 +865,69 @@ class DomainDispatcher:
                     for item in items
                     if fnmatch.fnmatchcase(str(item.get("name", "")), pattern)
                 ]
-            if arguments.get("page") is not None:
-                warnings.append(
-                    "Pagination is not supported by the active handler."
+            if child.name == "list_catalogs" and not arguments.get(
+                "include_external",
+                True,
+            ):
+                items = [
+                    item
+                    for item in items
+                    if item.get("scope") == "internal"
+                    or item.get("name") == "internal"
+                ]
+            requested_types = arguments.get("types")
+            if isinstance(requested_types, list):
+                allowed_types = {
+                    str(item) for item in requested_types
+                }
+                items = [
+                    item
+                    for item in items
+                    if str(item.get("type", "table")) in allowed_types
+                ]
+            items.sort(
+                key=lambda item: (
+                    str(item.get("name", "")).casefold(),
+                    str(item.get("type", "")).casefold(),
                 )
-            if arguments.get("types") is not None:
-                warnings.append(
-                    "Object type filtering is not supported by the active handler."
-                )
+            )
+            total_items = len(items)
+            scope = _collection_cursor_scope(child, arguments)
+            snapshot = _collection_snapshot(items)
+            offset = _decode_collection_cursor(
+                arguments.get("page"),
+                expected_scope=scope,
+                expected_snapshot=snapshot,
+                child=child,
+                auth_context=auth_context,
+                handle_codec=self._state_handle_codec,
+            )
+            page_items = items[offset : offset + _COLLECTION_PAGE_SIZE]
+            next_offset = offset + len(page_items)
+            truncated = next_offset < total_items
             child_data: dict[str, Any] = {
-                "items": items,
-                "next_cursor": None,
-                "truncated": False,
+                "items": page_items,
+                "next_cursor": (
+                    _encode_collection_cursor(
+                        next_offset,
+                        scope,
+                        snapshot,
+                        child=child,
+                        auth_context=auth_context,
+                        handle_codec=self._state_handle_codec,
+                    )
+                    if truncated
+                    else None
+                ),
+                "truncated": truncated,
             }
+            metadata.update(
+                {
+                    "page_size": _COLLECTION_PAGE_SIZE,
+                    "returned_items": len(page_items),
+                    "total_visible_items": total_items,
+                }
+            )
         elif {"columns", "rows", "row_count", "truncated"} <= set(
             data_properties
         ):
@@ -886,8 +1053,9 @@ def _adapt_arguments(
     elif adapter_name == "adapt:catalog_object_names":
         for unsupported in ("pattern", "types", "page"):
             prepared.pop(unsupported, None)
+        prepared["_formal_catalog"] = True
     elif adapter_name == "adapt:remove_random_string":
-        prepared = {}
+        prepared = {"_formal_catalog": True}
     elif adapter_name == "adapt:explain_arguments":
         level = prepared.pop("level", None)
         if level == "costs":
@@ -906,10 +1074,7 @@ def _adapt_arguments(
             )
     elif adapter_name == "adapt:table_size_arguments":
         prepared["single_replica"] = False
-        if prepared.pop("include_partitions", False):
-            warnings.append(
-                "Partition detail is not supported by the active handler."
-            )
+        prepared["_formal_catalog"] = True
     elif adapter_name == "adapt:monitoring_arguments":
         if prepared:
             warnings.append(
@@ -1036,6 +1201,186 @@ def _legacy_metadata(raw: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(metadata, dict):
         return dict(metadata)
     return {}
+
+
+def _legacy_warnings(raw: Mapping[str, Any]) -> list[str]:
+    warnings = raw.get("warnings")
+    if not isinstance(warnings, list):
+        return []
+    return [str(item) for item in warnings]
+
+
+def _failure_from_legacy_response(
+    raw: Mapping[str, Any],
+) -> CatalogMetadataFailure:
+    raw_code = str(raw.get("error_code", "")).upper()
+    raw_status = raw.get("status_code")
+    status_code = int(raw_status) if isinstance(raw_status, int) else 500
+    message = str(raw.get("error", "")).lower()
+    if (
+        "NOT_VISIBLE" in raw_code
+        or "NOT_FOUND" in raw_code
+        or status_code == 404
+        or any(
+            marker in message
+            for marker in (
+                "does not exist",
+                "doesn't exist",
+                "not found",
+                "unknown table",
+                "unknown database",
+            )
+        )
+    ):
+        return CatalogMetadataFailure(
+            "The requested Doris metadata object was not found.",
+            reason_code="CATALOG_OBJECT_NOT_FOUND",
+            status_code=404,
+        )
+    if (
+        "PERMISSION" in raw_code
+        or "DENIED" in raw_code
+        or status_code == 403
+        or any(
+            marker in message
+            for marker in (
+                "access denied",
+                "permission denied",
+                "not authorized",
+                "privilege",
+            )
+        )
+    ):
+        return CatalogMetadataFailure(
+            "Doris denied access to the requested catalog metadata.",
+            reason_code="CATALOG_PERMISSION_DENIED",
+            status_code=403,
+        )
+    if (
+        "UNSUPPORTED" in raw_code
+        or status_code == 501
+        or "not supported" in message
+        or "unsupported" in message
+    ):
+        return CatalogMetadataFailure(
+            "The requested Doris metadata section is unsupported.",
+            reason_code="CATALOG_SECTION_UNSUPPORTED",
+            status_code=501,
+        )
+    if status_code in {502, 503, 504}:
+        return CatalogMetadataFailure(
+            "Doris catalog metadata is temporarily unavailable.",
+            reason_code="CATALOG_BACKEND_UNAVAILABLE",
+            status_code=status_code,
+            retryable=True,
+        )
+    return CatalogMetadataFailure(
+        "Doris catalog metadata execution failed.",
+        reason_code="CATALOG_EXECUTION_FAILED",
+        status_code=status_code,
+    )
+
+
+def _collection_cursor_scope(
+    child: ChildToolDefinition,
+    arguments: Mapping[str, Any],
+) -> str:
+    payload = {
+        "child": child.name,
+        "arguments": {
+            key: value
+            for key, value in arguments.items()
+            if key != "page"
+        },
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _collection_snapshot(items: list[dict[str, Any]]) -> str:
+    identifiers = [
+        {
+            "name": str(item.get("name", "")),
+            "type": str(item.get("type", "")),
+        }
+        for item in items
+    ]
+    canonical = json.dumps(
+        identifiers,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _encode_collection_cursor(
+    offset: int,
+    scope: str,
+    snapshot: str,
+    *,
+    child: ChildToolDefinition,
+    auth_context: Any | None,
+    handle_codec: StateHandleCodec,
+) -> str:
+    return handle_codec.issue(
+        kind="child-list-page",
+        scope=f"child:page:doris_catalog:{child.name}",
+        resource=f"mcp://doris_catalog/{child.name}/{scope}",
+        state={
+            "offset": offset,
+            "snapshot": snapshot,
+        },
+        auth_context=auth_context,
+    )
+
+
+def _decode_collection_cursor(
+    value: Any,
+    *,
+    expected_scope: str,
+    expected_snapshot: str,
+    child: ChildToolDefinition,
+    auth_context: Any | None,
+    handle_codec: StateHandleCodec,
+) -> int:
+    if value is None:
+        return 0
+    if not isinstance(value, str) or not value:
+        raise ChildArgumentsAdapterError("page cursor must be a non-empty string")
+    try:
+        claims = handle_codec.resolve(
+            value,
+            expected_kind="child-list-page",
+            expected_scope=f"child:page:doris_catalog:{child.name}",
+            expected_resource=(
+                f"mcp://doris_catalog/{child.name}/{expected_scope}"
+            ),
+            auth_context=auth_context,
+        )
+    except StateHandleError as exc:
+        raise ChildArgumentsAdapterError(
+            f"page cursor is invalid ({exc.reason})"
+        ) from exc
+    if set(claims.state) != {"offset", "snapshot"}:
+        raise ChildArgumentsAdapterError("page cursor is invalid")
+    offset = claims.state.get("offset")
+    snapshot = claims.state.get("snapshot")
+    if (
+        not isinstance(offset, int)
+        or isinstance(offset, bool)
+        or offset < 0
+        or not isinstance(snapshot, str)
+    ):
+        raise ChildArgumentsAdapterError("page cursor is invalid")
+    if not hmac.compare_digest(snapshot, expected_snapshot):
+        raise ChildArgumentsAdapterError("page cursor is stale")
+    return offset
 
 
 def _as_object(value: Any) -> dict[str, Any]:

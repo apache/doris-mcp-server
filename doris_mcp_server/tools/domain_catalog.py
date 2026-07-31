@@ -596,14 +596,31 @@ _QUERY_OUTPUT = _result_schema(
         "additionalProperties": False,
     }
 )
+_TABLE_CONTEXT_SECTION_OUTPUT = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["success", "partial", "unavailable"],
+        },
+        "data": {"type": "object", "additionalProperties": True},
+        "warnings": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "source": {"type": "string"},
+    },
+    "required": ["status", "data", "warnings", "source"],
+    "additionalProperties": False,
+}
 _TABLE_CONTEXT_OUTPUT = _result_schema(
     {
         "type": "object",
         "properties": {
-            "schema": {"type": "object", "additionalProperties": True},
-            "comments": {"type": "object", "additionalProperties": True},
-            "indexes": {"type": "object", "additionalProperties": True},
-            "basic": {"type": "object", "additionalProperties": True},
+            "schema": _TABLE_CONTEXT_SECTION_OUTPUT,
+            "comments": _TABLE_CONTEXT_SECTION_OUTPUT,
+            "indexes": _TABLE_CONTEXT_SECTION_OUTPUT,
+            "basic": _TABLE_CONTEXT_SECTION_OUTPUT,
         },
         "required": ["schema"],
         "additionalProperties": False,
@@ -829,7 +846,8 @@ DOMAIN_DEFINITIONS = (
                 "doris_catalog",
                 "list_tables",
                 "List tables",
-                "List visible tables, views, and materialized views.",
+                "List visible tables, views, and materialized views with "
+                "deterministic filtering and opaque continuation cursors.",
                 _input_schema(
                     {
                         "catalog": _string("Catalog name."),
@@ -850,7 +868,8 @@ DOMAIN_DEFINITIONS = (
                 "get_table_context",
                 "Get table context",
                 "Read schema, comments, indexes, and basic table information "
-                "through a deterministic four-section composition.",
+                "through a deterministic four-section composition. Each "
+                "section reports its own status, warnings, and source.",
                 _input_schema(
                     {
                         "catalog": _string("Catalog name."),
@@ -871,7 +890,8 @@ DOMAIN_DEFINITIONS = (
                 "doris_catalog",
                 "get_table_size",
                 "Get table size",
-                "Read table and optional partition size and row statistics.",
+                "Read table and optional partition size and row statistics. "
+                "Unsupported partition metadata returns a partial result.",
                 _input_schema(
                     {
                         "catalog": _string("Catalog name."),
