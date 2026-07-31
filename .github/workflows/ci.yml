@@ -36,6 +36,8 @@ jobs:
         run: uv lock --check
       - name: Sync development environment
         run: uv sync --frozen --group dev
+      - name: Verify generated 1.0 tool catalog
+        run: uv run python generate_tool_catalog.py --check
       - name: Ruff
         run: uv run ruff check .
       - name: Mypy
@@ -44,6 +46,7 @@ jobs:
         run: >-
           uv run bandit -q -c pyproject.toml -r
           doris_mcp_server doris_mcp_client generate_requirements.py
+          generate_tool_catalog.py
 
   test:
     name: Tests

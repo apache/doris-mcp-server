@@ -25,6 +25,10 @@ under **Unreleased** until a new version is selected and published.
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [1.0.0] - 2026-07-31
+
 ### Added
 
 - MCP `2026-07-28` stateless protocol support on Streamable HTTP and stdio,
@@ -129,6 +133,12 @@ under **Unreleased** until a new version is selected and published.
   three-part versions, with complete Host-quadrant proof requirements and
   fail-closed runtime disclosure for unknown or mixed component versions;
   Doris `4.0.5` is the first certified target.
+- Normalized all Doris capability, range, and certification decisions to
+  `major.minor.patch`; RC, GA, commit, and deployment metadata remain evidence
+  only and never create a separate support result.
+- Published the 1.0 migration guide and release notes, and generated the exact
+  8-domain/47-child tool catalog from the runtime catalog as a checked-in,
+  CI-verified release artifact.
 
 ### Fixed
 
@@ -265,7 +275,8 @@ under **Unreleased** until a new version is selected and published.
 
 - First tagged release in this repository.
 
-[Unreleased]: https://github.com/apache/doris-mcp-server/compare/0.6.1...HEAD
+[Unreleased]: https://github.com/apache/doris-mcp-server/compare/1.0.0...HEAD
+[1.0.0]: https://github.com/apache/doris-mcp-server/compare/0.6.1...1.0.0
 [0.6.1]: https://github.com/apache/doris-mcp-server/compare/0.6.0...0.6.1
 [0.6.0]: https://github.com/apache/doris-mcp-server/compare/0.5.1...0.6.0
 [0.5.1]: https://github.com/apache/doris-mcp-server/compare/0.5.0...0.5.1

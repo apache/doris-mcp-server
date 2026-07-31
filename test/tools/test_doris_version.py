@@ -42,7 +42,7 @@ def test_version_probe_uses_version_comment() -> None:
             "rc03",
             "43f06a5e26",
             "cloud",
-            "3.0.3rc3",
+            "3.0.3",
         ),
         (
             "Apache Doris version 4.0.7",
@@ -101,16 +101,16 @@ def test_unknown_version_comments_fail_closed(comment: str) -> None:
     assert version.normalized is None
 
 
-def test_comparison_ignores_commit_and_orders_prereleases() -> None:
+def test_comparison_uses_only_three_part_version() -> None:
     alpha = parse_doris_version_comment("Doris version 3.0.3-alpha1")
     beta = parse_doris_version_comment("Doris version 3.0.3-beta2")
     release_candidate = parse_doris_version_comment("Doris version 3.0.3-rc03")
     stable_a = parse_doris_version_comment("Doris version 3.0.3-43f06a5e26")
     stable_b = parse_doris_version_comment("Doris version 3.0.3-abcdef1234")
 
-    assert beta.compare(alpha) > 0
-    assert release_candidate.compare(beta) > 0
-    assert stable_a.compare(release_candidate) > 0
+    assert beta.compare(alpha) == 0
+    assert release_candidate.compare(beta) == 0
+    assert stable_a.compare(release_candidate) == 0
     assert stable_a.compare(stable_b) == 0
     assert stable_a.is_at_least(release_candidate) is True
 
@@ -160,7 +160,7 @@ async def test_probe_executes_exact_read_only_query() -> None:
 
     version = await probe_doris_version(connection)
 
-    assert version.normalized == "3.0.3rc3"
+    assert version.normalized == "3.0.3"
     assert version.deployment_hint == "cloud"
     connection.execute.assert_awaited_once_with(
         DORIS_VERSION_COMMENT_QUERY,

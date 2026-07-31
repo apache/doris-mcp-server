@@ -25,10 +25,10 @@ Doris MCP (Model Context Protocol) Server is a backend service built with Python
 
 ## Release Status
 
-The current package metadata and latest Git tag are `0.6.1`. The `master`
-branch also contains changes made after that tag; those changes are recorded
-under [Unreleased](CHANGELOG.md#unreleased) until the next version is selected
-and published.
+The package metadata for this release line is `1.0.0`. See
+[GitHub Releases](https://github.com/apache/doris-mcp-server/releases) for the
+latest published tag. Changes made after the latest release are recorded under
+[Unreleased](CHANGELOG.md#unreleased).
 
 MCP `2026-07-28` protocol compatibility on `master` is **Generally Available
 (GA)** for Streamable HTTP and stdio. The supported protocol contract has
@@ -43,6 +43,11 @@ constraints. Review the [changelog](CHANGELOG.md), the
 [protocol support matrix](#protocol-and-transport-matrix), and the
 [deployment constraints](#deployment-constraints) before deploying it outside
 a controlled environment.
+
+Before upgrading, review the
+[1.0.0 migration guide](docs/migration-1.0.0.md), the
+[1.0.0 release notes](docs/release-notes-1.0.0.md), and the generated
+[8-domain/47-child tool catalog](docs/tool-registry.md).
 
 ## Highlights from v0.6.0
 
@@ -104,7 +109,7 @@ a controlled environment.
 pip install doris-mcp-server
 
 # Install specific version
-pip install doris-mcp-server==0.6.1
+pip install doris-mcp-server==1.0.0
 ```
 
 > **💡 Packaged Commands**: `doris-mcp-server` starts the MCP server.
@@ -492,7 +497,8 @@ exposure modes requires the Host to reconnect.
 
 Runtime certification is keyed by the normalized three-part Doris version
 (`major.minor.patch`). Prerelease labels, commit hashes, and deployment hints
-remain visible as evidence but do not create separate certification buckets.
+remain visible as evidence but do not affect capability ranges or create
+separate certification buckets.
 
 The 1.0 target set is `3.0.3`, `3.1.4`, `4.0.5`, `4.0.6`, `4.0.7`, `4.1.0`,
 `4.1.1`, `4.1.2`, and `4.1.3`. A target is reported as certified only after
@@ -2399,9 +2405,10 @@ cat logs/doris_mcp_server_critical.log
    or override another cluster. This multi-instance mode requires the HTTP
    transport with static-token authentication. A stdio process has one global
    database route, so run separate stdio processes when clients need separate
-   clusters. `exec_adbc_query` is intentionally fail-closed on token-bound
-   routes because the current Arrow Flight client is process-global; use
-   `doris_query.execute_query` or a separate MCP process for that cluster.
+   clusters. `doris_query.execute_adbc_query` is intentionally fail-closed on
+   token-bound routes because the current Arrow Flight client is
+   process-global; use `doris_query.execute_query` or a separate MCP process
+   for that cluster.
 
 ### Q: How is Doris-backed OAuth different from external OAuth/OIDC?
 

@@ -44,17 +44,11 @@ _VERSION_PATTERN = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
-_PRERELEASE_PATTERN = re.compile(
-    r"(?P<kind>alpha|beta|rc)(?P<number>\d*)",
-    re.IGNORECASE,
-)
 _DEPLOYMENT_PATTERNS = (
     ("cloud", re.compile(r"\bcloud\s+mode\b", re.IGNORECASE)),
     ("shared_data", re.compile(r"\bshared[-\s]+data\b", re.IGNORECASE)),
     ("shared_nothing", re.compile(r"\bshared[-\s]+nothing\b", re.IGNORECASE)),
 )
-_PRERELEASE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
-_NORMALIZED_PRERELEASE = {"alpha": "a", "beta": "b", "rc": "rc"}
 
 
 class DorisVersionParseStatus(StrEnum):
@@ -90,13 +84,8 @@ class DorisVersion:
 
     @property
     def normalized(self) -> str | None:
-        core = self.core
-        if core is None or self.prerelease is None:
-            return core
-
-        prerelease = _parse_prerelease(self.prerelease)
-        kind, number = prerelease
-        return f"{core}{_NORMALIZED_PRERELEASE[kind]}{number}"
+        """Return the three-part version used for every capability decision."""
+        return self.core
 
     def compare(self, other: DorisVersion) -> int:
         left = self._comparison_key()
@@ -106,7 +95,7 @@ class DorisVersion:
     def is_at_least(self, other: DorisVersion) -> bool:
         return self.compare(other) >= 0
 
-    def _comparison_key(self) -> tuple[int, int, int, int, int]:
+    def _comparison_key(self) -> tuple[int, int, int]:
         if (
             not self.is_parsed
             or self.major is None
@@ -115,20 +104,7 @@ class DorisVersion:
         ):
             raise ValueError("Cannot compare an unparsed Doris version")
 
-        if self.prerelease is None:
-            prerelease_rank = len(_PRERELEASE_RANK)
-            prerelease_number = 0
-        else:
-            kind, prerelease_number = _parse_prerelease(self.prerelease)
-            prerelease_rank = _PRERELEASE_RANK[kind]
-
-        return (
-            self.major,
-            self.minor,
-            self.patch,
-            prerelease_rank,
-            prerelease_number,
-        )
+        return (self.major, self.minor, self.patch)
 
 
 def parse_doris_version_comment(comment: str) -> DorisVersion:
@@ -177,15 +153,6 @@ async def probe_doris_version(connection: DorisConnection) -> DorisVersion:
         max_bytes=_VERSION_COMMENT_MAX_BYTES,
     )
     return parse_doris_version_rows(result.data)
-
-
-def _parse_prerelease(value: str) -> tuple[str, int]:
-    match = _PRERELEASE_PATTERN.fullmatch(value)
-    if match is None:
-        raise ValueError(f"Unsupported Doris prerelease: {value}")
-    kind = match.group("kind").lower()
-    number = int(match.group("number") or "0")
-    return kind, number
 
 
 def _detect_deployment_hint(comment: str) -> str | None:
