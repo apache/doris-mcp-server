@@ -332,6 +332,11 @@ cp .env.example .env
         eight domain tools with progressive child discovery; `flat` returns
         the same 47 children under exact collision-free formal names
         (default: hierarchical)
+    *   `MCP_ADMIN_DOMAIN_ENABLED`: Reserved administration-domain switch.
+        It must remain `false` in 1.0; setting it to `true` fails startup
+        validation
+    *   `MCP_ADMIN_REQUIRE_CONFIRMATION`: Future administration confirmation
+        invariant. It must remain `true`; disabling it fails startup validation
     *   `MCP_TOOL_PROVIDERS`: Comma-separated allowlist of installed
         `doris_mcp_server.tool_providers` entry points (default: empty)
     *   `CAPABILITY_SNAPSHOT_TTL_SECONDS`: Lifetime of a private route-specific
@@ -464,6 +469,29 @@ sessions. Each child additionally requires its exact
 discovery grant are omitted, while authorized but unavailable children remain
 visible with `callable=false`. Doris RBAC remains the final data authorization
 backend for all Doris object access.
+
+#### Administration domain reservation
+
+The `doris_admin` name and its future discovery, preview, execute,
+confirmation, idempotency, and rollback contracts are reserved, but 1.0
+registers no administration domain, child, handler, resource, prompt, or write
+operation. Neither hierarchical nor flat exposure includes an administration
+tool, and a guessed `doris_admin` name receives the normal `Tool not found`
+result.
+
+The reservation is deliberately fail-closed:
+
+```bash
+MCP_ADMIN_DOMAIN_ENABLED=false
+MCP_ADMIN_REQUIRE_CONFIRMATION=true
+```
+
+Changing the first value to `true`, or the second to `false`, makes
+configuration validation fail. A future release must separately review every
+action's exact scope, preview and execute handlers, explicit single-use
+confirmation, argument digest, idempotency key, rollback behavior, Doris
+authorization, and real write-path tests before it can register any
+administration capability.
 
 #### Apache Ossie semantic grounding (experimental)
 

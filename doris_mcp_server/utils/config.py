@@ -43,6 +43,7 @@ from ..result_limits import (
     DEFAULT_RESULT_ROWS,
     MIN_RESULT_BYTES,
 )
+from ..tools.admin_domain import administration_config_errors
 from ..tools.tool_provider import (
     ToolProviderError,
     normalize_tool_provider_names,
@@ -857,6 +858,14 @@ class ToolExposureConfig:
 
 
 @dataclass
+class AdministrationConfig:
+    """Fail-closed reservation for future Doris-changing actions."""
+
+    enabled: bool = False
+    require_confirmation: bool = True
+
+
+@dataclass
 class CapabilityConfig:
     """Private Doris capability snapshot controls."""
 
@@ -943,6 +952,9 @@ class DorisConfig:
     adbc: ADBCConfig = field(default_factory=ADBCConfig)
     tool_exposure: ToolExposureConfig = field(
         default_factory=ToolExposureConfig
+    )
+    administration: AdministrationConfig = field(
+        default_factory=AdministrationConfig
     )
     capability: CapabilityConfig = field(
         default_factory=CapabilityConfig
@@ -1603,6 +1615,14 @@ class DorisConfig:
                 config.tool_exposure.mode,
             ).strip()
             _mark_source(config, "mcp_tool_exposure_mode", "env")
+        if "MCP_ADMIN_DOMAIN_ENABLED" in os.environ:
+            config.administration.enabled = _str_to_bool(
+                os.getenv("MCP_ADMIN_DOMAIN_ENABLED")
+            )
+        if "MCP_ADMIN_REQUIRE_CONFIRMATION" in os.environ:
+            config.administration.require_confirmation = _str_to_bool(
+                os.getenv("MCP_ADMIN_REQUIRE_CONFIRMATION")
+            )
         if "CAPABILITY_SNAPSHOT_TTL_SECONDS" in os.environ:
             config.capability.snapshot_ttl_seconds = _env_int(
                 "CAPABILITY_SNAPSHOT_TTL_SECONDS",
@@ -1835,6 +1855,12 @@ class DorisConfig:
                 "config_file",
             )
 
+        if "administration" in config_data:
+            administration_config = config_data["administration"]
+            for key, value in administration_config.items():
+                if hasattr(config.administration, key):
+                    setattr(config.administration, key, value)
+
         if "capability" in config_data:
             capability_config = config_data["capability"]
             for key, value in capability_config.items():
@@ -1880,6 +1906,12 @@ class DorisConfig:
             "temp_files_dir": self.temp_files_dir,
             "tool_exposure": {
                 "mode": self.tool_exposure.mode,
+            },
+            "administration": {
+                "enabled": self.administration.enabled,
+                "require_confirmation": (
+                    self.administration.require_confirmation
+                ),
             },
             "capability": {
                 "snapshot_ttl_seconds": (
@@ -2164,6 +2196,14 @@ class DorisConfig:
             errors.append(
                 "MCP tool exposure mode must be hierarchical or flat"
             )
+        errors.extend(
+            administration_config_errors(
+                enabled=self.administration.enabled,
+                require_confirmation=(
+                    self.administration.require_confirmation
+                ),
+            )
+        )
         if not 1 <= self.capability.snapshot_ttl_seconds <= 86400:
             errors.append(
                 "Capability snapshot TTL must be in the range 1-86400 seconds"
@@ -2464,6 +2504,13 @@ class DorisConfig:
             },
             "tool_exposure": {
                 "mode": self.tool_exposure.mode,
+            },
+            "administration": {
+                "enabled": self.administration.enabled,
+                "require_confirmation": (
+                    self.administration.require_confirmation
+                ),
+                "status": "reserved",
             },
             "capability": {
                 "snapshot_ttl_seconds": (
