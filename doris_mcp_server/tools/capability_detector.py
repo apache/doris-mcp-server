@@ -347,6 +347,26 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ("lineage_plugin_config_readable",),
         ),
     ),
+    "doris_lakehouse": (
+        (
+            "SHOW CATALOGS",
+            ("external_catalog_metadata_readable",),
+        ),
+        (
+            (
+                "SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME "
+                "FROM information_schema.tables LIMIT 1"
+            ),
+            ("lakehouse_table_metadata_readable",),
+        ),
+        (
+            (
+                "SELECT COLUMN_NAME, DATA_TYPE "
+                "FROM information_schema.columns LIMIT 1"
+            ),
+            ("variant_column_type_readable",),
+        ),
+    ),
 }
 
 
@@ -489,6 +509,10 @@ class DorisCapabilityDetector:
                     probes[store_probe.probe_id] = store_probe
                     probes.update(
                         _combine_governance_evidence_probes(probes)
+                    )
+                elif domain_name == "doris_lakehouse":
+                    probes.update(
+                        _combine_lakehouse_evidence_probes(probes)
                     )
                 completed_route = self.route_identity(auth_context)
                 if completed_route.fingerprint != base.route.fingerprint:
@@ -1901,6 +1925,60 @@ def _combine_governance_evidence_probes(
                 status=udf.status,
                 reason_code=udf.reason_code,
                 evidence_sources=udf.evidence_sources,
+            )
+    return derived
+
+
+def _combine_lakehouse_evidence_probes(
+    probes: Mapping[str, CapabilityProbeEvidence],
+) -> dict[str, CapabilityProbeEvidence]:
+    """Derive target-sensitive 4.1 facets from readable metadata surfaces."""
+    derived: dict[str, CapabilityProbeEvidence] = {}
+    table_metadata = probes.get("lakehouse_table_metadata_readable")
+    if table_metadata is not None:
+        for probe_id in (
+            "lakehouse_snapshot_features_readable",
+            "iceberg_deletion_vector",
+            "iceberg_row_lineage",
+        ):
+            derived[probe_id] = CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=(
+                    CapabilityProbeStatus.DEGRADED
+                    if table_metadata.status is CapabilityProbeStatus.SUPPORTED
+                    else table_metadata.status
+                ),
+                reason_code=(
+                    "TARGET_LAKEHOUSE_FORMAT_REQUIRES_CALL_TIME_VALIDATION"
+                    if table_metadata.status is CapabilityProbeStatus.SUPPORTED
+                    else table_metadata.reason_code
+                ),
+                evidence_sources=table_metadata.evidence_sources,
+            )
+    variant_metadata = probes.get("variant_column_type_readable")
+    if variant_metadata is not None:
+        for probe_id in (
+            "variant_advanced_properties_readable",
+            "variant_sparse_sharding",
+            "variant_sparse_cache",
+            "variant_doc_mode",
+            "storage_v3",
+        ):
+            derived[probe_id] = CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=(
+                    CapabilityProbeStatus.DEGRADED
+                    if variant_metadata.status
+                    is CapabilityProbeStatus.SUPPORTED
+                    else variant_metadata.status
+                ),
+                reason_code=(
+                    "TARGET_VARIANT_PROPERTIES_REQUIRE_CALL_TIME_VALIDATION"
+                    if variant_metadata.status
+                    is CapabilityProbeStatus.SUPPORTED
+                    else variant_metadata.reason_code
+                ),
+                evidence_sources=variant_metadata.evidence_sources,
             )
     return derived
 

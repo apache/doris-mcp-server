@@ -340,6 +340,28 @@ cp .env.example .env
         probe phase (default: 5; range: 1-60)
     *   `CAPABILITY_STALE_GRACE_SECONDS`: Bounded interval in which a failed
         refresh may reuse stale private evidence (default: 900; range: 0-86400)
+    *   `GOVERNANCE_MAX_SAMPLE_RATIO`: Maximum live column-analysis sample
+        ratio (default: 0.25; range: greater than 0 through 1)
+    *   `GOVERNANCE_MAX_AUDIT_WINDOW_DAYS`: Maximum audit-analysis window
+        (default: 30; range: 1-365)
+    *   `GOVERNANCE_MAX_LINEAGE_EDGES`: Maximum returned lineage edges
+        (default: 500; range: 1-5000)
+    *   `GOVERNANCE_LINEAGE_STORE_TABLE`: Optional canonical queryable
+        companion-plugin lineage event table
+    *   `GOVERNANCE_LINEAGE_RECENT_EVENT_MINUTES`: Native lineage-provider
+        recency window (default: 1440; range: 1-525600)
+    *   `LAKEHOUSE_MAX_CATALOG_OBJECTS`: Maximum sampled relations per
+        external-catalog inspection (default: 50; range: 1-500)
+    *   `LAKEHOUSE_MAX_CATALOG_DATABASES`: Maximum sampled databases per
+        external catalog (default: 20; range: 1-100)
+    *   `LAKEHOUSE_MAX_SNAPSHOTS`: Maximum returned lakehouse snapshots
+        (default: 50; range: 1-500)
+    *   `LAKEHOUSE_MAX_PARTITIONS`: Maximum returned lakehouse partitions
+        (default: 100; range: 1-1000)
+    *   `LAKEHOUSE_MAX_VARIANT_SAMPLE_ROWS`: Maximum rows inspected through
+        `VARIANT_TYPE` without returning values (default: 20; range: 1-500)
+    *   `LAKEHOUSE_MAX_VARIANT_PATHS`: Maximum returned Variant type-shape
+        paths (default: 200; range: 1-2000)
     *   `MCP_STATE_HANDLE_SECRET`: Optional shared high-entropy key (at least
         32 bytes) used to authenticate explicit cross-call state handles
     *   `MCP_STATE_HANDLE_TTL_SECONDS`: Lifetime of an explicit state handle

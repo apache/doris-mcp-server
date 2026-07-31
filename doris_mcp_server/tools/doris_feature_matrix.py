@@ -1469,26 +1469,24 @@ FEATURE_DEFINITIONS = (
         "inspect_lakehouse_table",
         A,
         _variant(
+            "lakehouse_lifecycle_4_1",
+            ranges=(">=4.1.0",),
+            providers=("external_catalog_provider",),
+            features=("iceberg_deletion_vector", "iceberg_row_lineage"),
+            probes=("lakehouse_snapshot_features_readable",),
+            callable_when_degraded=True,
+            sources=("DORIS_RELEASE_4_1_0",),
+        ),
+        _variant(
             "lakehouse_table_metadata",
             providers=("external_catalog_provider",),
             probes=("lakehouse_table_metadata_readable",),
-        ),
-        _variant(
-            "lakehouse_lifecycle_4_1",
-            ranges=(">=4.1.0",),
-            features=("iceberg_deletion_vector", "iceberg_row_lineage"),
-            probes=("lakehouse_snapshot_features_readable",),
-            sources=("DORIS_RELEASE_4_1_0",),
         ),
     ),
     _feature(
         "doris_lakehouse",
         "inspect_variant_column",
         A,
-        _variant(
-            "variant_type",
-            probes=("variant_column_type_readable",),
-        ),
         _variant(
             "variant_advanced_4_1",
             ranges=(">=4.1.0",),
@@ -1499,7 +1497,12 @@ FEATURE_DEFINITIONS = (
                 "storage_v3",
             ),
             probes=("variant_advanced_properties_readable",),
+            callable_when_degraded=True,
             sources=("DORIS_RELEASE_4_1_0",),
+        ),
+        _variant(
+            "variant_type",
+            probes=("variant_column_type_readable",),
         ),
     ),
     _feature(

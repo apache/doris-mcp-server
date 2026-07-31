@@ -877,6 +877,18 @@ class GovernanceConfig:
 
 
 @dataclass
+class LakehouseConfig:
+    """Read-only Lakehouse runtime collection and sampling limits."""
+
+    max_catalog_objects: int = 50
+    max_catalog_databases: int = 20
+    max_snapshots: int = 50
+    max_partitions: int = 100
+    max_variant_sample_rows: int = 20
+    max_variant_paths: int = 200
+
+
+@dataclass
 class DorisConfig:
     """Doris MCP Server complete configuration"""
 
@@ -916,6 +928,7 @@ class DorisConfig:
         default_factory=CapabilityConfig
     )
     governance: GovernanceConfig = field(default_factory=GovernanceConfig)
+    lakehouse: LakehouseConfig = field(default_factory=LakehouseConfig)
 
     # Custom configuration
     custom_config: dict[str, Any] = field(default_factory=dict)
@@ -1614,6 +1627,36 @@ class DorisConfig:
                 "GOVERNANCE_LINEAGE_RECENT_EVENT_MINUTES",
                 config.governance.lineage_recent_event_minutes,
             )
+        if "LAKEHOUSE_MAX_CATALOG_OBJECTS" in os.environ:
+            config.lakehouse.max_catalog_objects = _env_int(
+                "LAKEHOUSE_MAX_CATALOG_OBJECTS",
+                config.lakehouse.max_catalog_objects,
+            )
+        if "LAKEHOUSE_MAX_CATALOG_DATABASES" in os.environ:
+            config.lakehouse.max_catalog_databases = _env_int(
+                "LAKEHOUSE_MAX_CATALOG_DATABASES",
+                config.lakehouse.max_catalog_databases,
+            )
+        if "LAKEHOUSE_MAX_SNAPSHOTS" in os.environ:
+            config.lakehouse.max_snapshots = _env_int(
+                "LAKEHOUSE_MAX_SNAPSHOTS",
+                config.lakehouse.max_snapshots,
+            )
+        if "LAKEHOUSE_MAX_PARTITIONS" in os.environ:
+            config.lakehouse.max_partitions = _env_int(
+                "LAKEHOUSE_MAX_PARTITIONS",
+                config.lakehouse.max_partitions,
+            )
+        if "LAKEHOUSE_MAX_VARIANT_SAMPLE_ROWS" in os.environ:
+            config.lakehouse.max_variant_sample_rows = _env_int(
+                "LAKEHOUSE_MAX_VARIANT_SAMPLE_ROWS",
+                config.lakehouse.max_variant_sample_rows,
+            )
+        if "LAKEHOUSE_MAX_VARIANT_PATHS" in os.environ:
+            config.lakehouse.max_variant_paths = _env_int(
+                "LAKEHOUSE_MAX_VARIANT_PATHS",
+                config.lakehouse.max_variant_paths,
+            )
         if "MCP_STATE_HANDLE_SECRET" in os.environ:
             config.mcp_state_handle_secret = os.getenv(
                 "MCP_STATE_HANDLE_SECRET",
@@ -1732,6 +1775,12 @@ class DorisConfig:
                 if hasattr(config.governance, key):
                     setattr(config.governance, key, value)
 
+        if "lakehouse" in config_data:
+            lakehouse_config = config_data["lakehouse"]
+            for key, value in lakehouse_config.items():
+                if hasattr(config.lakehouse, key):
+                    setattr(config.lakehouse, key, value)
+
         # Custom configuration
         config.custom_config = config_data.get("custom", {})
 
@@ -1775,6 +1824,18 @@ class DorisConfig:
                 "lineage_recent_event_minutes": (
                     self.governance.lineage_recent_event_minutes
                 ),
+            },
+            "lakehouse": {
+                "max_catalog_objects": self.lakehouse.max_catalog_objects,
+                "max_catalog_databases": (
+                    self.lakehouse.max_catalog_databases
+                ),
+                "max_snapshots": self.lakehouse.max_snapshots,
+                "max_partitions": self.lakehouse.max_partitions,
+                "max_variant_sample_rows": (
+                    self.lakehouse.max_variant_sample_rows
+                ),
+                "max_variant_paths": self.lakehouse.max_variant_paths,
             },
             "database": {
                 "host": self.database.host,
@@ -2033,6 +2094,30 @@ class DorisConfig:
             errors.append(
                 "Governance recent lineage event window must be in the range "
                 "1-525600 minutes"
+            )
+        if not 1 <= self.lakehouse.max_catalog_objects <= 500:
+            errors.append(
+                "Lakehouse catalog object limit must be in the range 1-500"
+            )
+        if not 1 <= self.lakehouse.max_catalog_databases <= 100:
+            errors.append(
+                "Lakehouse catalog database limit must be in the range 1-100"
+            )
+        if not 1 <= self.lakehouse.max_snapshots <= 500:
+            errors.append(
+                "Lakehouse snapshot limit must be in the range 1-500"
+            )
+        if not 1 <= self.lakehouse.max_partitions <= 1000:
+            errors.append(
+                "Lakehouse partition limit must be in the range 1-1000"
+            )
+        if not 1 <= self.lakehouse.max_variant_sample_rows <= 500:
+            errors.append(
+                "Lakehouse Variant sample limit must be in the range 1-500"
+            )
+        if not 1 <= self.lakehouse.max_variant_paths <= 2000:
+            errors.append(
+                "Lakehouse Variant path limit must be in the range 1-2000"
             )
 
         raw_tool_providers: Any = self.mcp_tool_providers

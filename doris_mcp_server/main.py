@@ -101,6 +101,39 @@ def _multiworker_environment(
         "CAPABILITY_STALE_GRACE_SECONDS": str(
             config.capability.stale_grace_seconds
         ),
+        "GOVERNANCE_MAX_SAMPLE_RATIO": str(
+            config.governance.max_sample_ratio
+        ),
+        "GOVERNANCE_MAX_AUDIT_WINDOW_DAYS": str(
+            config.governance.max_audit_window_days
+        ),
+        "GOVERNANCE_MAX_LINEAGE_EDGES": str(
+            config.governance.max_lineage_edges
+        ),
+        "GOVERNANCE_LINEAGE_STORE_TABLE": (
+            config.governance.lineage_store_table
+        ),
+        "GOVERNANCE_LINEAGE_RECENT_EVENT_MINUTES": str(
+            config.governance.lineage_recent_event_minutes
+        ),
+        "LAKEHOUSE_MAX_CATALOG_OBJECTS": str(
+            config.lakehouse.max_catalog_objects
+        ),
+        "LAKEHOUSE_MAX_CATALOG_DATABASES": str(
+            config.lakehouse.max_catalog_databases
+        ),
+        "LAKEHOUSE_MAX_SNAPSHOTS": str(
+            config.lakehouse.max_snapshots
+        ),
+        "LAKEHOUSE_MAX_PARTITIONS": str(
+            config.lakehouse.max_partitions
+        ),
+        "LAKEHOUSE_MAX_VARIANT_SAMPLE_ROWS": str(
+            config.lakehouse.max_variant_sample_rows
+        ),
+        "LAKEHOUSE_MAX_VARIANT_PATHS": str(
+            config.lakehouse.max_variant_paths
+        ),
         "MCP_STATE_HANDLE_SECRET": config.mcp_state_handle_secret,
         "MCP_STATE_HANDLE_TTL_SECONDS": str(config.mcp_state_handle_ttl_seconds),
         "SERVER_NAME": config.server_name,

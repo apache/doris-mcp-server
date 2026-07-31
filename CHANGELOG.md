@@ -62,6 +62,9 @@ under **Unreleased** until a new version is selected and published.
   patterns, audit events, user-defined functions, and authentication mappings.
 - An explicit queryable lineage-provider contract and canonical Doris lineage
   event-store schema for companion-plugin deployments.
+- A read-only Lakehouse domain with capability-gated external-catalog,
+  lakehouse-table, snapshot, partition, pushdown, and Variant-shape
+  inspection.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
@@ -102,6 +105,9 @@ under **Unreleased** until a new version is selected and published.
   versions and live plugin, store, and audit evidence: Doris 4.0.6 and later
   can use native companion-plugin events, while audit inference remains the
   primary path before 4.0.6 and an explicit degraded fallback afterward.
+- Selected Lakehouse and Variant capability variants from observed Doris
+  component versions and live metadata probes, with 4.1 lifecycle and
+  advanced Variant facets reported separately from target-level evidence.
 
 ### Fixed
 
@@ -124,6 +130,11 @@ under **Unreleased** until a new version is selected and published.
 - Emitted lineage edges only from attributable native events or conservative
   direct-column audit evidence, without placeholder sources or invented
   numeric confidence scores.
+- Kept catalog property values, storage locations, raw plans, and sampled
+  Variant values out of model-facing output while bounding object, snapshot,
+  partition, path, and type-shape evidence.
+- Preserved configured Governance and Lakehouse runtime limits across the
+  multi-worker parent-to-worker environment handoff.
 - Excluded explicitly dead Doris components from active version gating while
   preserving them in node inventory, and kept live runtime manifests within
   the 16 KiB domain budget.

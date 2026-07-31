@@ -53,6 +53,7 @@ from doris_mcp_server.tools.domain_models import (
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
 from doris_mcp_server.utils.governance_runtime import GovernanceRuntimeFailure
+from doris_mcp_server.utils.lakehouse_runtime import LakehouseRuntimeFailure
 from doris_mcp_server.utils.query_runtime import QueryRuntimeFailure
 from doris_mcp_server.utils.security import AuthContext
 
@@ -163,6 +164,18 @@ def test_governance_domain_binds_all_eight_children() -> None:
     )
 
 
+def test_lakehouse_domain_binds_all_three_children() -> None:
+    manager = _manager()
+    bound = BoundHandlerAvailabilityProvider(manager)
+    lakehouse = DORIS_DOMAIN_CATALOG.resolve_domain("doris_lakehouse")
+
+    assert len(lakehouse.children) == 3
+    assert all(
+        bound.is_bound(lakehouse.name, child.name)
+        for child in lakehouse.children
+    )
+
+
 @pytest.mark.asyncio
 async def test_governance_failures_keep_stable_reason_codes() -> None:
     manager = _manager("doris_governance.analyze_columns")
@@ -189,6 +202,36 @@ async def test_governance_failures_keep_stable_reason_codes() -> None:
     assert result.mode == "error"
     assert result.error.code is DomainErrorCode.CHILD_ARGUMENTS_INVALID
     assert result.error.details["reason_code"] == "GOVERNANCE_TABLE_NOT_FOUND"
+    assert result.error.details["status_code"] == 404
+
+
+@pytest.mark.asyncio
+async def test_lakehouse_failures_keep_stable_reason_codes() -> None:
+    manager = _manager("doris_lakehouse.inspect_lakehouse_table")
+    manager.lakehouse_runtime.inspect_lakehouse_table = AsyncMock(
+        side_effect=LakehouseRuntimeFailure(
+            "The requested external table is unavailable.",
+            reason_code="LAKEHOUSE_TABLE_NOT_FOUND",
+            status_code=404,
+        )
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_lakehouse",
+        {
+            "child_tool": "inspect_lakehouse_table",
+            "arguments": {
+                "catalog": "ice_prod",
+                "database": "analytics",
+                "table": "missing",
+            },
+        },
+        None,
+    )
+
+    assert result.mode == "error"
+    assert result.error.code is DomainErrorCode.CHILD_ARGUMENTS_INVALID
+    assert result.error.details["reason_code"] == "LAKEHOUSE_TABLE_NOT_FOUND"
     assert result.error.details["status_code"] == 404
 
 
