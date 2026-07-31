@@ -470,6 +470,24 @@ discovery grant are omitted, while authorized but unavailable children remain
 visible with `callable=false`. Doris RBAC remains the final data authorization
 backend for all Doris object access.
 
+#### Host stability and context budgets
+
+The default registration surface is stable for Hosts that never support
+dynamic tool re-registration. Cross-domain conversations reuse the same eight
+registered domain tools; capability changes update a domain's
+`manifest_version`, not the top-level names or schemas.
+
+The server fails closed if the canonical eight-domain `tools/list` exceeds
+24 KiB. Each progressively disclosed domain manifest remains limited to
+16 KiB and 12 children, with separate description and schema limits. Separate
+worker processes built from the same catalog and capability evidence produce
+the same registration contract and manifest versions.
+
+`MCP_TOOL_EXPOSURE_MODE=flat` remains a startup-time compatibility fallback
+that exposes the same 47 read-only children through collision-free formal
+names and the same handlers. It does not restore pre-1.0 names, and switching
+exposure modes requires the Host to reconnect.
+
 #### Administration domain reservation
 
 The `doris_admin` name and its future discovery, preview, execute,

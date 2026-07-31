@@ -52,6 +52,7 @@ from .domain_models import (
 MAX_CHILD_DESCRIPTION_CHARACTERS = 800
 MAX_CHILD_SCHEMA_BYTES = 4 * 1024
 MAX_SCHEMA_ENUM_VALUES = 32
+MAX_TOP_LEVEL_TOOL_LIST_BYTES = 24 * 1024
 MANIFEST_FORMAT_VERSION = "1"
 
 DOMAIN_DISCOVERY_DESCRIPTION_SUFFIX = (
@@ -197,7 +198,7 @@ class DomainManifestError(ValueError):
 
 
 class DomainManifestBudgetError(DomainManifestError):
-    """Raised when a public domain manifest exceeds a hard context budget."""
+    """Raised when public tool exposure exceeds a hard context budget."""
 
 
 class DomainAvailabilityProvider(Protocol):
@@ -422,11 +423,25 @@ class DomainManifestService:
             _build_top_level_tool(domain)
             for domain in self._catalog.domains
         )
+        self._top_level_tool_list_bytes = _top_level_tool_list_size_bytes(
+            self._tools
+        )
+        if self._top_level_tool_list_bytes > MAX_TOP_LEVEL_TOOL_LIST_BYTES:
+            raise DomainManifestBudgetError(
+                "top-level tools/list is "
+                f"{self._top_level_tool_list_bytes} bytes; "
+                f"limit is {MAX_TOP_LEVEL_TOOL_LIST_BYTES} bytes"
+            )
         self.validate_default_manifest_budgets()
 
     @property
     def domain_names(self) -> frozenset[str]:
         return self._domain_names
+
+    @property
+    def top_level_tool_list_bytes(self) -> int:
+        """Return the deterministic serialized size of the stable tool list."""
+        return self._top_level_tool_list_bytes
 
     def handles(self, name: str) -> bool:
         """Return whether a name is one of the exact top-level domains."""
@@ -661,6 +676,26 @@ def _build_top_level_tool(domain: DomainDefinition) -> Tool:
     )
 
 
+def _top_level_tool_list_size_bytes(tools: Sequence[Tool]) -> int:
+    payload = {
+        "tools": [
+            tool.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude_none=True,
+            )
+            for tool in tools
+        ]
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return len(canonical.encode("utf-8"))
+
+
 def _render_child(
     child: ChildToolDefinition,
     availability: Availability,
@@ -828,6 +863,7 @@ __all__ = [
     "MAX_CHILD_DESCRIPTION_CHARACTERS",
     "MAX_CHILD_SCHEMA_BYTES",
     "MAX_SCHEMA_ENUM_VALUES",
+    "MAX_TOP_LEVEL_TOOL_LIST_BYTES",
     "ChildDiscoveryPolicy",
     "DomainAvailabilityProvider",
     "DomainAvailabilityResolution",
