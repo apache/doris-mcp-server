@@ -132,20 +132,22 @@ class MetricFlowRuntimeAdapter(SemanticRuntime):
     name = "metricflow"
 
     def __init__(self) -> None:
-        # Bound by server integration (per request/workspace), never shared
-        # across workspaces: the adapter instance itself is stateless apart
-        # from this optional default binding used by offline tools.
+        # The registered instance stays unbound (stateless). Server
+        # integration obtains a bound copy via bind(); mutating the shared
+        # registry instance would race across concurrent workspaces.
         self._compiler: Any = None
         self._manifest: Any = None
 
-    def bind(self, compiler: Any, manifest: Any) -> None:
-        """Attach a live workspace MetricFlowCompiler + SemanticManifest."""
-        self._compiler = compiler
-        self._manifest = manifest
+    def bind(self, compiler: Any, manifest: Any) -> "MetricFlowRuntimeAdapter":
+        """Return a NEW adapter bound to a live workspace engine + manifest."""
+        bound = MetricFlowRuntimeAdapter()
+        bound._compiler = compiler
+        bound._manifest = manifest
+        return bound
 
-    def unbind(self) -> None:
-        self._compiler = None
-        self._manifest = None
+    @property
+    def is_bound(self) -> bool:
+        return self._compiler is not None
 
     # -- metadata ------------------------------------------------------------
 
