@@ -120,7 +120,7 @@ query_max_rows = 10000           # 默认最大返回行数
 
 ---
 
-## 3. MCP Tool（共 10 个）
+## 3. MCP Tool（共 17 个）
 
 ### 3.1 Tool 清单
 
@@ -136,6 +136,13 @@ query_max_rows = 10000           # 默认最大返回行数
 | 8 | `describe_table` | 只读, 幂等 | 表结构（`names`/`summary`/`full` 三级详细程度）。 |
 | 9 | `execute_query` | 只读 | 裸 SQL 兜底路径（仅允许 SELECT/SHOW/DESCRIBE/EXPLAIN）。 |
 | 10 | `reload_semantic_layer` | 幂等 | 手动触发工作区重载。 |
+| 11 | `list_semantic_providers` | 只读, 幂等 | 列出已注册的语义模型 provider（cube/lookml/metricflow）。 |
+| 12 | `compile_semantic_model` | 幂等 | 上传语义模型文件 → validate/parse/compile → 存储编译产物（格式自动嗅探）。 |
+| 13 | `list_semantic_artifacts` | 只读, 幂等 | 列出工作区内已编译的 artifact。 |
+| 14 | `delete_semantic_artifact` | 幂等 | 删除编译产物。 |
+| 15 | `get_semantic_metadata` | 只读, 幂等 | artifact 的指标/维度发现（可按指标过滤维度）。 |
+| 16 | `generate_semantic_sql` | 只读, 幂等 | 干跑：生成 Doris SQL 不执行。 |
+| 17 | `query_semantic_model` | 只读 | 生成 SQL → 只读校验 → 执行（结构化 filters，免疫注入）。 |
 
 ### 3.2 Agent 端工作流
 
@@ -385,6 +392,70 @@ SemanticManifest(semantic_manifest.json)
   .list_metrics()                    # → [{name, description}, ...]
   .get_metric(name)                  # → 完整指标定义
   .list_dimensions_for_metric(name)  # → [{name, type, description}, ...]
+```
+
+---
+
+## 6A. 语义 Provider 插件框架 (`src/providers/`)
+
+第 6 节描述的是内置 MetricFlow 语义层。本节描述在其之上的**通用语义模型编译器插件框架**——定位是 `Semantic Model → Doris SQL` 的编译运行时（类比 dbt compile + query engine + MCP interface），而不是语义交换标准。
+
+### 6A.1 架构
+
+```
+        Build Time（上传模型）                    Runtime（Agent 查询）
+
+  ModelSource(filename, content)          CompiledArtifact + QueryRequest
+          │                                       │
+  SemanticProvider                        SemanticRuntime
+    validate() → parse() → compile()        get_metrics()
+          │                                 get_dimensions(metric)
+          ▼                                 generate_sql() → Doris SQL
+  CompiledArtifact ──► ArtifactStore                │
+  (provider 私有 payload,     (<workspace>/.artifacts/*.json)
+   标准化 envelope)                                   ▼
+                                            validate_readonly → 连接池执行
+```
+
+关键决策：
+
+- **编译产物不跨 Provider 标准化**。envelope（provider/name/version/source_digest）统一，`payload` 由各家私有——我们是编译器框架，不是 exchange standard。
+- **Provider 能力超过 Parser**：每个 provider 自带 parser + compiler + runtime SQL generator + metadata provider，类似数据库驱动（parser/planner/executor）。
+- **结构化 Filter**：Agent 传 `{dimension, operator, value}` 而不是 SQL 片段；维度名对 artifact 校验、字面量转义，生成的 SQL 在构造上免疫注入（模型作者的 SQL 表达式除外，属于可信输入）。
+
+### 6A.2 内置 Provider
+
+| Provider | 格式 | 解析 | 运行时 |
+|---|---|---|---|
+| `cube` | cube-js YAML（cubes/measures/dimensions/many_to_one joins）| 自带（pyyaml）| 自带 Doris SQL 生成器 |
+| `lookml` | Looker `.view.lkml`（views/dimensions/dimension_groups/measures）| `lkml`（MIT）| 编译时翻译成 Cube artifact 形状，**复用 Cube 运行时** |
+| `metricflow` | dbt `semantic_models`/`metrics` YAML | 轻量解析做校验/预览 | `bind()` 挂接现有 MetricFlowCompiler（见第 6 节）|
+
+格式自动嗅探：`provider.detect(source)` 返回置信度，≥0.5 路由；也可显式指定。
+
+### 6A.3 MCP Tool（新增 7 个）
+
+| Tool | 用途 |
+|---|---|
+| `list_semantic_providers` | 列出已注册的 provider |
+| `compile_semantic_model` | 上传模型文件 → validate/parse/compile → 存 artifact |
+| `list_semantic_artifacts` / `delete_semantic_artifact` | artifact 管理 |
+| `get_semantic_metadata` | 指标/维度发现（可按指标过滤维度）|
+| `generate_semantic_sql` | 干跑：生成 Doris SQL 不执行 |
+| `query_semantic_model` | 生成 SQL → 只读校验 → 执行 |
+
+### 6A.4 示例
+
+`examples/semantic-models/` 下有 Cube 与 LookML 示例。典型 Agent 流程：
+
+```
+compile_semantic_model(workspace, "sales.cube.yaml", <content>)
+  → artifact_id = "cube__orders"
+get_semantic_metadata(workspace, "cube__orders", metric="revenue")
+query_semantic_model(workspace, "cube__orders",
+    metrics=["revenue"], dimensions=["country"],
+    filters=[{"dimension":"create_time","operator":"between","value":["2025-01-01","2025-01-31"]}],
+    order_by=["-revenue"], limit=100)
 ```
 
 ---
