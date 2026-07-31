@@ -26,9 +26,10 @@ Doris MCP Server 是一个基于 [Model Context Protocol (MCP)](https://modelcon
 ## 核心特性
 
 *   **语义指标层**：YAML 中一次定义指标（简单 / 比率 / 衍生 / 累计 / 漏斗转化），任意 MCP 客户端均可查询。MetricFlow 编译语义正确的 SQL，无需手写聚合查询。
+*   **语义 Provider 插件框架**：可插拔的语义模型编译器——上传 Cube (cube-js) YAML、Looker LookML 视图或 dbt 语义模型，对应 provider 完成校验、编译为运行时产物，并按需生成免疫注入的 Doris SQL。
 *   **多工作区隔离**：完全隔离的逻辑租户，各自拥有独立的模型、编译器和 Doris 存储表。模型存储在 Doris 内（active + staging 两张表），多节点共享状态无需文件同步。
 *   **Staging 工作流**：所有模型变更必经 *staging → validate → commit*，错误模型永远不会影响线上查询。
-*   **引导式工具链**：10 个 MCP Tool，强制执行工作流（`get_query_guide` → `check_service_health` → 语义查询，或元数据发现 → 裸 SQL 兜底）。
+*   **引导式工具链**：17 个 MCP Tool，强制执行工作流（`get_query_guide` → `check_service_health` → 语义查询，或元数据发现 → 裸 SQL 兜底）。
 *   **凭据透传**：`Authorization: Bearer <doris用户>:<密码>`——每条 SQL 都以调用者自己的 Doris 身份执行，每用户独立连接池，无共享 admin 凭据。
 *   **Web UI**：Doris 凭据登录，在线编辑/验证/发布模型、管理工作区、一键部署示例，无需本地 YAML 工具链。
 *   **CLI 客户端**：`mcp-client` 支持脚本和 CI/CD 中调用工具、推拉模型文件。
