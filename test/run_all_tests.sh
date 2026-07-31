@@ -131,6 +131,7 @@ run_offline_unit_tests() {
     run_python_test "$SCRIPT_DIR/test_manifest_dims.py" "指标维度提取离线单元测试" || ((FAIL_COUNT += 1))
     run_python_test "$SCRIPT_DIR/test_provider_cube.py" "Cube Provider 离线单元测试" || ((FAIL_COUNT += 1))
     run_python_test "$SCRIPT_DIR/test_provider_lookml.py" "LookML Provider 离线单元测试" || ((FAIL_COUNT += 1))
+    run_python_test "$SCRIPT_DIR/test_provider_metricflow.py" "MetricFlow Provider 适配器离线单元测试" || ((FAIL_COUNT += 1))
     run_python_test "$SCRIPT_DIR/test_provider_registry.py" "Provider 注册表与 Artifact 存储离线单元测试" || ((FAIL_COUNT += 1))
     run_python_test "$SCRIPT_DIR/test_tools_semantic_provider.py" "语义 Provider 工具离线单元测试" || ((FAIL_COUNT += 1))
     run_python_test "$SCRIPT_DIR/test_compiler_where.py" "WHERE 字面量处理离线单元测试" || ((FAIL_COUNT += 1))
