@@ -25,6 +25,23 @@ under **Unreleased** until a new version is selected and published.
 
 ## [Unreleased]
 
+### Changed
+
+- Rebuilt the root English and Simplified Chinese READMEs as concise 1.0 entry
+  points instead of mixing architecture, operations, integration, and release
+  material in one document.
+- Added a categorized bilingual documentation system for architecture,
+  request flow, capabilities, protocol behavior, security, operations,
+  configuration, Host integration, development, migration, and release
+  guidance.
+- Published the detailed 1.0 release record in
+  [Issue #189](https://github.com/apache/doris-mcp-server/issues/189), including
+  the complete 8-domain/47-child surface, capability detection, security,
+  reliability, compatibility, migration, and verification boundaries.
+- Added Simplified Chinese editions of the custom Tool Provider and Doris
+  fine-grained access-control guides, and included the complete documentation
+  tree in source distributions.
+
 ### Fixed
 
 - Migrated the opt-in real Doris process integration suite from removed legacy
@@ -34,7 +51,7 @@ under **Unreleased** until a new version is selected and published.
   row, byte, and timeout ceilings, cancellation recovery, and database-level
   read permission denial through the formal `doris_query` Child surface.
 
-## [1.0.0] - 2026-07-31
+## [1.0.0] - 2026-08-01
 
 ### Added
 

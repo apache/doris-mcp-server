@@ -1,5 +1,8 @@
 # Migrating to Doris MCP Server 1.0.0
 
+Expanded guides: [English](migration/1.0.0.md) |
+[Simplified Chinese](migration/1.0.0.zh-CN.md)
+
 Version 1.0.0 replaces the pre-1.0 direct tool surface with one validated
 read-only catalog. This is an intentional breaking change: pre-1.0 tool names
 are not registered as aliases and cannot be called after the upgrade.

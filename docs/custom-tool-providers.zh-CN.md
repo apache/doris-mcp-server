@@ -17,32 +17,30 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Custom tool providers
+# 自定义 Tool Provider
 
 [English](custom-tool-providers.md) | [简体中文](custom-tool-providers.zh-CN.md)
 
-Doris MCP Server can expose an existing business API as an MCP tool without
-adding business-specific code to this repository. The extension is a trusted
-Python package installed in the same environment as the server and enabled by
-an explicit deploy-time allowlist.
+Doris MCP Server 可以把既有业务 API 暴露为 MCP Tool，而不需要把业务专用
+代码加入本仓库。扩展必须是安装在 Server 同一运行环境中的可信 Python 包，
+并由部署方通过显式允许列表启用。
 
-This boundary intentionally does not accept an arbitrary target URL, method,
-headers, or credentials from MCP clients. Provider code executes inside the
-server process and therefore has the same operating-system privileges as the
-server. Install and enable only packages that the operator has reviewed.
+这条边界不允许 MCP Client 任意传入目标 URL、HTTP 方法、Header 或凭据。
+Provider 代码运行在 Server 进程内，拥有与 Server 相同的操作系统权限，因此
+只能安装和启用经过运维方审查的软件包。
 
-## Provider contract
+## Provider 合同
 
-Declare a named entry point in the provider package:
+在 Provider 包中声明一个具名 Entry Point：
 
 ```toml
 [project.entry-points."doris_mcp_server.tool_providers"]
 orders_api = "acme_doris_tools.provider:create_provider"
 ```
 
-The entry-point target must be a zero-argument callable. It returns an object
-whose `name` exactly matches the entry-point name and whose `tools()` method
-returns one or more `CustomTool` definitions.
+Entry Point 的目标必须是一个无参数可调用对象。它返回的对象，其 `name` 必须
+与 Entry Point 名称完全一致，且 `tools()` 方法必须返回一个或多个
+`CustomTool` 定义。
 
 ```python
 from __future__ import annotations
@@ -135,67 +133,57 @@ def create_provider() -> OrdersApiProvider:
     return OrdersApiProvider()
 ```
 
-Install the provider package in the same virtual environment, then enable only
-the reviewed entry-point name:
+把 Provider 包安装到同一个虚拟环境，再只启用经过审查的 Entry Point 名称：
 
 ```bash
 export MCP_TOOL_PROVIDERS=orders_api
 doris-mcp-server --transport http --host 127.0.0.1 --port 3000
 ```
 
-An empty `MCP_TOOL_PROVIDERS` value loads no custom code. Startup fails if a
-configured provider is missing, has a mismatched name, returns an invalid
-definition, or shadows a built-in or another custom tool.
+`MCP_TOOL_PROVIDERS` 为空时不加载任何自定义代码。若配置的 Provider 不存在、
+名称不匹配、返回非法定义，或与内置 Tool / 其他自定义 Tool 重名，Server
+都会启动失败。
 
-Optional synchronous or asynchronous `start()` and `close()` methods can own
-HTTP clients or other runtime resources. A partial startup failure closes
-providers that were already started.
+Provider 可以通过可选的同步或异步 `start()`、`close()` 方法持有 HTTP Client
+或其他运行资源。如果部分 Provider 启动失败，已经启动的 Provider 会被关闭。
 
-## Authentication and rate limits
+## 认证与限流
 
-Custom provider tools are available to local/stdio, static-token, and JWT
-deployments under their existing authorization boundary. External OAuth and
-Doris-backed OAuth hide custom tools and reject direct calls: they fail closed
-until the project defines a reviewed dynamic scope and policy model.
+在现有授权边界内，自定义 Provider Tool 可用于本地/stdio、静态 Token 和 JWT
+部署。外部 OAuth 与 Doris-backed OAuth 会隐藏自定义 Tool 并拒绝直接调用；在
+项目定义并审查动态 Scope 与 Policy 模型之前，这两种模式保持 Fail Closed。
 
-`ToolRateLimit` is a bounded, process-local fixed-window limiter:
+`ToolRateLimit` 是有界、进程内、固定窗口限流器：
 
-- `scope="principal"` separates callers by the authenticated user or token
-  identity;
-- `scope="tool"` applies one shared limit to the tool in that server process;
-- rejected calls return `TOOL_RATE_LIMITED` and a bounded retry delay;
-- the provider handler is not invoked for a rejected call.
+- `scope="principal"` 按已认证用户或 Token 身份隔离调用方；
+- `scope="tool"` 对当前 Server 进程中的该 Tool 使用一个共享额度；
+- 被拒绝的调用返回 `TOOL_RATE_LIMITED` 和有界重试延迟；
+- 被拒绝时不会执行 Provider Handler。
 
-Each worker and each replica has an independent limiter. For a global QPS,
-concurrency, quota, or cost limit, enforce the limit in an API gateway or shared
-rate-limit service. With four workers, a process-local limit can allow roughly
-four times the configured rate.
+每个 Worker、每个副本都有独立的限流器。如需全局 QPS、并发、配额或成本
+限制，应在 API Gateway 或共享限流服务中执行。部署四个 Worker 时，进程内
+限流可能允许约四倍于配置值的总速率。
 
-## FastGPT and other MCP clients
+## FastGPT 与其他 MCP Client
 
-Expose Doris MCP Server through its normal Streamable HTTP or stdio transport.
-FastGPT and other MCP clients discover the custom schema through `tools/list`
-and invoke it through `tools/call`; no provider-specific protocol is required.
-The same MCP `2026-07-28` request metadata and HTTP headers described in the
-main README still apply.
+通过 Doris MCP Server 的标准 Streamable HTTP 或 stdio 传输对外提供服务。
+FastGPT 和其他 MCP Client 通过 `tools/list` 发现自定义 Schema，再通过
+`tools/call` 调用，无需 Provider 专用协议。主 README 中说明的 MCP
+`2026-07-28` 请求 Metadata 和 HTTP Header 规则同样适用。
 
-## Production checklist
+## 生产检查清单
 
-- Keep target hosts and API paths fixed in reviewed provider code. Never accept
-  an arbitrary URL, scheme, host, redirect target, or authorization header from
-  MCP arguments.
-- Use HTTPS and a network egress allowlist. Disable redirects unless every
-  redirect target is separately validated.
-- Read credentials from environment variables or a secret manager. Never place
-  secrets in tool schemas, results, audit fields, or logs.
-- Apply bounded connect/read/total timeouts and response-size limits. Validate
-  the upstream content type and response structure.
-- Return only fields the MCP caller is authorized to see. Treat upstream error
-  bodies as sensitive; the server intentionally sanitizes uncaught exceptions.
-- Define retry and idempotency behavior explicitly. Do not automatically retry
-  unsafe mutations.
-- Add upstream concurrency limits, circuit breaking, and global rate limiting
-  outside the process when availability or cost requires them.
-- Test provider lifecycle, input validation, tool-name collisions, rate-limit
-  behavior, authentication visibility, audit metadata, and the real upstream
-  failure modes before production deployment.
+- 在经过审查的 Provider 代码中固定目标 Host 与 API Path。绝不能接受 MCP
+  参数传入的任意 URL、Scheme、Host、重定向目标或 Authorization Header。
+- 使用 HTTPS 和网络出口允许列表。默认关闭重定向；若必须启用，应分别验证
+  每个重定向目标。
+- 从环境变量或 Secret Manager 读取凭据。不得在 Tool Schema、结果、审计
+  字段或日志中写入 Secret。
+- 设置有界连接、读取和总超时，以及响应大小上限；验证上游 Content-Type 和
+  响应结构。
+- 只返回 MCP 调用方获准查看的字段。上游错误 Body 视为敏感数据；Server 会
+  清洗未捕获异常。
+- 明确定义重试和幂等行为。不得自动重试不安全的写操作。
+- 当可用性或成本需要时，在进程外增加上游并发限制、熔断和全局限流。
+- 上线前验证 Provider 生命周期、输入校验、Tool 名冲突、限流、认证可见性、
+  审计 Metadata，以及真实上游故障模式。

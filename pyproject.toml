@@ -165,6 +165,8 @@ include = [
     "/doris_mcp_server",
     "/CHANGELOG.md",
     "/README.md",
+    "/README.zh-CN.md",
+    "/docs",
     "/docs/migration-1.0.0.md",
     "/docs/release-notes-1.0.0.md",
     "/docs/tool-registry.md",
