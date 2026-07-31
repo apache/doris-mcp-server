@@ -100,9 +100,10 @@ def test_fine_grained_access_control_guide_is_linked_and_complete():
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     chinese_readme = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
     link = "docs/doris-fine-grained-access-control.md"
+    chinese_link = "docs/doris-fine-grained-access-control.zh-CN.md"
 
     assert f"]({link})" in readme
-    assert f"]({link})" in chinese_readme
+    assert f"]({chinese_link})" in chinese_readme
     assert "GRANT SELECT_PRIV(" in guide
     assert "CREATE ROW POLICY" in guide
     assert "root` and `admin" in guide
@@ -116,9 +117,10 @@ def test_custom_tool_provider_guide_is_linked_and_complete():
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     chinese_readme = (PROJECT_ROOT / "README.zh-CN.md").read_text(encoding="utf-8")
     link = "docs/custom-tool-providers.md"
+    chinese_link = "docs/custom-tool-providers.zh-CN.md"
 
     assert f"]({link})" in readme
-    assert f"]({link})" in chinese_readme
+    assert f"]({chinese_link})" in chinese_readme
     assert "doris_mcp_server.tool_providers" in guide
     assert "MCP_TOOL_PROVIDERS" in guide
     assert "ToolRateLimit" in guide

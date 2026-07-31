@@ -1,5 +1,8 @@
 # Doris MCP Server 1.0.0 Release Notes
 
+Expanded guides: [English](releases/1.0.0.md) |
+[Simplified Chinese](releases/1.0.0.zh-CN.md)
+
 Doris MCP Server 1.0.0 establishes the first versioned public contract for
 progressive, capability-aware Apache Doris tooling over MCP `2026-07-28`.
 

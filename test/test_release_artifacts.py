@@ -46,7 +46,7 @@ def test_release_identity_and_documents_are_1_0_0() -> None:
     assert __version__ == "1.0.0"
     assert "pip install doris-mcp-server==1.0.0" in readme
     assert "pip install doris-mcp-server==1.0.0" in chinese_readme
-    assert "[1.0.0] - 2026-07-31" in changelog
+    assert "[1.0.0] - 2026-08-01" in changelog
     assert "[Unreleased]: " in changelog
     assert "compare/1.0.0...HEAD" in changelog
     assert "docs/migration-1.0.0.md" in readme
@@ -61,6 +61,8 @@ def test_source_distribution_includes_release_documents() -> None:
     included = set(pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"])
 
     assert {
+        "/README.zh-CN.md",
+        "/docs",
         "/docs/migration-1.0.0.md",
         "/docs/release-notes-1.0.0.md",
         "/docs/tool-registry.md",

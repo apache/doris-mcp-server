@@ -19,6 +19,8 @@ under the License.
 
 # Doris fine-grained access control for MCP
 
+[English](doris-fine-grained-access-control.md) | [简体中文](doris-fine-grained-access-control.zh-CN.md)
+
 This guide explains how to enforce table, column, and row access for Doris MCP
 Server. The enforcement point is Apache Doris, not the language model or an MCP
 prompt.

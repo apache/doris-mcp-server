@@ -16,248 +16,86 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 -->
-# Doris MCP Server Testing System
 
-## Overview
+# Testing Doris MCP Server
 
-This testing system adopts a layered architecture, including unit tests, integration tests, and client-server tests. The testing system assumes the server is already properly started and focuses on testing functionality rather than startup configuration.
+This directory verifies the 1.0 public contract: MCP `2026-07-28`, the stable
+8-domain/47-child capability surface, authentication and authorization,
+read-only execution, bounded results, transports, packaging, documentation,
+and optional real Doris integration.
 
-## Testing Architecture
+The complete contributor workflow and gate definitions are maintained in
+[Contributing and verification](../docs/development/contributing.md).
 
-### 1. Unit Tests
-- **Location**: `test/security/`, `test/utils/`, `test/tools/`
-- **Purpose**: Test individual module functionality
-- **Features**: Uses Mock objects, no dependency on external services
+## Local setup
 
-### 2. Integration Tests
-- **Location**: `test/integration/`
-- **Purpose**: Test collaboration between modules
-- **Features**: Test complete workflows
-
-### 3. Client-Server Tests
-- **Location**: `test/tools/test_tools_client_server.py`, `test/utils/test_query_executor_client_server.py`
-- **Purpose**: Test actual server functionality through MCP client
-- **Features**: Assumes server is running, skips tests if server is not available
-
-## Configuration Files
-
-### test_config.json
-Test configuration file defines how to connect to the running server:
-
-```json
-{
-  "server_endpoints": {
-    "http": {
-      "url": "http://localhost:3000/mcp",
-      "timeout": 30
-    },
-    "stdio": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "doris_mcp_server.main", "--transport", "stdio"],
-      "timeout": 30
-    }
-  },
-  "test_settings": {
-    "default_transport": "http",
-    "retry_attempts": 3,
-    "retry_delay": 1.0,
-    "test_timeout": 60,
-    "enable_performance_tests": true,
-    "enable_security_tests": true
-  }
-}
-```
-
-## Usage
-
-### 1. Start the Server
-
-Before running client-server tests, you need to start the server first:
-
-#### HTTP Mode (Recommended)
 ```bash
-# Start HTTP server
-./start_server.sh
-# or
-uv run python -m doris_mcp_server.main --transport http --port 3000
+uv sync --group dev
 ```
 
-#### Stdio Mode
+Run the complete warning-clean suite:
+
 ```bash
-# Stdio mode is started directly by the client, no need to pre-start
+uv run pytest -q -W error
 ```
 
-### 2. Run Tests
+Run focused release and documentation contracts while editing docs:
 
-#### Run All Tests
 ```bash
-python -m pytest test/ -v
+uv run pytest -q -W error \
+  test/test_documentation_system.py \
+  test/test_release_artifacts.py \
+  test/test_product_identity.py
 ```
 
-#### Run Unit Tests
+## Static and generated gates
+
 ```bash
-# Security module tests
-python -m pytest test/security/ -v
-
-# Tools module tests
-python -m pytest test/tools/test_tools_manager.py -v
-
-# Query executor tests
-python -m pytest test/utils/test_query_executor.py -v
+uv run python generate_tool_catalog.py --check
+uv lock --check
+uv run ruff check .
+uv run mypy doris_mcp_server
+uv run bandit -q -c pyproject.toml -r doris_mcp_server generate_tool_catalog.py
+uv build
 ```
 
-#### Run Integration Tests
-```bash
-python -m pytest test/integration/ -v
-```
+The generated [tool registry](../docs/tool-registry.md) is authoritative and
+must not be edited by hand.
 
-#### Run Client-Server Tests
-```bash
-# Tools Client-Server tests
-python -m pytest test/tools/test_tools_client_server.py -v
+## Test boundaries
 
-# QueryExecutor Client-Server tests
-python -m pytest test/utils/test_query_executor_client_server.py -v
-```
+- Unit tests isolate one contract or implementation boundary.
+- Integration tests exercise real Server composition, authentication,
+  transport, routing, and Child dispatch.
+- Protocol tests assert the exact MCP version, schemas, errors, pagination,
+  metadata, state handles, and compatibility isolation.
+- Security tests cover positive and negative authorization paths, SQL safety,
+  secret redaction, identity routing, and bounded failures.
+- Release tests align product identity, generated artifacts, source
+  distributions, and documentation.
+- Real Doris tests are opt-in and require a disposable reviewed environment.
 
-### 3. Test Configuration
+Do not replace real boundary tests with mocks when the behavior depends on a
+transport, package artifact, process boundary, or Doris permission. Do not run
+destructive SQL against a shared cluster.
 
-#### Modify Server Endpoints
-Edit the `test/test_config.json` file:
+## Real Doris verification
 
-```json
-{
-  "server_endpoints": {
-    "http": {
-      "url": "http://your-server:port/mcp"
-    }
-  }
-}
-```
+The opt-in process suite uses environment-provided Doris connection settings
+and exercises both stdio and Streamable HTTP through the formal 1.0 Tool
+surface. It verifies allowed reads, denied reads, query bounds, timeout and
+cancellation recovery, and capability behavior against the actual cluster.
 
-#### Enable/Disable Specific Tests
-```json
-{
-  "test_settings": {
-    "enable_performance_tests": false,  // Disable performance tests
-    "enable_security_tests": true       // Enable security tests
-  }
-}
-```
+Use only a least-privilege test account and follow the repository's current
+real-Doris test module instructions. Credentials belong in the environment or
+a secret manager, never in fixtures, logs, documentation, or commits.
 
-## Test Status
+## Adding a test
 
-### ✅ Completed Test Modules
-
-1. **Security Module** (100% Pass)
-   - Authentication tests: 5/5 passed
-   - Authorization tests: 7/7 passed
-   - Data masking tests: 13/13 passed
-   - SQL validation tests: 10/10 passed
-   - Security manager tests: 7/7 passed
-   - Coverage: 88%
-
-2. **Client-Server Test Architecture** (Implemented)
-   - Automatic server connection status detection
-   - Automatically skip tests when server is not running
-   - Support for both HTTP and Stdio transport modes
-
-### 🔄 Tests Requiring Server Running
-
-1. **Tools Client-Server Tests**
-   - Tool list retrieval
-   - SQL query execution
-   - Database list retrieval
-   - Table schema queries
-   - Performance statistics
-   - Error handling
-   - Security authentication
-
-2. **QueryExecutor Client-Server Tests**
-   - Simple query execution
-   - Database queries
-   - Information schema queries
-   - Parameterized queries
-   - Error handling
-   - Security authentication
-
-## Testing Best Practices
-
-### 1. Server Startup Check
-All client-server tests automatically check server connection status:
-- If server is running normally, execute actual tests
-- If server is not running, skip tests and display appropriate message
-
-### 2. Test Isolation
-- Unit tests use Mock objects, no dependency on external services
-- Integration tests use controlled test environments
-- Client-server tests connect to actually running servers
-
-### 3. Error Handling
-- Tests don't assume specific success/failure results
-- Verify response structure rather than specific content
-- Gracefully handle connection failures and timeouts
-
-### 4. Configuration Management
-- Use configuration files to manage test parameters
-- Support configuration switching for different environments
-- Provide reasonable default values
-
-## Troubleshooting
-
-### 1. Server Connection Failure
-```
-ERROR: Server is not running or not accessible
-```
-**Solution**: Ensure the server is started and listening on the correct port
-
-### 2. Import Errors
-```
-ImportError: cannot import name 'DorisUnifiedClient'
-```
-**Solution**: Check Python path and dependency installation
-
-### 3. Test Timeouts
-```
-TimeoutError: Test execution timeout
-```
-**Solution**: Increase timeout settings in `test_config.json`
-
-## Development Guide
-
-### Adding New Client-Server Tests
-
-1. Add test methods in the appropriate test file
-2. Use `@pytest.mark.asyncio` decorator
-3. Get test client through `client` fixture
-4. Implement test callback function
-5. Verify response structure
-
-Example:
-```python
-@pytest.mark.asyncio
-async def test_new_feature_via_client(self, client, test_config):
-    """Test new feature through client"""
-    async def test_callback(client_instance):
-        result = await client_instance.call_tool("new_tool", {
-            "param": "value"
-        })
-        
-        assert "success" in result
-        return result
-    
-    result = await client.connect_and_run(test_callback)
-    assert "success" in result
-```
-
-### Modifying Test Configuration
-
-Edit the `test/test_config.json` file to adjust:
-- Server endpoints
-- Timeout settings
-- Test data
-- Feature switches
-
-## Summary
-
-This testing system provides complete test coverage, from unit tests to end-to-end client-server tests. Through reasonable configuration and automated connection detection, it ensures tests can run stably in different environments. 
+1. Identify the public contract or failure mode being protected.
+2. Prefer deterministic inputs and bounded outputs.
+3. Assert both success and denied/error behavior where authorization or
+   availability is involved.
+4. Keep transport-specific claims behind real transport tests.
+5. Run the focused file, then the full warning-clean suite.
+6. Update generated artifacts and ChangeLog when the public contract changes.
