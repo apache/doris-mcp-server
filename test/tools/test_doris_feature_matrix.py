@@ -302,8 +302,8 @@ def test_certification_uses_three_part_core_for_rc_and_ga_builds() -> None:
     )
     assert rc_report.uniform_observed_version == "4.0.5"
     assert ga_report.uniform_observed_version == "4.0.5"
-    assert rc_report.observed_fe_versions == ("4.0.5rc1",)
-    assert rc_report.observed_be_versions == ("4.0.5rc1",)
+    assert rc_report.observed_fe_versions == ("4.0.5",)
+    assert rc_report.observed_be_versions == ("4.0.5",)
     assert rc_report.status is VersionCertificationStatus.CERTIFIED
     assert ga_report.status is VersionCertificationStatus.CERTIFIED
     assert rc_report.evidence_ids == ("doris_4_0_5_linux_amd64",)
@@ -366,12 +366,12 @@ def test_patch_evidence_rejects_incomplete_host_or_component_proof() -> None:
 @pytest.mark.parametrize(
     ("expression", "matching", "not_matching"),
     [
-        (">=3.0.0", "4.1.3", "3.0.0-rc01"),
+        (">=3.0.0", "3.0.0-rc01", "2.1.9"),
         (">=4.0.6,<4.1.0", "4.0.7", "4.1.0"),
         ("==4.1.0", "4.1.0", "4.1.1"),
         (">4.1.0", "4.1.1", "4.1.0"),
         ("<=4.0.6", "4.0.6", "4.0.7"),
-        ("<4.0.6", "4.0.6-rc02", "4.0.6"),
+        ("<4.0.6", "4.0.5-rc02", "4.0.6-rc02"),
     ],
 )
 def test_version_range_operators(
@@ -402,6 +402,7 @@ def test_version_range_normalizes_spacing() -> None:
         "4.0.6",
         "=>4.0.6",
         ">=4.0",
+        ">=4.0.6-rc01",
         ">=4.0.6,",
         ">=4.0.6,<4.0.6",
         ">=4.1.0,<4.0.0",
@@ -437,7 +438,7 @@ def test_unknown_version_never_matches_a_range() -> None:
     assert DorisVersionRange(">=3.0.0").contains(unknown) is False
 
 
-def test_version_range_orders_rc_before_stable_and_ignores_commit() -> None:
+def test_version_range_uses_core_and_ignores_release_metadata() -> None:
     stable_range = DorisVersionRange(">=4.0.6")
     release_candidate = parse_doris_version_comment(
         "Doris version doris-4.0.6-rc03-43f06a5e26"
@@ -446,7 +447,7 @@ def test_version_range_orders_rc_before_stable_and_ignores_commit() -> None:
         "Doris version doris-4.0.6-abcdef1234"
     )
 
-    assert stable_range.contains(release_candidate) is False
+    assert stable_range.contains(release_candidate) is True
     assert stable_range.contains(stable_with_commit) is True
     assert DorisVersionRange("==4.0.6").contains(stable_with_commit) is True
 
@@ -554,7 +555,7 @@ def test_lineage_native_and_audit_paths_are_both_explicit() -> None:
         ("4.1.0", False),
         ("4.1.1", False),
         ("4.1.2", False),
-        ("4.1.3-rc01", False),
+        ("4.1.3-rc01", True),
         ("4.1.3", True),
     ],
 )
@@ -856,7 +857,7 @@ def test_matrix_rejects_a_prerelease_minimum() -> None:
     payload = _matrix_payload()
     payload["minimum_supported_version"] = "3.0.0-rc01"
 
-    with pytest.raises(ValidationError, match="minimum supported version"):
+    with pytest.raises(ValidationError, match="version literal"):
         DorisFeatureMatrix.model_validate(payload)
 
 

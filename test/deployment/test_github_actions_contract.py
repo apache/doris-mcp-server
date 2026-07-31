@@ -77,11 +77,13 @@ def test_quality_test_and_package_gates_cover_the_release_contract():
 
     assert "uv lock --check" in quality
     assert "uv sync --frozen --group dev" in quality
+    assert "uv run python generate_tool_catalog.py --check" in quality
     assert "uv run ruff check ." in quality
     assert "uv run mypy doris_mcp_server" in quality
     assert (
         "uv run bandit -q -c pyproject.toml -r "
-        "doris_mcp_server doris_mcp_client generate_requirements.py"
+        "doris_mcp_server doris_mcp_client generate_requirements.py "
+        "generate_tool_catalog.py"
     ) in " ".join(quality.split())
 
     assert "uv sync --frozen --group dev" in tests

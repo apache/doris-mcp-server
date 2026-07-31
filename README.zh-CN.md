@@ -32,8 +32,8 @@ Doris MCP Server 是一个基于 Python 和 FastAPI 的
 
 ## 发布状态
 
-当前包版本和最新 Git 标签为 `0.6.1`。`master` 分支还包含标签之后、尚未发布的
-变更，这些内容记录在 [CHANGELOG 的 Unreleased 小节](CHANGELOG.md#unreleased)。
+The authoritative package version and release status are maintained in the
+[English README](README.md) and [CHANGELOG](CHANGELOG.md).
 
 `master` 分支上的 MCP `2026-07-28` 协议兼容性已在 Streamable HTTP 和 stdio
 两种传输上达到 GA。这个结论仅指协议兼容性；项目包元数据仍为 **Beta**，部署前
@@ -69,7 +69,7 @@ Doris MCP Server 是一个基于 Python 和 FastAPI 的
 ### 从 PyPI 安装
 
 ```bash
-pip install doris-mcp-server==0.6.1
+pip install doris-mcp-server==1.0.0
 ```
 
 安装后会提供两个命令：

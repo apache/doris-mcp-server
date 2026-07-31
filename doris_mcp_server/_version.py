@@ -16,4 +16,4 @@
 # under the License.
 """Build-time product version source."""
 
-__version__ = "0.6.1"
+__version__ = "1.0.0"

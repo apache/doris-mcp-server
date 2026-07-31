@@ -172,7 +172,7 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
 
     assert base.route.fingerprint == "route-a"
     assert base.capability_generation == 3
-    assert base.version_vector.master_fe.normalized == "4.0.5rc1"
+    assert base.version_vector.master_fe.normalized == "4.0.5"
     assert len(base.version_vector.follower_fes) == 1
     assert len(base.version_vector.backends) == 2
     assert base.mixed_versions is False
@@ -792,7 +792,7 @@ async def test_detector_ignores_explicitly_dead_backend_for_version_gating() -> 
 
     assert tuple(
         version.normalized for version in snapshot.version_vector.backends
-    ) == ("4.0.5rc1",)
+    ) == ("4.0.5",)
     assert evaluation.compatible is True
 
 
@@ -827,7 +827,7 @@ async def test_detector_uses_fallback_for_unknown_master_and_retains_follower() 
         variant_name="native_lineage_status",
     )
 
-    assert snapshot.version_vector.master_fe.normalized == "4.0.5rc1"
+    assert snapshot.version_vector.master_fe.normalized == "4.0.5"
     assert len(snapshot.version_vector.follower_fes) == 1
     assert snapshot.version_vector.follower_fes[0].is_parsed is False
     assert evaluation.compatible is False
@@ -1149,7 +1149,7 @@ async def test_cluster_probe_keeps_405_compaction_on_real_legacy_evidence(
 
     snapshot = await detector.detect_domain(base, "doris_cluster", None)
 
-    assert snapshot.version_vector.master_fe.normalized == "4.0.5rc1"
+    assert snapshot.version_vector.master_fe.normalized == "4.0.5"
     assert (
         snapshot.probe("information_schema.doris_be_compaction_tasks").status
         is CapabilityProbeStatus.UNSUPPORTED

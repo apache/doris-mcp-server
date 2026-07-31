@@ -310,8 +310,8 @@ async def test_realistic_runtime_evidence_stays_within_manifest_budget() -> None
             reason_code="CAPABILITY_VERIFIED_DEGRADED_UNCERTIFIED",
             active_variant="legacy_compaction_summary",
             detected_versions={
-                "master_fe": ("4.0.5rc1",),
-                "be": ("4.0.5rc1",),
+                "master_fe": ("4.0.5",),
+                "be": ("4.0.5",),
             },
             evidence_sources=(
                 "version_probe",

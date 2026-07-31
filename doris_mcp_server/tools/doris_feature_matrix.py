@@ -70,7 +70,7 @@ PullRequestReference = Annotated[
 ]
 
 _VERSION_LITERAL_PATTERN = re.compile(
-    r"\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\d*)?",
+    r"\d+\.\d+\.\d+",
     re.IGNORECASE,
 )
 _RANGE_CLAUSE_PATTERN = re.compile(
@@ -812,7 +812,7 @@ def _version_literal(version: DorisVersion) -> str:
     core = version.core
     if core is None:
         raise ValueError("Cannot format an unparsed Doris version")
-    return f"{core}-{version.prerelease}" if version.prerelease else core
+    return core
 
 
 def _minimum_parsed_version(
@@ -1411,7 +1411,6 @@ FEATURE_DEFINITIONS = (
         _variant(
             "compaction_task_tracker",
             ranges=(">=4.0.6,<4.1.0", ">=4.1.1"),
-            excluded_ranges=(">=4.1.0-alpha0,<4.1.1",),
             system_objects=("information_schema.doris_be_compaction_tasks",),
             probes=("compaction_system_table_or_http_api",),
             sources=("DORIS_RELEASE_4_0_6", "DORIS_RELEASE_4_1_1"),
