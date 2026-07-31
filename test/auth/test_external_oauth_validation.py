@@ -79,6 +79,8 @@ class _FlowOAuthClient:
 def _provider(client) -> OAuthAuthenticationProvider:
     provider = object.__new__(OAuthAuthenticationProvider)
     provider.config = DorisConfig()
+    provider.config.semantic.oauth_tools_enabled = True
+    provider.config.semantic.oauth_resources_enabled = True
     provider.enabled = True
     provider.oauth_client = client
     return provider
@@ -122,6 +124,8 @@ async def test_every_external_oauth_entry_validates_before_userinfo(flow):
     assert context.oauth_resource == RESOURCE
     assert context.oauth_audiences == [RESOURCE]
     assert context.pool_key == "global"
+    assert context.semantic_tools_enabled is True
+    assert context.semantic_resources_enabled is True
 
 
 @pytest.mark.asyncio

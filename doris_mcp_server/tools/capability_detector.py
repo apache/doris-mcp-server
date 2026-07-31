@@ -514,6 +514,8 @@ class DorisCapabilityDetector:
                     probes.update(
                         _combine_lakehouse_evidence_probes(probes)
                     )
+                elif domain_name == "doris_semantic":
+                    probes.update(_semantic_adapter_evidence_probes())
                 completed_route = self.route_identity(auth_context)
                 if completed_route.fingerprint != base.route.fingerprint:
                     raise CapabilityRouteChangedError(
@@ -1980,6 +1982,32 @@ def _combine_lakehouse_evidence_probes(
                 ),
                 evidence_sources=variant_metadata.evidence_sources,
             )
+    return derived
+
+
+def _semantic_adapter_evidence_probes() -> dict[str, CapabilityProbeEvidence]:
+    """Expose server capability while validating exact models at call time."""
+    supported = CapabilityProbeEvidence(
+        probe_id="ossie_spec_and_registry_ready",
+        status=CapabilityProbeStatus.SUPPORTED,
+        reason_code="PINNED_OSSIE_ADAPTER_READY",
+        evidence_sources=("pinned_ossie_schema", "provider_registry"),
+    )
+    derived = {
+        supported.probe_id: supported,
+    }
+    for probe_id in (
+        "explicit_model_ref_valid",
+        "ossie_model_valid",
+        "semantic_policy_ready",
+        "doris_binding_metadata_readable",
+    ):
+        derived[probe_id] = CapabilityProbeEvidence(
+            probe_id=probe_id,
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="SEMANTIC_TARGET_REQUIRES_CALL_TIME_VALIDATION",
+            evidence_sources=("pinned_ossie_schema", "active_doris_route"),
+        )
     return derived
 
 

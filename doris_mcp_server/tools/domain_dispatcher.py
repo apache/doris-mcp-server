@@ -41,6 +41,7 @@ from ..schema_validation import (
     ToolOutputValidationError,
     ToolSchemaGuard,
 )
+from ..semantic.runtime import SemanticRuntimeFailure
 from ..state_handles import StateHandleCodec, StateHandleError
 from ..utils.catalog_metadata import CatalogMetadataFailure
 from ..utils.cluster_runtime import ClusterRuntimeFailure
@@ -752,6 +753,31 @@ class DomainDispatcher:
                         "LAKEHOUSE_TABLE_FORMAT_UNSUPPORTED",
                         "LAKEHOUSE_VARIANT_COLUMN_NOT_FOUND",
                         "LAKEHOUSE_COLUMN_NOT_VARIANT",
+                    }
+                    else DomainErrorCode.CHILD_EXECUTION_FAILED
+                ),
+                str(exc),
+                child_tool=child.name,
+                manifest_version=manifest.manifest_version,
+                retryable=exc.retryable,
+                details={
+                    "rediscover": False,
+                    "reason_code": exc.reason_code,
+                    "status_code": exc.status_code,
+                },
+            )
+        except SemanticRuntimeFailure as exc:
+            self._audit(feature_id, arguments, "error", started)
+            return self._error(
+                domain.name,
+                (
+                    DomainErrorCode.CHILD_ARGUMENTS_INVALID
+                    if exc.reason_code
+                    in {
+                        "SEMANTIC_ARGUMENT_INVALID",
+                        "SEMANTIC_CONTEXT_TOO_LARGE",
+                        "SEMANTIC_DEPENDENCY_UNRESOLVED",
+                        "SEMANTIC_MODEL_NOT_FOUND",
                     }
                     else DomainErrorCode.CHILD_EXECUTION_FAILED
                 ),

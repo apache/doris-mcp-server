@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 BASE_DORIS_OAUTH_SCOPES = frozenset({"tool:list"})
 RESOURCE_SCOPES = frozenset({"resource:list", "resource:read"})
+SEMANTIC_SCOPES = frozenset({"semantic:read"})
 
 
 def child_call_scope(feature_id: str) -> str:
@@ -66,9 +67,14 @@ class DorisOAuthScopePolicy:
         self,
         security_config: "SecurityConfig | None" = None,
         server_allowed_scopes: set[str] | None = None,
+        *,
+        semantic_read_enabled: bool = False,
     ) -> None:
         if server_allowed_scopes is None:
-            self.server_allowed_scopes = self._build_server_allowed_scopes(security_config)
+            self.server_allowed_scopes = self._build_server_allowed_scopes(
+                security_config,
+                semantic_read_enabled=semantic_read_enabled,
+            )
         else:
             self.server_allowed_scopes = set(server_allowed_scopes)
         self.server_default_scopes = {
@@ -80,15 +86,21 @@ class DorisOAuthScopePolicy:
         self.known_scopes = (
             set(BASE_DORIS_OAUTH_SCOPES)
             | set(RESOURCE_SCOPES)
+            | set(SEMANTIC_SCOPES)
             | set(KNOWN_CHILD_SCOPES)
             | set(FORBIDDEN_DORIS_OAUTH_SCOPES)
         )
 
     def _build_server_allowed_scopes(
-        self, security_config: "SecurityConfig | None"
+        self,
+        security_config: "SecurityConfig | None",
+        *,
+        semantic_read_enabled: bool,
     ) -> set[str]:
         allowed = set(BASE_DORIS_OAUTH_SCOPES)
         allowed.update(RESOURCE_SCOPES)
+        if semantic_read_enabled:
+            allowed.update(SEMANTIC_SCOPES)
 
         if getattr(
             security_config,

@@ -270,6 +270,18 @@ def authorized_child_discovery(
         for collection_name in collection_names
         for value in (getattr(auth_context, collection_name, None) or ())
     }
+    if is_oauth and domain.name == "doris_semantic":
+        if (
+            not bool(
+                getattr(
+                    auth_context,
+                    "semantic_tools_enabled",
+                    False,
+                )
+            )
+            or "semantic:read" not in controls
+        ):
+            return False
     child_controls = {
         value
         for value in controls
@@ -334,6 +346,18 @@ def authorized_child_execution(
         for collection_name in collection_names
         for value in (getattr(auth_context, collection_name, None) or ())
     }
+    if is_oauth and domain.name == "doris_semantic":
+        if (
+            not bool(
+                getattr(
+                    auth_context,
+                    "semantic_tools_enabled",
+                    False,
+                )
+            )
+            or "semantic:read" not in controls
+        ):
+            return False
 
     if auth_method == "doris_oauth":
         feature_id = f"{domain.name}.{child.name}"

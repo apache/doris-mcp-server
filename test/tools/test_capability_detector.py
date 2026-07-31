@@ -273,6 +273,39 @@ async def test_lakehouse_probes_derive_target_sensitive_advanced_facets() -> Non
 
 
 @pytest.mark.asyncio
+async def test_semantic_probes_are_static_and_target_validated_at_call_time() -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.ossie",
+    )
+    statements_before_domain_probe = tuple(connection.statements)
+
+    semantic = await detector.detect_domain(base, "doris_semantic", None)
+
+    assert semantic.probed_domains == frozenset({"doris_semantic"})
+    registry = semantic.probe("ossie_spec_and_registry_ready")
+    assert registry.status is CapabilityProbeStatus.SUPPORTED
+    assert registry.reason_code == "PINNED_OSSIE_ADAPTER_READY"
+    for probe_id in (
+        "explicit_model_ref_valid",
+        "ossie_model_valid",
+        "semantic_policy_ready",
+        "doris_binding_metadata_readable",
+    ):
+        evidence = semantic.probe(probe_id)
+        assert evidence.status is CapabilityProbeStatus.DEGRADED
+        assert (
+            evidence.reason_code
+            == "SEMANTIC_TARGET_REQUIRES_CALL_TIME_VALIDATION"
+        )
+    assert tuple(connection.statements) == statements_before_domain_probe
+
+
+@pytest.mark.asyncio
 async def test_search_probes_use_visible_target_and_isolated_connections() -> None:
     connection = _ProbeConnection()
     connection.row_overrides[_SEARCH_TARGET_DISCOVERY_SQL] = [

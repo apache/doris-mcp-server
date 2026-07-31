@@ -56,7 +56,13 @@ class DorisOAuthProvider:
             config, "effective_auth", None
         )
         self.store = store or DorisOAuthStore()
-        self.scope_policy = DorisOAuthScopePolicy(self.security_config)
+        self.scope_policy = DorisOAuthScopePolicy(
+            self.security_config,
+            semantic_read_enabled=bool(
+                config.semantic.oauth_tools_enabled
+                or config.semantic.oauth_resources_enabled
+            ),
+        )
         self.redirect_policy = DorisOAuthRedirectPolicy(
             allow_production_wildcards=getattr(
                 self.security_config,
@@ -573,6 +579,10 @@ class DorisOAuthProvider:
             oauth_resource=updated.resource,
             oauth_audiences=[updated.resource],
             pool_key=f"doris_user:{updated.doris_user}",
+            semantic_tools_enabled=self.config.semantic.oauth_tools_enabled,
+            semantic_resources_enabled=(
+                self.config.semantic.oauth_resources_enabled
+            ),
         )
         auth_context.doris_oauth_child_tools_enabled = bool(
             getattr(

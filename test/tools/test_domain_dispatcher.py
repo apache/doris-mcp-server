@@ -26,6 +26,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from doris_mcp_server.schema_validation import SchemaLimits, ToolSchemaGuard
+from doris_mcp_server.semantic.runtime import SemanticRuntimeFailure
 from doris_mcp_server.tools.domain_catalog import (
     CURRENT_FLAT_TOOL_NAMES,
     DORIS_DOMAIN_CATALOG,
@@ -176,6 +177,18 @@ def test_lakehouse_domain_binds_all_three_children() -> None:
     )
 
 
+def test_semantic_domain_binds_all_four_children() -> None:
+    manager = _manager()
+    bound = BoundHandlerAvailabilityProvider(manager)
+    semantic = DORIS_DOMAIN_CATALOG.resolve_domain("doris_semantic")
+
+    assert len(semantic.children) == 4
+    assert all(
+        bound.is_bound(semantic.name, child.name)
+        for child in semantic.children
+    )
+
+
 @pytest.mark.asyncio
 async def test_governance_failures_keep_stable_reason_codes() -> None:
     manager = _manager("doris_governance.analyze_columns")
@@ -232,6 +245,38 @@ async def test_lakehouse_failures_keep_stable_reason_codes() -> None:
     assert result.mode == "error"
     assert result.error.code is DomainErrorCode.CHILD_ARGUMENTS_INVALID
     assert result.error.details["reason_code"] == "LAKEHOUSE_TABLE_NOT_FOUND"
+    assert result.error.details["status_code"] == 404
+
+
+@pytest.mark.asyncio
+async def test_semantic_failures_keep_stable_reason_codes() -> None:
+    manager = _manager("doris_semantic.get_semantic_context")
+    manager.semantic_runtime.get_semantic_context = AsyncMock(
+        side_effect=SemanticRuntimeFailure(
+            "SEMANTIC_DEPENDENCY_UNRESOLVED",
+            "Requested semantic concept is unavailable.",
+            status_code=404,
+        )
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_semantic",
+        {
+            "child_tool": "get_semantic_context",
+            "arguments": {
+                "model_ref": "retail/main",
+                "request": {"metrics": ["missing_metric"]},
+            },
+        },
+        None,
+    )
+
+    assert result.mode == "error"
+    assert result.error.code is DomainErrorCode.CHILD_ARGUMENTS_INVALID
+    assert (
+        result.error.details["reason_code"]
+        == "SEMANTIC_DEPENDENCY_UNRESOLVED"
+    )
     assert result.error.details["status_code"] == 404
 
 

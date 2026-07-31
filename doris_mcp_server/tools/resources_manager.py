@@ -29,6 +29,7 @@ from urllib.parse import quote, unquote
 
 from mcp.types import Resource
 
+from ..semantic.runtime import DorisSemanticRuntime, SemanticRuntimeFailure
 from ..utils.db import DorisConnection, DorisConnectionManager
 from ..utils.logger import get_logger
 from ..utils.redaction import redact_uri
@@ -155,6 +156,7 @@ class DorisResourcesManager:
     def __init__(self, connection_manager: DorisConnectionManager):
         self.connection_manager = connection_manager
         self.metadata_cache = MetadataCache(enabled=True)
+        self.semantic_runtime = DorisSemanticRuntime(connection_manager)
 
     def _metadata_cache_scope(self) -> str:
         auth_context = get_auth_context()
@@ -381,6 +383,7 @@ class DorisResourcesManager:
                     mime_type="application/json",
                 )
             )
+            resources.extend(await self._list_semantic_resources())
 
         except Exception as e:
             logger.exception("Failed to get resource list")
@@ -430,11 +433,26 @@ class DorisResourcesManager:
                         mime_type="application/json",
                     )
                 )
+        resources.extend(await self._list_semantic_resources())
         return resources
+
+    async def _list_semantic_resources(self) -> list[Resource]:
+        descriptors = await self.semantic_runtime.list_resource_descriptors()
+        return [
+            Resource(
+                uri=descriptor["uri"],
+                name=descriptor["name"],
+                description=descriptor["description"],
+                mime_type="application/json",
+            )
+            for descriptor in descriptors
+        ]
 
     async def read_resource(self, uri: str) -> str:
         """Read detailed information of specific resource"""
         try:
+            if uri.startswith("doris://semantic/"):
+                return await self.semantic_runtime.read_resource(uri)
             resource_type, resource_name, db_name = self._parse_resource_uri(uri)
 
             if resource_type == "table":
@@ -448,6 +466,22 @@ class DorisResourcesManager:
                     f"Unsupported resource type: {resource_type}"
                 )
 
+        except SemanticRuntimeFailure as e:
+            if e.reason_code == "SEMANTIC_MODEL_NOT_FOUND":
+                payload = {
+                    "error": "Resource not found",
+                    "uri": redact_uri(uri),
+                    "error_code": ResourceNotFoundError.error_code,
+                }
+                return json.dumps(payload, ensure_ascii=False, indent=2)
+            raise ResourceMetadataError(
+                str(e),
+                error_code=e.reason_code,
+                status_code=e.status_code,
+                list_error_category=(
+                    "backend_unavailable" if e.retryable else "permission_denied"
+                ),
+            ) from e
         except Exception as e:
             self._reraise_if_doris_oauth_resource_error(e)
             if isinstance(e, InvalidResourceURIError):

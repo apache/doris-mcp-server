@@ -370,6 +370,48 @@ async def test_oauth_without_exact_child_scope_discovers_no_children() -> None:
 
 
 @pytest.mark.asyncio
+async def test_oauth_semantic_discovery_requires_channel_and_semantic_scope() -> None:
+    provider = StaticAvailabilityProvider(_availability())
+    child_scope = "child:call:doris_semantic:list_semantic_models"
+    disabled_channel = AuthContext(
+        auth_method="external_oauth",
+        oauth_scopes=[child_scope, "semantic:read"],
+    )
+    missing_semantic_scope = AuthContext(
+        auth_method="external_oauth",
+        oauth_scopes=[child_scope],
+        semantic_tools_enabled=True,
+    )
+    enabled = AuthContext(
+        auth_method="external_oauth",
+        oauth_scopes=[child_scope, "semantic:read"],
+        semantic_tools_enabled=True,
+    )
+
+    disabled_manifest = await _service(provider).call(
+        "doris_semantic",
+        {},
+        disabled_channel,
+    )
+    missing_scope_manifest = await _service(provider).call(
+        "doris_semantic",
+        {},
+        missing_semantic_scope,
+    )
+    enabled_manifest = await _service(provider).call(
+        "doris_semantic",
+        {},
+        enabled,
+    )
+
+    assert disabled_manifest.children == ()
+    assert missing_scope_manifest.children == ()
+    assert [child.name for child in enabled_manifest.children] == [
+        "list_semantic_models"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_doris_oauth_requires_gate_allowlist_and_exact_scope() -> None:
     provider = StaticAvailabilityProvider(_availability())
     scope = "child:call:doris_catalog:list_tables"

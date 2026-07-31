@@ -68,6 +68,7 @@ from .lakehouse_handlers import LakehouseToolHandlersMixin
 from .pipeline_handlers import PipelineToolHandlersMixin
 from .query_handlers import QueryToolHandlersMixin
 from .search_handlers import SearchToolHandlersMixin
+from .semantic_handlers import SemanticToolHandlersMixin
 from .tool_provider import CustomToolProvider, ToolProviderRuntime
 from .tool_registry import ToolRegistryError
 
@@ -82,6 +83,7 @@ class DorisToolsManager(
     SearchToolHandlersMixin,
     GovernanceToolHandlersMixin,
     LakehouseToolHandlersMixin,
+    SemanticToolHandlersMixin,
     DomainManifestManagerMixin,
 ):
     """Apache Doris Tools Manager"""
@@ -132,6 +134,7 @@ class DorisToolsManager(
         )
         self._initialize_governance_handlers(connection_manager)
         self._initialize_lakehouse_handlers(connection_manager)
+        self._initialize_semantic_handlers(connection_manager)
         self._capability_registry: CapabilityRegistry | None = None
         if domain_availability_provider is None:
             bound_handlers = BoundHandlerAvailabilityProvider(self)

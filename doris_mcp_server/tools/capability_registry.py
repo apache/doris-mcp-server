@@ -125,6 +125,31 @@ class CapabilityProviderRegistry:
                     and isinstance(configured_store, str)
                     and bool(configured_store.strip())
                 )
+            elif provider_id == "ossie_provider":
+                semantic_config = getattr(config, "semantic", None)
+                semantic_enabled = getattr(
+                    semantic_config,
+                    "enabled",
+                    False,
+                )
+                model_directory = getattr(
+                    semantic_config,
+                    "model_directory",
+                    "",
+                )
+                binding_manifest = getattr(
+                    semantic_config,
+                    "binding_manifest",
+                    "",
+                )
+                configured = (
+                    configured
+                    and semantic_enabled is True
+                    and isinstance(model_directory, str)
+                    and bool(model_directory.strip())
+                    and isinstance(binding_manifest, str)
+                    and bool(binding_manifest.strip())
+                )
             providers[provider_id] = CapabilityProviderEvidence(
                 provider_id=provider_id,
                 status=(

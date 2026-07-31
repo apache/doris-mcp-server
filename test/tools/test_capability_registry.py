@@ -24,6 +24,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -549,6 +550,137 @@ def test_external_catalog_provider_is_ready_only_when_lakehouse_is_bound() -> No
     assert bound.reason_code == "PROVIDER_CONFIGURED"
     assert unbound.status is CapabilityProbeStatus.MISCONFIGURED
     assert unbound.reason_code == "PROVIDER_NOT_CONFIGURED"
+
+
+@pytest.mark.parametrize(
+    ("enabled", "paths_configured", "bound", "expected_status"),
+    [
+        (False, True, True, CapabilityProbeStatus.MISCONFIGURED),
+        (True, False, True, CapabilityProbeStatus.MISCONFIGURED),
+        (True, True, False, CapabilityProbeStatus.MISCONFIGURED),
+        (True, True, True, CapabilityProbeStatus.SUPPORTED),
+    ],
+)
+def test_ossie_provider_requires_opt_in_paths_and_bound_consumer(
+    enabled: bool,
+    paths_configured: bool,
+    bound: bool,
+    expected_status: CapabilityProbeStatus,
+) -> None:
+    handlers = (
+        _BoundHandlers(
+            "doris_semantic.list_semantic_models",
+            "doris_semantic.get_semantic_context",
+        )
+        if bound
+        else _BoundHandlers()
+    )
+    registry = CapabilityProviderRegistry.from_runtime(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=handlers,  # type: ignore[arg-type]
+        config=SimpleNamespace(
+            adbc=SimpleNamespace(enabled=False),
+            semantic=SimpleNamespace(
+                enabled=enabled,
+                model_directory="/srv/ossie" if paths_configured else "",
+                binding_manifest=(
+                    "/srv/ossie/bindings.yaml" if paths_configured else ""
+                ),
+            ),
+        ),
+    )
+
+    provider = registry.snapshot().providers["ossie_provider"]
+
+    assert provider.status is expected_status
+    assert provider.reason_code == (
+        "PROVIDER_CONFIGURED"
+        if expected_status is CapabilityProbeStatus.SUPPORTED
+        else "PROVIDER_NOT_CONFIGURED"
+    )
+
+
+def test_ossie_provider_rejects_unstructured_mock_configuration() -> None:
+    registry = CapabilityProviderRegistry.from_runtime(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(
+            "doris_semantic.list_semantic_models",
+        ),  # type: ignore[arg-type]
+        config=Mock(),
+    )
+
+    provider = registry.snapshot().providers["ossie_provider"]
+
+    assert provider.status is CapabilityProbeStatus.MISCONFIGURED
+    assert provider.reason_code == "PROVIDER_NOT_CONFIGURED"
+
+
+def test_semantic_availability_keeps_call_time_validation_callable() -> None:
+    bound = _BoundHandlers(
+        "doris_semantic.list_semantic_models",
+        "doris_semantic.get_semantic_context",
+    )
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=bound,  # type: ignore[arg-type]
+    )
+    provider = CapabilityProviderRegistry(
+        {
+            "ossie_provider": CapabilityProviderEvidence(
+                provider_id="ossie_provider",
+                status=CapabilityProbeStatus.SUPPORTED,
+                reason_code="PROVIDER_CONFIGURED",
+            )
+        }
+    ).snapshot()
+    probes = {
+        "ossie_spec_and_registry_ready": CapabilityProbeEvidence(
+            probe_id="ossie_spec_and_registry_ready",
+            status=CapabilityProbeStatus.SUPPORTED,
+            reason_code="PINNED_OSSIE_ADAPTER_READY",
+        ),
+        "explicit_model_ref_valid": CapabilityProbeEvidence(
+            probe_id="explicit_model_ref_valid",
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="SEMANTIC_TARGET_REQUIRES_CALL_TIME_VALIDATION",
+        ),
+        "semantic_policy_ready": CapabilityProbeEvidence(
+            probe_id="semantic_policy_ready",
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="SEMANTIC_TARGET_REQUIRES_CALL_TIME_VALIDATION",
+        ),
+    }
+    snapshot = _snapshot(probes=probes)
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_semantic")
+
+    listed = evaluator.evaluate(
+        snapshot=snapshot,
+        providers=provider,
+        domain=domain,
+        child=DORIS_DOMAIN_CATALOG.resolve_child(
+            "doris_semantic",
+            "list_semantic_models",
+        ),
+        auth_context=None,
+    )
+    context = evaluator.evaluate(
+        snapshot=snapshot,
+        providers=provider,
+        domain=domain,
+        child=DORIS_DOMAIN_CATALOG.resolve_child(
+            "doris_semantic",
+            "get_semantic_context",
+        ),
+        auth_context=None,
+    )
+
+    assert listed.status is AvailabilityStatus.AVAILABLE
+    assert listed.callable is True
+    assert context.status is AvailabilityStatus.DEGRADED
+    assert context.callable is True
+    assert context.reason_code == "CAPABILITY_VERIFIED_DEGRADED_UNCERTIFIED"
+    assert "Probe explicit_model_ref_valid is degraded." in context.limitations
+    assert "Probe semantic_policy_ready is degraded." in context.limitations
 
 
 class _MutableClock:

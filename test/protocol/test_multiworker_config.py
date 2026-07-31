@@ -281,6 +281,107 @@ def test_lakehouse_runtime_controls_load_serialize_and_validate(
     assert "Lakehouse Variant path limit must be in the range 1-2000" in errors
 
 
+def test_semantic_runtime_controls_load_serialize_and_validate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    model_directory = str(tmp_path / "models")
+    binding_manifest = str(tmp_path / "bindings.yaml")
+    monkeypatch.setenv("OSSIE_ENABLED", "true")
+    monkeypatch.setenv("OSSIE_MODEL_DIRECTORY", model_directory)
+    monkeypatch.setenv("OSSIE_BINDING_MANIFEST", binding_manifest)
+    monkeypatch.setenv("OSSIE_MAX_FILE_BYTES", "1048576")
+    monkeypatch.setenv("OSSIE_MAX_TOTAL_BYTES", "4194304")
+    monkeypatch.setenv("OSSIE_MAX_MODELS", "32")
+    monkeypatch.setenv("OSSIE_MAX_DEPTH", "24")
+    monkeypatch.setenv("OSSIE_MAX_ALIASES", "8")
+    monkeypatch.setenv("OSSIE_MAX_STRING_BYTES", "8192")
+    monkeypatch.setenv("OSSIE_MAX_EXPRESSION_BYTES", "2048")
+    monkeypatch.setenv("OSSIE_CONTEXT_MAX_BYTES", "8192")
+    monkeypatch.setenv("OSSIE_CONTEXT_HARD_MAX_BYTES", "32768")
+    monkeypatch.setenv("DORIS_OAUTH_SEMANTIC_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("DORIS_OAUTH_SEMANTIC_RESOURCES_ENABLED", "true")
+
+    configured = DorisConfig.from_env()
+
+    assert configured.to_dict()["semantic"] == {
+        "enabled": True,
+        "model_directory": model_directory,
+        "binding_manifest": binding_manifest,
+        "max_file_bytes": 1048576,
+        "max_total_bytes": 4194304,
+        "max_models": 32,
+        "max_depth": 24,
+        "max_aliases": 8,
+        "max_string_bytes": 8192,
+        "max_expression_bytes": 2048,
+        "context_max_bytes": 8192,
+        "context_hard_max_bytes": 32768,
+        "oauth_tools_enabled": True,
+        "oauth_resources_enabled": True,
+    }
+    assert configured.validate() == []
+
+    config_path = tmp_path / "doris-mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "semantic": {
+                    "enabled": True,
+                    "model_directory": model_directory,
+                    "binding_manifest": binding_manifest,
+                    "max_models": 12,
+                    "context_max_bytes": 4096,
+                    "context_hard_max_bytes": 16384,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    from_file = DorisConfig.from_file(str(config_path))
+    assert from_file.semantic.enabled is True
+    assert from_file.semantic.model_directory == model_directory
+    assert from_file.semantic.binding_manifest == binding_manifest
+    assert from_file.semantic.max_models == 12
+    assert from_file.semantic.context_max_bytes == 4096
+    assert from_file.semantic.context_hard_max_bytes == 16384
+
+    from_file.semantic.max_file_bytes = 512
+    from_file.semantic.max_total_bytes = 256
+    from_file.semantic.max_models = 0
+    from_file.semantic.max_depth = 3
+    from_file.semantic.max_aliases = 257
+    from_file.semantic.max_string_bytes = 128
+    from_file.semantic.max_expression_bytes = 32
+    from_file.semantic.context_max_bytes = 65537
+    from_file.semantic.context_hard_max_bytes = 1023
+    errors = from_file.validate()
+    assert any(error.startswith("Ossie file byte limit") for error in errors)
+    assert any(error.startswith("Ossie total byte limit") for error in errors)
+    assert any(error.startswith("Ossie model limit") for error in errors)
+    assert any(error.startswith("Ossie depth limit") for error in errors)
+    assert any(error.startswith("Ossie alias limit") for error in errors)
+    assert any(error.startswith("Ossie string byte limit") for error in errors)
+    assert any(error.startswith("Ossie expression byte limit") for error in errors)
+    assert any(error.startswith("Ossie context byte limit") for error in errors)
+    assert any(error.startswith("Ossie context hard byte limit") for error in errors)
+    assert (
+        "Ossie total byte limit must not be smaller than file byte limit"
+        in errors
+    )
+    assert (
+        "Ossie context byte limit must not exceed the hard byte limit"
+        in errors
+    )
+
+    incomplete = DorisConfig()
+    incomplete.semantic.enabled = True
+    assert (
+        "Enabled Ossie support requires model directory and binding manifest"
+        in incomplete.validate()
+    )
+
+
 def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
     monkeypatch,
 ):
@@ -340,6 +441,20 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.lakehouse.max_partitions = 150
     config.lakehouse.max_variant_sample_rows = 40
     config.lakehouse.max_variant_paths = 300
+    config.semantic.enabled = True
+    config.semantic.model_directory = "/srv/doris-mcp/ossie"
+    config.semantic.binding_manifest = "/srv/doris-mcp/ossie/bindings.yaml"
+    config.semantic.max_file_bytes = 1048576
+    config.semantic.max_total_bytes = 4194304
+    config.semantic.max_models = 32
+    config.semantic.max_depth = 24
+    config.semantic.max_aliases = 8
+    config.semantic.max_string_bytes = 8192
+    config.semantic.max_expression_bytes = 2048
+    config.semantic.context_max_bytes = 8192
+    config.semantic.context_hard_max_bytes = 32768
+    config.semantic.oauth_tools_enabled = True
+    config.semantic.oauth_resources_enabled = True
     config.mcp_state_handle_secret = "parent-shared-state-handle-secret-value"
     config.mcp_state_handle_ttl_seconds = 45
 
@@ -395,6 +510,23 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.lakehouse.max_partitions == 150
     assert child_config.lakehouse.max_variant_sample_rows == 40
     assert child_config.lakehouse.max_variant_paths == 300
+    assert child_config.semantic.enabled is True
+    assert child_config.semantic.model_directory == "/srv/doris-mcp/ossie"
+    assert (
+        child_config.semantic.binding_manifest
+        == "/srv/doris-mcp/ossie/bindings.yaml"
+    )
+    assert child_config.semantic.max_file_bytes == 1048576
+    assert child_config.semantic.max_total_bytes == 4194304
+    assert child_config.semantic.max_models == 32
+    assert child_config.semantic.max_depth == 24
+    assert child_config.semantic.max_aliases == 8
+    assert child_config.semantic.max_string_bytes == 8192
+    assert child_config.semantic.max_expression_bytes == 2048
+    assert child_config.semantic.context_max_bytes == 8192
+    assert child_config.semantic.context_hard_max_bytes == 32768
+    assert child_config.semantic.oauth_tools_enabled is True
+    assert child_config.semantic.oauth_resources_enabled is True
     assert (
         child_config.mcp_state_handle_secret
         == "parent-shared-state-handle-secret-value"
