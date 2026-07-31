@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from typing import Collection
+
+from metricflow.semantic_interfaces.enum_extension import assert_values_exhausted
+from metricflow.semantic_interfaces.type_enums.date_part import DatePart
+from metricflow.semantics.errors.error_classes import UnsupportedEngineFeatureError
+from metricflow.semantics.sql.sql_exprs import SqlPercentileExpression, SqlPercentileFunctionType
+from typing_extensions import override
+
+from metricflow.protocols.sql_client import SqlEngine
+from metricflow.sql.render.expr_renderer import (
+    DefaultSqlExpressionRenderer,
+    SqlExpressionRenderer,
+    SqlExpressionRenderResult,
+)
+from metricflow.sql.render.sql_plan_renderer import DefaultSqlPlanRenderer
+
+
+class DatabricksSqlExpressionRenderer(DefaultSqlExpressionRenderer):
+    """Expression renderer for the Databricks engine."""
+
+    sql_engine = SqlEngine.DATABRICKS
+
+    @property
+    @override
+    def supported_percentile_function_types(self) -> Collection[SqlPercentileFunctionType]:
+        return {SqlPercentileFunctionType.CONTINUOUS, SqlPercentileFunctionType.APPROXIMATE_DISCRETE}
+
+    @override
+    def render_date_part(self, date_part: DatePart) -> str:
+        if date_part is DatePart.DOW:
+            return "DAYOFWEEK_ISO"
+
+        return super().render_date_part(date_part)
+
+    @override
+    def visit_percentile_expr(self, node: SqlPercentileExpression) -> SqlExpressionRenderResult:
+        """Render a percentile expression for Databricks."""
+        arg_rendered = self.render_sql_expr(node.order_by_arg)
+        params = arg_rendered.bind_parameter_set
+        percentile = node.percentile_args.percentile
+
+        if node.percentile_args.function_type is SqlPercentileFunctionType.CONTINUOUS:
+            function_str = "PERCENTILE_CONT"
+        elif node.percentile_args.function_type is SqlPercentileFunctionType.DISCRETE:
+            # discrete percentile only supported on databricks 11.0 >=. Disable for now.
+            raise UnsupportedEngineFeatureError(
+                "Discrete percentile aggregate not supported for Databricks.  Use "
+                + "continuous or approximate discrete percentile in all percentile simple-metrics."
+            )
+        elif node.percentile_args.function_type is SqlPercentileFunctionType.APPROXIMATE_CONTINUOUS:
+            raise UnsupportedEngineFeatureError(
+                "Approximate continuous percentile aggregate not supported for Databricks. Use "
+                + "continuous or approximate discrete percentile in all percentile simple-metrics."
+            )
+        elif node.percentile_args.function_type is SqlPercentileFunctionType.APPROXIMATE_DISCRETE:
+            return SqlExpressionRenderResult(
+                sql=f"APPROX_PERCENTILE({arg_rendered.sql}, {percentile})",
+                bind_parameter_set=params,
+            )
+        else:
+            assert_values_exhausted(node.percentile_args.function_type)
+
+        return SqlExpressionRenderResult(
+            sql=f"{function_str}({percentile}) WITHIN GROUP (ORDER BY ({arg_rendered.sql}))",
+            bind_parameter_set=params,
+        )
+
+
+class DatabricksSqlPlanRenderer(DefaultSqlPlanRenderer):
+    """Plan renderer for the Snowflake engine."""
+
+    EXPR_RENDERER = DatabricksSqlExpressionRenderer()
+
+    @property
+    @override
+    def expr_renderer(self) -> SqlExpressionRenderer:
+        return self.EXPR_RENDERER

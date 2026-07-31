@@ -1,27 +1,18 @@
-*.log
-*.log.*
-*.bak
-logs
-/configs/*.py
-.vscode/
+python/
+dist/
+build/
+*.egg-info
 __pycache__/
-*.log
+*.pyc
+*.pyo
+.DS_Store
+logs/
+workspace/
+dist/
+python/
+logs/
+*.tar.gz
 
-.python-version
-Pipfile.lock
-poetry.lock
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-.idea/
-.coverage
-.coverage.*
-coverage.xml
-tokens.json.lock
-/.secrets/
-/tmp/
+# Local MCP client config — carries a Bearer credential and a cluster URL.
+.mcp.json
+.vscode/

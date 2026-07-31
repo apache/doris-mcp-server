@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>doris-mcp-server 安装指南</title>
+<style>
+:root { --bg:#faf9f7; --card:#fff; --text:#2d2d2d; --muted:#6b7280; --border:#e5e7eb; --code-bg:#f3f4f6; --green:#059669; --warn:#d97706; }
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); line-height:1.75; font-size:15px; }
+header { background:#1e293b; color:#fff; padding:48px 24px 36px; text-align:center; }
+header h1 { font-size:1.6rem; font-weight:700; }
+.container { max-width:780px; margin:0 auto; padding:32px 20px 48px; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px 24px; margin-bottom:16px; }
+.card.ok { border-left:4px solid var(--green); }
+h2 { font-size:1.2rem; margin:28px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--border); }
+h3 { font-size:1rem; margin:16px 0 6px; }
+p { margin:6px 0; }
+code { background:var(--code-bg); padding:1px 5px; border-radius:3px; font-family:"SF Mono",monospace; font-size:.87em; }
+pre { background:#1e1e2e; color:#cdd6f4; padding:14px 18px; border-radius:6px; overflow-x:auto; margin:8px 0; font-size:.83rem; line-height:1.6; }
+pre .cmt { color:#6c7086; }
+table { width:100%; border-collapse:collapse; margin:8px 0; font-size:.88rem; }
+th { background:#f8fafc; text-align:left; padding:8px 12px; border-bottom:2px solid var(--border); }
+td { padding:8px 12px; border-bottom:1px solid var(--border); }
+footer { text-align:center; color:var(--muted); padding:20px; font-size:.8rem; border-top:1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📦 doris-mcp-server 安装指南</h1>
+  <p style="opacity:.6; margin-top:4px;">版本 1.3.1</p>
+</header>
+
+<div class="container">
+
+<h2>前置条件</h2>
+<div class="card">
+  <table>
+    <tr><td>OS</td><td>Linux x86_64</td></tr>
+    <tr><td>Doris</td><td>与 MCP Server <strong>同机</strong>，FE 端口 9030，admin 免密</td></tr>
+    <tr><td>端口</td><td>默认 3000</td></tr>
+  </table>
+</div>
+
+<h2>安装（3 步）</h2>
+
+<div class="card ok">
+  <h3>① 解压</h3>
+  <pre>tar xzf doris-mcp-server-1.3.1-linux-x64.tar.gz
+cd doris-mcp-server</pre>
+
+  <h3>② 配置</h3>
+  <p>编辑 <code>mcp-server.toml</code>，一般无需改动。如需改端口：</p>
+  <pre><span class="cmt"># mcp-server.toml</span>
+[server]
+mcp_port = 3000     <span class="cmt"># 换成你的端口</span></pre>
+
+  <h3>③ 启动</h3>
+  <pre><span class="cmt"># 前台</span>
+bash start-mcp-server.sh
+
+<span class="cmt"># 后台</span>
+nohup bash start-mcp-server.sh > /tmp/doris-mcp.log 2>&1 &</pre>
+  <p>看到 <code>Uvicorn running on http://0.0.0.0:3000</code> 表示成功。</p>
+</div>
+
+<h2>首次启动</h2>
+<div class="card">
+  <p>Admin 首次登录 WebUI 后自动创建 <code>example</code> 工作区，含：</p>
+  <table>
+    <tr><td>dw.orders</td><td>12 条示例订单</td></tr>
+    <tr><td>dw.users</td><td>5 条示例用户</td></tr>
+    <tr><td>dw.products</td><td>5 条示例商品</td></tr>
+    <tr><td>dw.dim_date</td><td>365 天日期维度</td></tr>
+  </table>
+  <p>5 个示例指标：total_amount、order_count、avg_amount、unique_users、user_count</p>
+  <p>默认不自动部署（<code>seed_example = false</code>），可使用 Reload 右侧的 Admin 专属按钮手动部署。设置为 <code>true</code> 后，Admin 首次登录时自动部署。</p>
+</div>
+
+<h2>验证</h2>
+<div class="card">
+  <p><strong>WebUI：</strong>浏览器打开 <code>http://&lt;IP&gt;:3000/mcp/web</code>，用 <code>admin:admin</code> 登录。</p>
+  <p><strong>Agent：</strong>Claude Code 中配置：</p>
+  <pre>claude mcp add --transport http doris http://&lt;IP&gt;:3000/mcp \
+  --header "Authorization: Bearer admin:admin"</pre>
+  <p>然后对话输入 <em>"检查服务健康状态"</em> 验证。</p>
+</div>
+
+<h2>常用操作</h2>
+<div class="card">
+  <table>
+    <tr><td>停止</td><td><code>fuser -k 3000/tcp</code></td></tr>
+    <tr><td>升级</td><td>停止 → 解压新版覆盖 → 重启</td></tr>
+    <tr><td>日志</td><td>审计日志 <code>./logs/audit.log</code>（路径见 <code>mcp-server.toml</code> 的 <code>[logging]</code> 配置）</td></tr>
+  </table>
+</div>
+
+<h2>可用 MCP Tool</h2>
+<div class="card">
+  <table>
+    <tr><th>Tool</th><th>用途</th></tr>
+    <tr><td><code>get_query_guide</code></td><td>Agent 工作流指引（第一步必调）</td></tr>
+    <tr><td><code>check_service_health</code></td><td>Doris 连通性 + workspace 状态</td></tr>
+    <tr><td><code>list_metrics</code></td><td>列出可用指标</td></tr>
+    <tr><td><code>list_dimensions_for_metric</code></td><td>查看指标的可用维度</td></tr>
+    <tr><td><code>query_metric</code></td><td><strong>核心查询</strong>，编译 + 执行语义 SQL</td></tr>
+    <tr><td><code>reload_semantic_layer</code></td><td>手动触发重载</td></tr>
+    <tr><td><code>list_databases</code></td><td>列出数据库</td></tr>
+    <tr><td><code>list_tables</code></td><td>列出表名</td></tr>
+    <tr><td><code>describe_table</code></td><td>查看表结构</td></tr>
+    <tr><td><code>execute_query</code></td><td>裸 SQL（仅只读），语义层兜底</td></tr>
+  </table>
+</div>
+
+<h2>常见问题</h2>
+<div class="card">
+  <table>
+    <tr><td>端口被占</td><td><code>fuser -k 3000/tcp</code> 或换端口</td></tr>
+    <tr><td>Agent 401</td><td>Token 格式 <code>用户名:密码</code></td></tr>
+    <tr><td>workspace not_ready</td><td>登录 WebUI → Validate 查看错误</td></tr>
+    <tr><td>Doris 连不上</td><td>确认 FE 在 127.0.0.1:9030，admin 免密</td></tr>
+  </table>
+</div>
+
+<footer>doris-mcp-server 1.3.1 · MetricFlow v0.209.0 · Apache Doris</footer>
+
+</div>
+</body>
+</html>
