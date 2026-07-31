@@ -62,6 +62,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Added the Apache SkyWalking Eyes release gate, its bounded repository
+  configuration, and the missing ASF license headers required for source
+  release verification.
 - Kept the fully available 12-child Semantic manifest below the 16 KiB
   progressive-disclosure budget by publishing only the child call signature;
   the Server still applies the complete validation schema at execution time.
