@@ -1,0 +1,88 @@
+# =============================================================================
+# Release — 构建 linux x64 / arm64 并发布 GitHub Release
+#
+#   触发方式（均为手动，PR 合入不再自动发版）:
+#     1. 手动打 tag:  git tag doris-mcp-server-0.2.5 && git push origin doris-mcp-server-0.2.5
+#     2. Actions 页面手动触发（需填版本号）
+#
+#   产物:  doris-mcp-server-<version>-linux-x64.tar.gz
+#         doris-mcp-server-<version>-linux-arm64.tar.gz
+#   解压后顶层目录均为 doris-mcp-server/（与 build.sh 原有约定一致）
+#
+#   说明:  私有仓库无免费 ARM runner，linux-arm64 在 x64 runner 上通过
+#         build.sh 自带的交叉构建完成（pip --platform 解压 wheel）。
+#         仓库转公开后可将 arm64 的 runner 换成 ubuntu-24.04-arm 原生构建。
+# =============================================================================
+name: Release
+
+on:
+  push:
+    tags: ["doris-mcp-server-*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 0.2.5，不带前缀）"
+        required: true
+
+jobs:
+  # ── 计算本次发布的版本号 ─────────────────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#doris-mcp-server-}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+  # ── 构建（x64 原生 + arm64 交叉） ────────────────────────────────────
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-x64, linux-arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.platform }}
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: ./build.sh ${{ matrix.platform }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doris-mcp-server-${{ needs.version.outputs.version }}-${{ matrix.platform }}
+          path: dist/doris-mcp-server-${{ needs.version.outputs.version }}-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+
+  # ── 打 tag + 发布 Release ────────────────────────────────────────────
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: doris-mcp-server-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # tag 不存在时自动在当前 commit 上创建
+          tag_name: doris-mcp-server-${{ needs.version.outputs.version }}
+          name: doris-mcp-server-${{ needs.version.outputs.version }}
+          files: dist/*.tar.gz
+          body: ""

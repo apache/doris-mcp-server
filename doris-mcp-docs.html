@@ -1,0 +1,1934 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doris MCP 文档</title>
+  <style>
+:root {
+  --bg: #fff;
+  --surface: #f8f9fa;
+  --border: #dee2e6;
+  --text: #212529;
+  --muted: #6c757d;
+  --accent: #0d6efd;
+  --green: #198754;
+  --red: #dc3545;
+  --purple: #6f42c1;
+  --code-bg: #f4f4f4;
+  --table-stripe: #f2f6fc;
+  --shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--bg); }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.75; color: var(--text); background: var(--bg); font-size: 15px; }
+header { background: linear-gradient(rgb(240, 245, 255) 0%, rgb(255, 255, 255) 100%); border-bottom: 3px solid var(--accent); padding: 2.5rem 2rem 2rem; }
+header h1 { max-width: 920px; margin: 0 auto; font-size: 1.8rem; color: var(--accent); font-weight: 700; }
+header p { max-width: 920px; margin: 0.5rem auto 0; color: var(--muted); font-size: 0.95rem; }
+.container { max-width: 920px; margin: 0 auto; padding: 2rem 2.5rem 4rem; }
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem 1.5rem; margin: 0 0 1.5rem; }
+.toc h3 { font-size: 0.95rem; color: var(--muted); margin-bottom: 0.6rem; }
+.toc ol { padding-left: 1.2rem; font-size: 0.9rem; line-height: 2; }
+.toc ul { padding-left: 0; font-size: 0.9rem; line-height: 2; list-style: none; }
+.toc li { margin: 0.25rem 0; }
+.toc a { color: var(--accent); text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+h2 { font-size: 1.35rem; color: var(--accent); margin: 2.5rem 0 0.8rem; padding-bottom: 0.35rem; border-bottom: 2px solid var(--border); }
+h3 { font-size: 1.08rem; color: var(--text); margin: 1.6rem 0 0.5rem; }
+p { margin: 0.5rem 0; max-width: 86ch; }
+ul, ol { padding-left: 1.7rem; margin: 0.7rem 0; }
+li { margin: 0.25rem 0; }
+strong { color: var(--text); }
+a { color: var(--accent); }
+hr { border: 0; border-top: 1px solid var(--border); margin: 1.6rem 0; }
+blockquote { background: rgb(231, 241, 255); border-left: 4px solid var(--accent); padding: 0.7rem 1rem; margin: 0.8rem 0; border-radius: 0 6px 6px 0; color: var(--text); font-size: 0.9rem; }
+code { background: var(--code-bg); padding: 0.12em 0.4em; border-radius: 4px; font-family: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, Consolas, monospace; font-size: 0.88em; white-space: pre-wrap; }
+pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem 1.3rem; margin: 0.8rem 0; overflow-x: auto; font-size: 0.8rem; line-height: 1.65; }
+pre code { background: none; padding: 0; white-space: pre; }
+div.sourceCode { margin: 0.8rem 0; overflow-x: auto; }
+div.sourceCode pre { margin: 0; }
+.sourceCode a { color: inherit; text-decoration: none; }
+.sourceCode span { line-height: inherit; }
+table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.88rem; display: block; overflow-x: auto; }
+th, td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; vertical-align: top; }
+th { background: var(--surface); font-weight: 600; color: var(--text); }
+tr:nth-child(2n) { background: var(--table-stripe); }
+footer { text-align: center; color: var(--muted); padding: 1.5rem; font-size: 0.8rem; border-top: 1px solid var(--border); margin-top: 3rem; }
+@media (max-width: 700px) { body { font-size: 14px; } header { padding: 2rem 1rem 1.6rem; } header h1 { font-size: 1.55rem; } .container { padding: 1.25rem 1rem 3rem; } .toc { border-radius: 8px; padding: 1rem 1.1rem; } pre { padding: 0.85rem 1rem; } }
+body { padding-top: 64px; }
+.top-tabs { position: fixed; inset: 0 0 auto 0; z-index: 20; background: rgba(255, 255, 255, 0.96); border-bottom: 1px solid var(--border); backdrop-filter: blur(10px); }
+.tab-inner { max-width: 920px; margin: 0 auto; display: flex; gap: 0.35rem; padding: 0.75rem 2.5rem; overflow-x: auto; }
+.tab-button { appearance: none; border: 1px solid transparent; background: transparent; color: var(--muted); border-radius: 8px; padding: 0.5rem 0.85rem; font: inherit; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.tab-button:hover { color: var(--accent); background: var(--surface); }
+.tab-button.active { color: var(--accent); background: rgb(231, 241, 255); border-color: rgb(190, 215, 255); }
+.doc-panel { display: none; }
+.doc-panel.active { display: block; }
+.right-toc { position: fixed; top: 88px; right: max(1rem, calc((100vw - 1280px) / 2)); width: 230px; max-height: calc(100vh - 110px); overflow: auto; padding: 1rem 1rem 1.1rem; background: rgba(248, 249, 250, 0.96); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.right-toc h3 { margin: 0 0 0.65rem; color: var(--muted); font-size: 0.9rem; }
+.right-toc ul { margin: 0; padding-left: 0; font-size: 0.84rem; line-height: 1.65; list-style: none; }
+.right-toc li { margin: 0.35rem 0; }
+.right-toc a { color: var(--text); text-decoration: none; }
+.right-toc a:hover { color: var(--accent); }
+@media (max-width: 1260px) { .right-toc { display: none; } }
+@media (min-width: 1261px) { header h1, header p, .container, .tab-inner { transform: translateX(-90px); } }
+@media (max-width: 700px) { body { padding-top: 58px; } .tab-inner { padding: 0.65rem 1rem; } .tab-button { padding: 0.45rem 0.7rem; } }
+  </style>
+  <style>
+
+/* === MetricFlow 语义模型样式 === */
+
+  :root {
+    --bg: #faf9f7;
+    --card: #ffffff;
+    --text: #2d2d2d;
+    --muted: #6b7280;
+    --primary: #2563eb;
+    --primary-light: #dbeafe;
+    --accent: #7c3aed;
+    --accent-light: #ede9fe;
+    --success: #059669;
+    --success-light: #d1fae5;
+    --danger: #dc2626;
+    --danger-light: #fee2e2;
+    --warning: #d97706;
+    --warning-light: #fef3c7;
+    --border: #e5e7eb;
+    --code-bg: #f3f4f6;
+    --radius: 10px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+    font-size: 15px;
+  }
+
+  /* ── Layout ── */
+  .hero {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #312e81 100%);
+    color: white;
+    padding: 64px 32px 48px;
+    text-align: center;
+  }
+  .hero h1 { font-size: 2.2rem; font-weight: 700; letter-spacing: -0.5px; }
+  .hero p { font-size: 1.1rem; opacity: .85; margin-top: 12px; max-width: 600px; margin-inline: auto; }
+  .hero .badges { margin-top: 20px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .hero .badge {
+    background: rgba(255,255,255,.12);
+    border: 1px solid rgba(255,255,255,.2);
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: .85rem;
+  }
+
+  .container { max-width: 880px; margin: 0 auto; padding: 40px 24px; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    margin-bottom: 24px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .card.tip { border-left: 4px solid var(--primary); background: var(--primary-light); }
+  .card.warn { border-left: 4px solid var(--danger); background: var(--danger-light); }
+  .card.info { border-left: 4px solid var(--accent); background: var(--accent-light); }
+
+  /* ── Typography ── */
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #111827;
+    margin: 48px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--border);
+  }
+  h3 { font-size: 1.15rem; font-weight: 600; margin: 28px 0 8px; color: #1f2937; }
+  p { margin: 10px 0; }
+  a { color: var(--primary); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Tables ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: .92rem;
+  }
+  th {
+    background: #f8fafc;
+    color: #374151;
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 2px solid var(--border);
+    white-space: nowrap;
+  }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  td:first-child, th:first-child { font-family: "SF Mono", "Fira Code", monospace; font-size: .88rem; }
+  td code { background: var(--code-bg); padding: 1px 6px; border-radius: 3px; }
+
+  /* ── Code ── */
+  pre {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    padding: 20px 24px;
+    border-radius: var(--radius);
+    overflow-x: auto;
+    margin: 16px 0;
+    font-size: .88rem;
+    line-height: 1.6;
+  }
+  pre .kw { color: #cba6f7; }
+  pre .str { color: #a6e3a1; }
+  pre .cmt { color: #6c7086; font-style: italic; }
+  pre .num { color: #fab387; }
+  pre .fn { color: #89b4fa; }
+
+  code {
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: .9em;
+  }
+  pre code { background: none; padding: 0; }
+
+  /* ── Highlight boxes ── */
+  .box { padding: 12px 18px; border-radius: 8px; margin: 16px 0; font-size: .95rem; }
+  .box-ok { background: var(--success-light); border: 1px solid #a7f3d0; }
+  .box-warn { background: var(--warning-light); border: 1px solid #fde68a; }
+  .box-info { background: var(--primary-light); border: 1px solid #bfdbfe; }
+
+  /* ── Nav ── */
+  .toc {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    margin-bottom: 32px;
+  }
+  .toc h3 { margin-top: 0; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin: 4px 0; font-size: .95rem; }
+
+  /* ── Responsive ── */
+  @media (max-width: 640px) {
+    .hero { padding: 40px 16px 32px; }
+    .hero h1 { font-size: 1.5rem; }
+    .container { padding: 20px 14px; }
+    .card { padding: 18px 16px; }
+  }
+
+  </style>
+</head>
+<body>
+<nav class="top-tabs" role="tablist" aria-label="Doris MCP 文档">
+  <div class="tab-inner">
+    <button id="tab-semantic" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="panel-semantic" data-tab="semantic">Doris MCP 语义模型</button>
+    <button id="tab-server" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="panel-server" data-tab="server">Doris MCP 用户指南</button>
+  </div>
+</nav>
+
+<aside class="right-toc" aria-label="当前文档目录">
+  <h3>目录</h3>
+  <ul id="right-toc-list"></ul>
+</aside>
+
+<section id="panel-semantic" class="doc-panel active" role="tabpanel" aria-labelledby="tab-semantic">
+<header>
+  <h1>Doris MCP 语义模型</h1>
+  <p>MetricFlow v0.209.0 — 从 YAML 定义到 SQL 查询的完整规范</p>
+</header>
+<div class="container">
+
+<!-- ════════════════ HERO ════════════════ -->
+
+
+<!-- ════════════════ TOC ════════════════ -->
+<div class="toc">
+  <h3>📑 目录</h3>
+  <ol>
+    <li><a href="#intro">什么是语义模型？</a></li>
+    <li><a href="#quickstart">快速上手</a></li>
+    <li><a href="#model">语义模型结构</a></li>
+    <li><a href="#entities">实体 (Entities) — 表的「身份证」</a></li>
+    <li><a href="#dimensions">维度 (Dimensions) — 数据的分组方式</a></li>
+    <li><a href="#measures">度量 (Measures) — 聚合计算</a></li>
+    <li><a href="#full-example">完整示例</a></li>
+    <li><a href="#advanced-metrics">高级指标定义</a></li>
+    <li><a href="#common-patterns">常见场景</a></li>
+    <li><a href="#advanced-features">进阶功能</a></li>
+    <li><a href="#best-practices">最佳实践</a></li>
+    <li><a href="#errors">常见错误 & 排查</a></li>
+    <li><a href="#doris-mcp">doris-mcp 中的语义模型管理</a></li>
+    <li><a href="#webui-cli">使用方式：WebUI & CLI</a></li>
+  </ol>
+</div>
+
+<!-- ════════════════ 1. INTRO ════════════════ -->
+<h2 id="intro">1. 什么是语义模型？</h2>
+
+<div class="card">
+  <p><strong>语义模型</strong>是对数据库表的<strong>业务描述</strong>。你告诉系统：</p>
+  <ul style="padding-left:20px; margin:12px 0;">
+    <li>这张表的<strong>主键</strong>是什么（实体）</li>
+    <li>有哪些字段可以用来<strong>分组</strong>（维度）</li>
+    <li>哪些字段需要<strong>聚合计算</strong>（度量）</li>
+  </ul>
+  <p>定义好之后，用户就可以用<strong>自然语言级别</strong>的查询（"给我看每月订单总额"），系统自动生成正确的 SQL。</p>
+</div>
+
+<div class="card tip">
+  <strong>💡 一句话理解：</strong>YAML 是说明书，MetricFlow 是翻译官，把"每月订单总额"翻译成 <code>SELECT DATE_TRUNC('month', order_date), SUM(amount) FROM orders GROUP BY 1</code>。
+</div>
+
+<!-- ════════════════ 2. QUICKSTART ════════════════ -->
+<h2 id="quickstart">2. 快速上手</h2>
+
+<div class="card">
+  <h3 style="margin-top:0">步骤 1：写一个 YAML 文件</h3>
+  <p>每个 YAML 文件描述<strong>一张表</strong>。把它放到 <code>models/</code> 目录下：</p>
+
+<pre><span class="cmt"># models/orders.yaml</span>
+<span class="kw">---</span>
+<span class="kw">semantic_model:</span>
+  <span class="kw">name:</span> <span class="str">orders</span>                         <span class="cmt"># 模型名称</span>
+  <span class="kw">db_table:</span> <span class="str">dw.orders</span>                    <span class="cmt"># 对应的 Doris 表</span>
+  <span class="kw">defaults:</span>
+    <span class="kw">agg_time_dimension:</span> <span class="str">order_date</span>    <span class="cmt"># 默认时间维度</span>
+
+  <span class="kw">entities:</span>
+    <span class="kw">- name:</span> <span class="str">order_id</span>                     <span class="cmt"># 主键</span>
+      <span class="kw">type:</span> <span class="str">primary</span>
+      <span class="kw">expr:</span> <span class="str">order_id</span>
+
+  <span class="kw">dimensions:</span>
+    <span class="kw">- name:</span> <span class="str">order_date</span>                   <span class="cmt"># 时间维度</span>
+      <span class="kw">type:</span> <span class="str">time</span>
+      <span class="kw">type_params:</span>
+        <span class="kw">time_granularity:</span> <span class="str">day</span>
+    <span class="kw">- name:</span> <span class="str">channel</span>                      <span class="cmt"># 分类维度</span>
+      <span class="kw">type:</span> <span class="str">categorical</span>
+
+  <span class="kw">measures:</span>
+    <span class="kw">- name:</span> <span class="str">total_amount</span>                 <span class="cmt"># 订单总额</span>
+      <span class="kw">agg:</span> <span class="str">sum</span>
+      <span class="kw">expr:</span> <span class="str">amount</span>
+    <span class="kw">- name:</span> <span class="str">order_count</span>                  <span class="cmt"># 订单数量</span>
+      <span class="kw">agg:</span> <span class="str">count</span>
+      <span class="kw">expr:</span> <span class="str">order_id</span>
+</pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">步骤 2：定义时间配置</h3>
+  <p>需要一个 <code>project.yaml</code> 指定日历表（用于计算同比、环比等时间指标）：</p>
+
+<pre><span class="cmt"># models/project.yaml</span>
+<span class="kw">---</span>
+<span class="kw">time_config:</span>
+  <span class="kw">calendar:</span>
+    <span class="kw">- table:</span> <span class="str">dw.dim_date</span>
+      <span class="kw">column:</span> <span class="str">date_id</span>
+      <span class="kw">grain:</span> <span class="str">day</span>
+</pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">步骤 3：验证 & 提交</h3>
+  <ol style="padding-left:20px;">
+    <li>点击 <strong>💡 Validate</strong> 检查模型是否正确</li>
+    <li>确认无误后点击 <strong>Commit</strong> 使模型生效</li>
+    <li>使用 <code>list_metrics</code> 查看可用指标，用 <code>query_metric</code> 查询数据</li>
+  </ol>
+</div>
+
+<div class="box box-info">
+  <strong>⏱ 验证会自动检查：</strong>表是否存在、列名是否正确、实体和维度是否完整。如果有问题，会给出具体的错误信息和位置。
+</div>
+
+<!-- ════════════════ 3. MODEL STRUCTURE ════════════════ -->
+<h2 id="model">3. 语义模型结构</h2>
+
+<div class="card">
+  <p>一个完整的 <code>semantic_model</code> 包含以下字段：</p>
+
+  <table>
+    <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+    <tr><td><code>name</code></td><td>字符串</td><td>✅</td><td>全局唯一的模型名称。小写字母开头，可含数字和下划线</td></tr>
+    <tr><td><code>db_table</code></td><td>字符串</td><td>✅</td><td>Doris 物理表。<code>库名.表名</code> 格式，如 <code>dw.orders</code></td></tr>
+    <tr><td><code>defaults</code></td><td>对象</td><td>✅</td><td>默认配置。目前必须包含 <code>agg_time_dimension</code></td></tr>
+    <tr><td><code>entities</code></td><td>列表</td><td>✅</td><td>表的实体定义。至少包含一个 <code>type: primary</code> 的主实体</td></tr>
+    <tr><td><code>dimensions</code></td><td>列表</td><td>✅</td><td>可用于分组和筛选的维度</td></tr>
+    <tr><td><code>measures</code></td><td>列表</td><td>推荐</td><td>聚合计算定义。定义后自动成为可查询的指标</td></tr>
+    <tr><td><code>description</code></td><td>字符串</td><td>可选</td><td>模型的文字描述</td></tr>
+    <tr><td><code>label</code></td><td>字符串</td><td>可选</td><td>显示名称</td></tr>
+    <tr><td><code>primary_entity</code></td><td>字符串</td><td>条件</td><td>当 entities 中没有 <code>type: primary</code> 时，必须指定</td></tr>
+  </table>
+</div>
+
+<div class="card warn">
+  <strong>⚠️ 命名规则：</strong>所有名称（模型名、实体名、维度名、度量名）必须：
+  <ul style="padding-left:20px; margin-top:6px;">
+    <li>以小写字母开头</li>
+    <li>只能包含小写字母、数字和下划线</li>
+    <li>不能包含两个连续下划线 <code>__</code></li>
+    <li>至少 2 个字符</li>
+  </ul>
+  ✅ <code>order_id</code>、<code>total_amount</code>、<code>user_count</code><br>
+  ❌ <code>OrderID</code>、<code>order__id</code>、<code>a</code>
+</div>
+
+<!-- ════════════════ 4. ENTITIES ════════════════ -->
+<h2 id="entities">4. 实体 (Entities) — 表的「身份证」</h2>
+
+<div class="card">
+  <p>实体定义了<strong>行与行之间的唯一性和关联关系</strong>。每张表都必须有一个<strong>主实体</strong>。</p>
+
+  <table>
+    <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+    <tr><td><code>name</code></td><td>字符串</td><td>✅</td><td>实体名称，在本模型内唯一</td></tr>
+    <tr><td><code>type</code></td><td>枚举</td><td>✅</td><td>实体类型（见下表）</td></tr>
+    <tr><td><code>expr</code></td><td>字符串</td><td>推荐</td><td>对应数据库列名。可省略（默认使用 name）；也支持 SQL 表达式</td></tr>
+    <tr><td><code>description</code></td><td>字符串</td><td>可选</td><td>文字描述</td></tr>
+    <tr><td><code>label</code></td><td>字符串</td><td>可选</td><td>显示名称</td></tr>
+  </table>
+
+  <h3>实体类型</h3>
+  <table>
+    <tr><th>类型</th><th>含义</th><th>使用场景</th></tr>
+    <tr><td><code>primary</code></td><td>主键。每行唯一，覆盖全部记录</td><td>表的 ID 列。每张表必须有且仅有一个 primary 实体</td></tr>
+    <tr><td><code>foreign</code></td><td>外键。可以有重复、空值</td><td>关联到其他表的列，如 <code>customer_id</code>、<code>product_id</code></td></tr>
+    <tr><td><code>unique</code></td><td>唯一键。每行唯一，可能不覆盖全部记录</td><td>例如邮箱、身份证号等唯一标识</td></tr>
+    <tr><td><code>natural</code></td><td>自然键。现实世界中的唯一标识</td><td>如商品条形码、员工工号等</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">示例：订单表的实体定义</h3>
+<pre><span class="kw">entities:</span>
+  <span class="kw">- name:</span> <span class="str">order_id</span>               <span class="cmt"># 主键：每笔订单的唯一 ID</span>
+    <span class="kw">type:</span> <span class="str">primary</span>
+    <span class="kw">expr:</span> <span class="str">order_id</span>
+
+  <span class="kw">- name:</span> <span class="str">customer</span>               <span class="cmt"># 外键：关联到用户表</span>
+    <span class="kw">type:</span> <span class="str">foreign</span>
+    <span class="kw">expr:</span> <span class="str">user_id</span>
+
+  <span class="kw">- name:</span> <span class="str">order_ref</span>              <span class="cmt"># 外键 + SQL 表达式</span>
+    <span class="kw">type:</span> <span class="str">foreign</span>
+    <span class="kw">expr:</span> <span class="str">substring(trace_id FROM 1 FOR 8)</span>
+</pre>
+</div>
+
+<div class="box box-warn">
+  <strong>⚠️ 注意：</strong>如果表中没有 <code>type: primary</code> 的实体，可以使用 <code>primary_entity: entity_name</code> 在模型顶层指定。
+</div>
+
+<!-- ════════════════ 5. DIMENSIONS ════════════════ -->
+<h2 id="dimensions">5. 维度 (Dimensions) — 数据的分组方式</h2>
+
+<div class="card">
+  <p>维度定义了<strong>如何对数据进行分组和筛选</strong>。有两种类型：<strong>时间维度</strong>和<strong>分类维度</strong>。</p>
+
+  <table>
+    <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+    <tr><td><code>name</code></td><td>字符串</td><td>✅</td><td>维度名称</td></tr>
+    <tr><td><code>type</code></td><td>枚举</td><td>✅</td><td><code>time</code>（时间）或 <code>categorical</code>（分类）</td></tr>
+    <tr><td><code>type_params</code></td><td>对象</td><td>time 时必填</td><td>时间粒度配置（见下方）</td></tr>
+    <tr><td><code>expr</code></td><td>字符串</td><td>推荐</td><td>对应列名或 SQL 表达式</td></tr>
+    <tr><td><code>is_partition</code></td><td>布尔</td><td>可选</td><td>是否为分区列。默认 <code>false</code></td></tr>
+    <tr><td><code>description</code></td><td>字符串</td><td>可选</td><td>文字描述</td></tr>
+    <tr><td><code>label</code></td><td>字符串</td><td>可选</td><td>显示名称</td></tr>
+  </table>
+
+  <h3>时间粒度 (<code>time_granularity</code>)</h3>
+  <table>
+    <tr><th>粒度</th><th>含义</th><th>示例</th></tr>
+    <tr><td><code>day</code></td><td>按天</td><td>2025-01-15</td></tr>
+    <tr><td><code>week</code></td><td>按周</td><td>2025-W03</td></tr>
+    <tr><td><code>month</code></td><td>按月</td><td>2025-01</td></tr>
+    <tr><td><code>quarter</code></td><td>按季度</td><td>2025-Q1</td></tr>
+    <tr><td><code>year</code></td><td>按年</td><td>2025</td></tr>
+    <tr><td><code>hour</code></td><td>按小时</td><td>2025-01-15 14:00</td></tr>
+    <tr><td><code>minute</code></td><td>按分钟</td><td>2025-01-15 14:30</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">示例</h3>
+<pre><span class="kw">dimensions:</span>
+  <span class="kw">- name:</span> <span class="str">order_date</span>               <span class="cmt"># 订单日期（按天）</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">day</span>
+    <span class="kw">expr:</span> <span class="str">order_date</span>
+
+  <span class="kw">- name:</span> <span class="str">order_month</span>              <span class="cmt"># 订单月份（按月）</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">month</span>
+    <span class="kw">expr:</span> <span class="str">order_date</span>               <span class="cmt"># 同一列，不同粒度</span>
+
+  <span class="kw">- name:</span> <span class="str">channel</span>                   <span class="cmt"># 渠道（分类）</span>
+    <span class="kw">type:</span> <span class="str">categorical</span>
+    <span class="kw">expr:</span> <span class="str">channel</span>
+
+  <span class="kw">- name:</span> <span class="str">status_label</span>             <span class="cmt"># 带 SQL 表达式</span>
+    <span class="kw">type:</span> <span class="str">categorical</span>
+    <span class="kw">expr:</span> <span class="str">concat(status, '_', channel)</span>
+</pre>
+</div>
+
+<!-- ════════════════ 6. MEASURES ════════════════ -->
+<h2 id="measures">6. 度量 (Measures) — 聚合计算</h2>
+
+<div class="card">
+  <p>度量定义了对数据列的<strong>聚合运算</strong>。每个度量会自动生成一个<strong>同名的查询指标</strong>。</p>
+
+  <table>
+    <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+    <tr><td><code>name</code></td><td>字符串</td><td>✅</td><td>度量名称（同时也成为指标名）</td></tr>
+    <tr><td><code>agg</code></td><td>枚举</td><td>✅</td><td>聚合类型（见下表）</td></tr>
+    <tr><td><code>expr</code></td><td>字符串</td><td>推荐</td><td>参与计算的列名或 SQL 表达式</td></tr>
+    <tr><td><code>description</code></td><td>字符串</td><td>可选</td><td>指标说明</td></tr>
+    <tr><td><code>label</code></td><td>字符串</td><td>可选</td><td>显示名称</td></tr>
+    <tr><td><code>create_metric</code></td><td>布尔</td><td>可选</td><td>设为 <code>false</code> 则不自动生成指标。默认 <code>true</code></td></tr>
+    <tr><td><code>agg_time_dimension</code></td><td>字符串</td><td>可选</td><td>覆盖模型默认的时间维度</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">聚合类型一览</h3>
+  <table>
+    <tr><th>类型</th><th>含义</th><th>典型用法</th></tr>
+    <tr><td><code>sum</code></td><td>求和</td><td>总金额、总次数</td></tr>
+    <tr><td><code>count</code></td><td>计数</td><td>订单数、用户数</td></tr>
+    <tr><td><code>count_distinct</code></td><td>去重计数</td><td>独立用户数、活跃设备数</td></tr>
+    <tr><td><code>average</code></td><td>平均值</td><td>平均金额、平均时长</td></tr>
+    <tr><td><code>min</code></td><td>最小值</td><td>最低价格、最早时间</td></tr>
+    <tr><td><code>max</code></td><td>最大值</td><td>最高价格、最后时间</td></tr>
+    <tr><td><code>median</code></td><td>中位数</td><td>订单金额中位数</td></tr>
+    <tr><td><code>percentile</code></td><td>百分位数</td><td>P99 延迟、P95 金额（需配 <code>agg_params.percentile</code>）</td></tr>
+    <tr><td><code>sum_boolean</code></td><td>布尔求和</td><td>转化次数、达标次数</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">示例</h3>
+<pre><span class="kw">measures:</span>
+  <span class="kw">- name:</span> <span class="str">total_amount</span>            <span class="cmt"># 订单总额</span>
+    <span class="kw">description:</span> <span class="str">"所有订单的金额总和"</span>
+    <span class="kw">agg:</span> <span class="str">sum</span>
+    <span class="kw">expr:</span> <span class="str">amount</span>
+    <span class="kw">label:</span> <span class="str">"订单总额"</span>
+
+  <span class="kw">- name:</span> <span class="str">order_count</span>             <span class="cmt"># 订单数量</span>
+    <span class="kw">agg:</span> <span class="str">count</span>
+    <span class="kw">expr:</span> <span class="str">order_id</span>
+
+  <span class="kw">- name:</span> <span class="str">unique_customers</span>        <span class="cmt"># 独立客户数</span>
+    <span class="kw">description:</span> <span class="str">"下单的独立客户数量"</span>
+    <span class="kw">agg:</span> <span class="str">count_distinct</span>
+    <span class="kw">expr:</span> <span class="str">user_id</span>
+
+  <span class="kw">- name:</span> <span class="str">p99_amount</span>             <span class="cmt"># P99 订单金额</span>
+    <span class="kw">agg:</span> <span class="str">percentile</span>
+    <span class="kw">expr:</span> <span class="str">amount</span>
+    <span class="kw">agg_params:</span>
+      <span class="kw">percentile:</span> <span class="num">0.99</span>
+
+  <span class="kw">- name:</span> <span class="str">internal_counter</span>       <span class="cmt"># 不暴露为指标</span>
+    <span class="kw">agg:</span> <span class="str">sum</span>
+    <span class="kw">expr:</span> <span class="str">raw_value</span>
+    <span class="kw">create_metric:</span> <span class="kw">false</span>
+</pre>
+</div>
+
+<!-- ════════════════ 7. FULL EXAMPLE ════════════════ -->
+<h2 id="full-example">7. 完整示例</h2>
+
+<div class="card">
+  <p>以下是一个电商场景的完整语义模型定义——<strong>订单表</strong>：</p>
+
+<pre><span class="cmt"># models/orders.yaml — 订单事实表</span>
+<span class="kw">---</span>
+<span class="kw">semantic_model:</span>
+  <span class="kw">name:</span> <span class="str">orders</span>
+  <span class="kw">description:</span> <span class="str">"电商订单事实表，每行代表一笔订单"</span>
+  <span class="kw">db_table:</span> <span class="str">dw.orders</span>
+  <span class="kw">defaults:</span>
+    <span class="kw">agg_time_dimension:</span> <span class="str">order_date</span>
+
+  <span class="cmt"># ── 实体 ──</span>
+  <span class="kw">entities:</span>
+    <span class="kw">- name:</span> <span class="str">order_id</span>
+      <span class="kw">description:</span> <span class="str">"订单主键"</span>
+      <span class="kw">type:</span> <span class="str">primary</span>
+      <span class="kw">expr:</span> <span class="str">order_id</span>
+
+    <span class="kw">- name:</span> <span class="str">customer</span>
+      <span class="kw">description:</span> <span class="str">"关联用户"</span>
+      <span class="kw">type:</span> <span class="str">foreign</span>
+      <span class="kw">expr:</span> <span class="str">user_id</span>
+
+    <span class="kw">- name:</span> <span class="str">product</span>
+      <span class="kw">description:</span> <span class="str">"关联商品"</span>
+      <span class="kw">type:</span> <span class="str">foreign</span>
+      <span class="kw">expr:</span> <span class="str">product_id</span>
+
+  <span class="cmt"># ── 维度 ──</span>
+  <span class="kw">dimensions:</span>
+    <span class="kw">- name:</span> <span class="str">order_date</span>
+      <span class="kw">description:</span> <span class="str">"下单日期（按天）"</span>
+      <span class="kw">type:</span> <span class="str">time</span>
+      <span class="kw">type_params:</span>
+        <span class="kw">time_granularity:</span> <span class="str">day</span>
+      <span class="kw">expr:</span> <span class="str">order_date</span>
+
+    <span class="kw">- name:</span> <span class="str">order_month</span>
+      <span class="kw">description:</span> <span class="str">"下单月份"</span>
+      <span class="kw">type:</span> <span class="str">time</span>
+      <span class="kw">type_params:</span>
+        <span class="kw">time_granularity:</span> <span class="str">month</span>
+      <span class="kw">expr:</span> <span class="str">order_date</span>
+
+    <span class="kw">- name:</span> <span class="str">channel</span>
+      <span class="kw">description:</span> <span class="str">"下单渠道"</span>
+      <span class="kw">type:</span> <span class="str">categorical</span>
+      <span class="kw">expr:</span> <span class="str">channel</span>
+
+    <span class="kw">- name:</span> <span class="str">status</span>
+      <span class="kw">description:</span> <span class="str">"订单状态"</span>
+      <span class="kw">type:</span> <span class="str">categorical</span>
+      <span class="kw">expr:</span> <span class="str">status</span>
+
+  <span class="cmt"># ── 度量 ──</span>
+  <span class="kw">measures:</span>
+    <span class="kw">- name:</span> <span class="str">total_amount</span>
+      <span class="kw">description:</span> <span class="str">"订单总金额"</span>
+      <span class="kw">label:</span> <span class="str">"总金额"</span>
+      <span class="kw">agg:</span> <span class="str">sum</span>
+      <span class="kw">expr:</span> <span class="str">amount</span>
+
+    <span class="kw">- name:</span> <span class="str">order_count</span>
+      <span class="kw">description:</span> <span class="str">"订单总数"</span>
+      <span class="kw">label:</span> <span class="str">"订单数"</span>
+      <span class="kw">agg:</span> <span class="str">count</span>
+      <span class="kw">expr:</span> <span class="str">order_id</span>
+
+    <span class="kw">- name:</span> <span class="str">unique_customers</span>
+      <span class="kw">description:</span> <span class="str">"下单的独立客户数"</span>
+      <span class="kw">label:</span> <span class="str">"独立客户"</span>
+      <span class="kw">agg:</span> <span class="str">count_distinct</span>
+      <span class="kw">expr:</span> <span class="str">user_id</span>
+
+    <span class="kw">- name:</span> <span class="str">avg_amount</span>
+      <span class="kw">description:</span> <span class="str">"平均订单金额"</span>
+      <span class="kw">label:</span> <span class="str">"客单价"</span>
+      <span class="kw">agg:</span> <span class="str">average</span>
+      <span class="kw">expr:</span> <span class="str">amount</span>
+</pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">配套：用户表和商品表</h3>
+
+<pre><span class="cmt"># models/users.yaml — 用户维表</span>
+<span class="kw">---</span>
+<span class="kw">semantic_model:</span>
+  <span class="kw">name:</span> <span class="str">users</span>
+  <span class="kw">description:</span> <span class="str">"用户信息维表"</span>
+  <span class="kw">db_table:</span> <span class="str">dw.users</span>
+  <span class="kw">defaults:</span>
+    <span class="kw">agg_time_dimension:</span> <span class="str">register_date</span>
+
+  <span class="kw">entities:</span>
+    <span class="kw">- name:</span> <span class="str">user_id</span>
+      <span class="kw">type:</span> <span class="str">primary</span>
+      <span class="kw">expr:</span> <span class="str">user_id</span>
+
+  <span class="kw">dimensions:</span>
+    <span class="kw">- name:</span> <span class="str">register_date</span>
+      <span class="kw">type:</span> <span class="str">time</span>
+      <span class="kw">type_params:</span>
+        <span class="kw">time_granularity:</span> <span class="str">day</span>
+    <span class="kw">- name:</span> <span class="str">city</span>
+      <span class="kw">type:</span> <span class="str">categorical</span>
+    <span class="kw">- name:</span> <span class="str">level</span>
+      <span class="kw">type:</span> <span class="str">categorical</span>
+
+  <span class="kw">measures:</span>
+    <span class="kw">- name:</span> <span class="str">user_count</span>
+      <span class="kw">agg:</span> <span class="str">count</span>
+      <span class="kw">expr:</span> <span class="str">user_id</span>
+</pre>
+
+<pre><span class="cmt"># models/products.yaml — 商品维表</span>
+<span class="kw">---</span>
+<span class="kw">semantic_model:</span>
+  <span class="kw">name:</span> <span class="str">products</span>
+  <span class="kw">description:</span> <span class="str">"商品信息维表"</span>
+  <span class="kw">db_table:</span> <span class="str">dw.products</span>
+  <span class="kw">defaults:</span>
+    <span class="kw">agg_time_dimension:</span> <span class="str">order_date</span>
+
+  <span class="kw">entities:</span>
+    <span class="kw">- name:</span> <span class="str">product</span>
+      <span class="kw">type:</span> <span class="str">primary</span>
+      <span class="kw">expr:</span> <span class="str">product_id</span>
+
+  <span class="kw">dimensions:</span>
+    <span class="kw">- name:</span> <span class="str">order_date</span>
+      <span class="kw">type:</span> <span class="str">time</span>
+      <span class="kw">type_params:</span>
+        <span class="kw">time_granularity:</span> <span class="str">day</span>
+      <span class="kw">expr:</span> <span class="str">product_id</span>
+    <span class="kw">- name:</span> <span class="str">product_name</span>
+      <span class="kw">type:</span> <span class="str">categorical</span>
+
+  <span class="kw">measures:</span>
+    <span class="kw">- name:</span> <span class="str">product_count</span>
+      <span class="kw">agg:</span> <span class="str">count</span>
+      <span class="kw">expr:</span> <span class="str">product_id</span>
+</pre>
+</div>
+
+<!-- ════════════════ 8. ADVANCED METRICS ════════════════ -->
+<h2 id="advanced-metrics">8. 高级指标定义</h2>
+
+<div class="card">
+  <p>除了从 <code>measures</code> 自动生成的简单指标外，你还可以用 <code>metric:</code> 文档定义<strong>高级指标</strong>。高级指标通过组合已有的度量或指标，实现更复杂的计算逻辑。支持四种类型：</p>
+  <table>
+    <tr><th>类型</th><th>含义</th><th>典型场景</th></tr>
+    <tr><td><code>ratio</code></td><td>比率指标：分子 ÷ 分母</td><td>转化率、利润率、占比</td></tr>
+    <tr><td><code>derived</code></td><td>派生指标：对已有指标做表达式计算</td><td>环比增长、同比变化、加权计算</td></tr>
+    <tr><td><code>cumulative</code></td><td>累计指标：按时间窗口累加</td><td>近 7 日销量、月累计注册数</td></tr>
+    <tr><td><code>conversion</code></td><td>转化指标：两个事件的转化分析</td><td>下单转化率、注册转化率</td></tr>
+  </table>
+
+  <div class="box box-info" style="margin-top:16px;">
+    <strong>📄 文件格式：</strong>高级指标写在独立的 YAML 文件中，顶层用 <code>metric:</code>（单数），而非 <code>semantic_model:</code>。每个文件一个指标，或通过 <code>---</code> 分隔多个。
+  </div>
+</div>
+
+<!-- ── Ratio ── -->
+<div class="card">
+  <h3 style="margin-top:0">8.1 Ratio 比率指标</h3>
+  <p>计算两个指标的比值，如转化率 = 下单数 / 访问数。</p>
+
+<pre><span class="cmt"># models/conversion_rate.yaml</span>
+<span class="kw">---</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">order_conversion_rate</span>
+  <span class="kw">description:</span> <span class="str">"订单转化率：下单数 / 访问数"</span>
+  <span class="kw">type:</span> <span class="str">ratio</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">numerator:</span> <span class="str">order_count</span>       <span class="cmt"># 分子：引用已有指标</span>
+    <span class="kw">denominator:</span> <span class="str">visit_count</span>     <span class="cmt"># 分母：引用已有指标</span>
+</pre>
+
+  <p><strong>分子和分母</strong>都必须是已经定义的指标名（可以是简单指标，也可以是其他高级指标）。</p>
+</div>
+
+<!-- ── Derived ── -->
+<div class="card">
+  <h3 style="margin-top:0">8.2 Derived 派生指标</h3>
+  <p>基于一个或多个已有指标通过表达式计算。最常用于<strong>环比、同比</strong>。</p>
+
+<pre><span class="cmt"># models/revenue_growth.yaml — 环比增长</span>
+<span class="kw">---</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">revenue_growth</span>
+  <span class="kw">description:</span> <span class="str">"收入环比增长率"</span>
+  <span class="kw">type:</span> <span class="str">derived</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">expr:</span> <span class="str">(current_revenue - prev_revenue) / prev_revenue</span>
+    <span class="kw">metrics:</span>
+      <span class="kw">- name:</span> <span class="str">total_amount</span>         <span class="cmt"># 当期收入</span>
+        <span class="kw">alias:</span> <span class="str">current_revenue</span>
+      <span class="kw">- name:</span> <span class="str">total_amount</span>         <span class="cmt"># 上期收入（同名指标，加 offset）</span>
+        <span class="kw">alias:</span> <span class="str">prev_revenue</span>
+        <span class="kw">offset_window:</span> <span class="str">1 month</span>     <span class="cmt"># 向前偏移一个时间窗口</span>
+</pre>
+
+  <table>
+    <tr><th>参数</th><th>说明</th></tr>
+    <tr><td><code>expr</code></td><td>计算表达式，用 <code>alias</code> 引用各输入指标</td></tr>
+    <tr><td><code>metrics</code></td><td>输入指标列表</td></tr>
+    <tr><td><code>name</code></td><td>引用的指标名</td></tr>
+    <tr><td><code>alias</code></td><td>在 <code>expr</code> 中使用的别名</td></tr>
+    <tr><td><code>offset_window</code></td><td>时间偏移量，如 <code>1 month</code>、<code>7 days</code>、<code>1 year</code></td></tr>
+    <tr><td><code>offset_to_grain</code></td><td>偏移到的粒度，如 <code>month</code>、<code>year</code></td></tr>
+  </table>
+</div>
+
+<!-- ── Cumulative ── -->
+<div class="card">
+  <h3 style="margin-top:0">8.3 Cumulative 累计指标</h3>
+  <p>对某个指标按时间窗口做累加，如"近 7 天销售额"。</p>
+
+<pre><span class="cmt"># models/weekly_sales.yaml</span>
+<span class="kw">---</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">weekly_sales</span>
+  <span class="kw">description:</span> <span class="str">"近 7 天销售额"</span>
+  <span class="kw">type:</span> <span class="str">cumulative</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">measure:</span>
+      <span class="kw">name:</span> <span class="str">total_amount</span>
+    <span class="kw">window:</span> <span class="str">7 days</span>          <span class="cmt"># 时间窗口：过去 7 天</span>
+</pre>
+
+  <table>
+    <tr><th>参数</th><th>说明</th></tr>
+    <tr><td><code>measure</code></td><td>引用的度量名（来自某个 semantic_model 的 measures）</td></tr>
+    <tr><td><code>window</code></td><td>时间窗口格式：<code>数字 粒度</code>，如 <code>28 days</code>、<code>4 weeks</code>、<code>3 months</code></td></tr>
+    <tr><td><code>grain_to_date</code></td><td>可选。累计到指定粒度，如 <code>month</code>（月初至今）、<code>year</code>（年初至今）</td></tr>
+  </table>
+</div>
+
+<!-- ── Conversion ── -->
+<div class="card">
+  <h3 style="margin-top:0">8.4 Conversion 转化指标</h3>
+  <p>衡量用户从一个事件（base）转化到另一个事件（conversion）的比率。常用于分析<strong>用户行为漏斗</strong>。</p>
+
+<pre><span class="cmt"># models/order_conversion.yaml</span>
+<span class="kw">---</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">visit_to_order_conversion</span>
+  <span class="kw">description:</span> <span class="str">"从访问到下单的转化率"</span>
+  <span class="kw">type:</span> <span class="str">conversion</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">conversion_type_params:</span>
+      <span class="kw">base_measure:</span>                 <span class="cmt"># 基础事件（访问）</span>
+        <span class="kw">name:</span> <span class="str">visit_count</span>
+      <span class="kw">conversion_measure:</span>          <span class="cmt"># 转化事件（下单）</span>
+        <span class="kw">name:</span> <span class="str">order_count</span>
+      <span class="kw">entity:</span> <span class="str">user</span>               <span class="cmt"># 关联实体：按哪个维度计算转化</span>
+      <span class="kw">calculation:</span> <span class="str">conversion_rate</span>  <span class="cmt"># 计算方式</span>
+</pre>
+
+  <table>
+    <tr><th>参数</th><th>说明</th></tr>
+    <tr><td><code>base_measure</code></td><td>基础事件的度量名</td></tr>
+    <tr><td><code>conversion_measure</code></td><td>转化事件的度量名</td></tr>
+    <tr><td><code>entity</code></td><td>关联实体名，按此维度计算转化（通常是 user 或 session）</td></tr>
+    <tr><td><code>calculation</code></td><td><code>conversion_rate</code>（转化率）或 <code>conversions</code>（绝对转化次数）</td></tr>
+    <tr><td><code>window</code></td><td>可选。转化窗口，如 <code>7 days</code></td></tr>
+  </table>
+</div>
+
+<!-- ════════════════ 9. COMMON PATTERNS ════════════════ -->
+<h2 id="common-patterns">9. 常见场景</h2>
+
+<div class="card">
+  <h3 style="margin-top:0">场景 1：同一列作为不同粒度的维度</h3>
+  <p>一张日期列可以同时定义 day、week、month 三个维度：</p>
+<pre><span class="kw">dimensions:</span>
+  <span class="kw">- name:</span> <span class="str">order_date</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">day</span>
+    <span class="kw">expr:</span> <span class="str">order_date</span>
+
+  <span class="kw">- name:</span> <span class="str">order_week</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">week</span>
+    <span class="kw">expr:</span> <span class="str">order_date</span>        <span class="cmt"># 同一列！</span>
+
+  <span class="kw">- name:</span> <span class="str">order_month</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">month</span>
+    <span class="kw">expr:</span> <span class="str">order_date</span>        <span class="cmt"># 同一列！</span>
+</pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">场景 2：使用 SQL 表达式</h3>
+  <p>当列名不够直观，或者需要计算字段时，可以用 SQL 表达式：</p>
+<pre><span class="kw">dimensions:</span>
+  <span class="kw">- name:</span> <span class="str">user_label</span>
+    <span class="kw">type:</span> <span class="str">categorical</span>
+    <span class="kw">expr:</span> <span class="str">concat(level, '_', city)</span>  <span class="cmt"># 拼接字段</span>
+
+<span class="kw">entities:</span>
+  <span class="kw">- name:</span> <span class="str">user_short_id</span>
+    <span class="kw">type:</span> <span class="str">foreign</span>
+    <span class="kw">expr:</span> <span class="str">substring(trace_id FROM 1 FOR 8)</span>  <span class="cmt"># 截取</span>
+
+<span class="kw">measures:</span>
+  <span class="kw">- name:</span> <span class="str">net_amount</span>
+    <span class="kw">agg:</span> <span class="str">sum</span>
+    <span class="kw">expr:</span> <span class="str">coalesce(amount, 0) - coalesce(discount, 0)</span>  <span class="cmt"># 计算字段</span>
+</pre>
+  <div class="box box-ok">
+    <strong>✅ 支持：</strong><code>substring</code>、<code>concat</code>、<code>coalesce</code>、<code>cast</code> 等标准 SQL 函数。这些表达式在物理校验时会被自动识别并跳过列名校验。
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">场景 3：分区表</h3>
+  <p>如果表有分区列，标记 <code>is_partition: true</code>：</p>
+<pre><span class="kw">dimensions:</span>
+  <span class="kw">- name:</span> <span class="str">ds</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">day</span>
+    <span class="kw">is_partition:</span> <span class="kw">true</span>              <span class="cmt"># 标记为分区列</span>
+    <span class="kw">expr:</span> <span class="str">ds</span>
+</pre>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">场景 4：隐藏内部度量</h3>
+  <p>有些度量只想作为中间计算使用，不想对终端用户暴露，设置 <code>create_metric: false</code>：</p>
+<pre><span class="kw">measures:</span>
+  <span class="kw">- name:</span> <span class="str">total_amount</span>            <span class="cmt"># ✅ 公开指标</span>
+    <span class="kw">agg:</span> <span class="str">sum</span>
+    <span class="kw">expr:</span> <span class="str">amount</span>
+
+  <span class="kw">- name:</span> <span class="str">_raw_count</span>              <span class="cmt"># ❌ 不暴露</span>
+    <span class="kw">agg:</span> <span class="str">count</span>
+    <span class="kw">expr:</span> <span class="str">order_id</span>
+    <span class="kw">create_metric:</span> <span class="kw">false</span>
+</pre>
+</div>
+
+<!-- ════════════════ 11. ADVANCED FEATURES ════════════════ -->
+<h2 id="advanced-features">10. 进阶功能</h2>
+
+<!-- ── Filters ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.1 过滤器 (Filters)</h3>
+  <p>可以在<strong>度量定义</strong>或<strong>指标定义</strong>中添加 SQL 过滤条件。过滤器会在聚合计算前应用。</p>
+
+<div class="box box-info">
+  <strong>📍 过滤器可以放在哪里：</strong>
+  <ul style="padding-left:20px; margin-top:8px;">
+    <li><code>measures</code> 的 <code>filter:</code> 字段 — 限定单个度量的数据范围</li>
+    <li><code>metric:</code> 的 <code>filter:</code> 字段 — 限定整个指标的数据范围</li>
+    <li><code>measure</code> 的 <code>input_measures[].filter:</code> — 限定高级指标中引用的度量</li>
+  </ul>
+</div>
+
+<pre><span class="cmt"># 示例 1：度量级过滤 — 只计算"已完成"状态的订单总额</span>
+<span class="kw">measures:</span>
+  <span class="kw">- name:</span> <span class="str">completed_amount</span>
+    <span class="kw">description:</span> <span class="str">"已完成订单的金额总和"</span>
+    <span class="kw">agg:</span> <span class="str">sum</span>
+    <span class="kw">expr:</span> <span class="str">amount</span>
+    <span class="kw">filter:</span> <span class="str">{{ render_dimension_template('status') }} = 'completed'</span>
+</pre>
+
+<pre><span class="cmt"># 示例 2：指标级过滤</span>
+<span class="kw">---</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">premium_user_orders</span>
+  <span class="kw">description:</span> <span class="str">"高级用户订单数"</span>
+  <span class="kw">type:</span> <span class="str">simple</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">measure:</span>
+      <span class="kw">name:</span> <span class="str">order_count</span>
+      <span class="kw">filter:</span> <span class="str">{{ render_dimension_template('user_level') }} = 'premium'</span>
+</pre>
+
+  <div class="box box-warn">
+    <strong>⚠️ 过滤器语法：</strong>
+    <ul style="padding-left:20px; margin-top:6px;">
+      <li>在 YAML 中用 <code>{{ Dimension('qualified_name') }}</code> 或 <code>{{ render_dimension_template('dimension_name') }}</code> 引用维度</li>
+      <li>引用实体用 <code>{{ Entity('entity_name') }}</code> 或 <code>{{ render_entity_template('entity_name') }}</code></li>
+      <li>后面跟普通 SQL 条件，如 <code>= 'value'</code>、<code>IN ('a', 'b')</code></li>
+      <li><code>query_metric</code> 的 <code>where</code> 参数可直接写裸 SQL（如 <code>"channel = 'APP'"</code>），编译器会自动转换为 MetricFlow 模板语法</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ── Saved Queries ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.2 预定义查询 (Saved Queries)</h3>
+  <p>把常用的<strong>指标 + 分组 + 筛选</strong>组合保存为一个查询模板，用户可以直接调用。</p>
+
+<pre><span class="cmt"># models/weekly_report.yaml</span>
+<span class="kw">---</span>
+<span class="kw">saved_query:</span>
+  <span class="kw">name:</span> <span class="str">weekly_revenue_report</span>
+  <span class="kw">description:</span> <span class="str">"周度收入报告：按渠道分组的订单总额和订单数"</span>
+  <span class="kw">label:</span> <span class="str">"周度收入报告"</span>
+  <span class="kw">query_params:</span>
+    <span class="kw">metrics:</span>
+      <span class="kw">- total_amount</span>
+      <span class="kw">- order_count</span>
+    <span class="kw">group_by:</span>
+      <span class="kw">- order_id__order_week</span>      <span class="cmt"># 按周分组</span>
+      <span class="kw">- order_id__channel</span>         <span class="cmt"># 按渠道分组</span>
+    <span class="kw">order_by:</span>
+      <span class="kw">- "-order_id__order_week"</span>  <span class="cmt"># 按周倒序</span>
+    <span class="kw">limit:</span> <span class="num">52</span>
+</pre>
+
+  <table>
+    <tr><th>字段</th><th>说明</th></tr>
+    <tr><td><code>metrics</code></td><td>要查询的指标名列表</td></tr>
+    <tr><td><code>group_by</code></td><td>分组维度。格式：<code>实体名__维度名</code>（双下划线连接）</td></tr>
+    <tr><td><code>order_by</code></td><td>排序，<code>-</code> 前缀表示降序</td></tr>
+    <tr><td><code>where</code></td><td>筛选条件（同过滤器语法）</td></tr>
+    <tr><td><code>limit</code></td><td>最大返回行数</td></tr>
+  </table>
+
+  <div class="box box-ok">
+    <strong>💡 维度引用格式：</strong><code>实体名__维度名</code>（双下划线）。例如 <code>order_id__order_date</code> 表示 orders 表中的 order_date 维度。
+  </div>
+</div>
+
+<!-- ── Non-additive / SCD ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.3 非加性度量 & 缓慢变化维度 (SCD Type II)</h3>
+  <p>有些度量<strong>不能简单求和</strong>（如库存量、账户余额），需要在特定维度下取快照值。</p>
+
+<pre><span class="cmt"># 非加性度量：库存量（取月末快照）</span>
+<span class="kw">measures:</span>
+  <span class="kw">- name:</span> <span class="str">monthly_inventory</span>
+    <span class="kw">description:</span> <span class="str">"月末库存量"</span>
+    <span class="kw">agg:</span> <span class="str">sum</span>
+    <span class="kw">expr:</span> <span class="str">inventory_count</span>
+    <span class="kw">non_additive_dimension:</span>
+      <span class="kw">name:</span> <span class="str">snapshot_date</span>       <span class="cmt"># 非加性维度</span>
+      <span class="kw">window_choice:</span> <span class="str">max</span>        <span class="cmt"># 取时间窗口内的最大值</span>
+      <span class="kw">window_groupings:</span>
+        <span class="kw">- product</span>                <span class="cmt"># 按产品分组取快照</span>
+</pre>
+
+  <p><strong>SCD Type II（缓慢变化维度）</strong>：当维度表有生效时间范围时，标记开始和结束维度：</p>
+
+<pre><span class="cmt"># 维度表中标记 SCD Type II</span>
+<span class="kw">dimensions:</span>
+  <span class="kw">- name:</span> <span class="str">valid_from</span>
+    <span class="kw">description:</span> <span class="str">"生效开始时间"</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">day</span>
+      <span class="kw">validity_params:</span>
+        <span class="kw">is_start:</span> <span class="kw">true</span>              <span class="cmt"># 标记为开始时间</span>
+
+  <span class="kw">- name:</span> <span class="str">valid_to</span>
+    <span class="kw">description:</span> <span class="str">"生效结束时间"</span>
+    <span class="kw">type:</span> <span class="str">time</span>
+    <span class="kw">type_params:</span>
+      <span class="kw">time_granularity:</span> <span class="str">day</span>
+      <span class="kw">validity_params:</span>
+        <span class="kw">is_end:</span> <span class="kw">true</span>                <span class="cmt"># 标记为结束时间</span>
+</pre>
+</div>
+
+<!-- ── Timespine / Fill Nulls ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.4 空值填充 & 时间轴对齐</h3>
+
+<pre><span class="cmt"># 把 NULL 改为 0（适用于 count 类指标在无数据日期显示 0）</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">daily_orders</span>
+  <span class="kw">type:</span> <span class="str">simple</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">measure:</span>
+      <span class="kw">name:</span> <span class="str">order_count</span>
+    <span class="kw">fill_nulls_with:</span> <span class="num">0</span>         <span class="cmt"># 无数据日期显示 0</span>
+    <span class="kw">join_to_timespine:</span> <span class="kw">true</span>   <span class="cmt"># 对齐到时间轴（补全无数据日期）</span>
+</pre>
+
+  <table>
+    <tr><th>参数</th><th>说明</th></tr>
+    <tr><td><code>fill_nulls_with</code></td><td>将聚合结果中的 NULL 替换为指定值（通常是 0）</td></tr>
+    <tr><td><code>join_to_timespine</code></td><td>将指标结果与时间轴表做连接，确保每一天/月/年都有数据行（没有数据的日期补 NULL 或 0）</td></tr>
+  </table>
+</div>
+
+<!-- ── Native Format ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.5 原生表引用格式</h3>
+  <p>除了 <code>db_table</code> 简写，也支持 MetricFlow 原生的 <code>node_relation</code> 格式，支持三段式目录引用：</p>
+
+<pre><span class="cmt"># 两段式：库名.表名</span>
+<span class="kw">node_relation:</span>
+  <span class="kw">schema_name:</span> <span class="str">dw</span>
+  <span class="kw">alias:</span> <span class="str">orders</span>
+
+<span class="cmt"># 三段式：目录.库名.表名</span>
+<span class="kw">node_relation:</span>
+  <span class="kw">database:</span> <span class="str">catalog</span>
+  <span class="kw">schema_name:</span> <span class="str">dw</span>
+  <span class="kw">alias:</span> <span class="str">orders</span>
+
+<span class="cmt"># db_table 同样支持三段式</span>
+<span class="kw">db_table:</span> <span class="str">catalog.dw.orders</span>
+</pre>
+</div>
+
+<!-- ── Cumulative PeriodAgg ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.6 累计指标的聚合方式</h3>
+  <p>累计指标支持三种 <code>period_agg</code> 模式，控制在时间窗口内的聚合行为：</p>
+
+<pre><span class="cmt"># last：取窗口内最后一天的值（默认行为）</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">end_of_week_inventory</span>
+  <span class="kw">type:</span> <span class="str">cumulative</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">cumulative_type_params:</span>
+      <span class="kw">measure:</span>
+        <span class="kw">name:</span> <span class="str">inventory_count</span>
+      <span class="kw">window:</span> <span class="str">7 days</span>
+      <span class="kw">period_agg:</span> <span class="str">last</span>       <span class="cmt"># 取最后一天的值</span>
+
+<span class="cmt"># average：窗口内日均值</span>
+      <span class="kw">period_agg:</span> <span class="str">average</span>    <span class="cmt"># 7 天平均值</span>
+
+<span class="cmt"># first：窗口内第一天的值</span>
+      <span class="kw">period_agg:</span> <span class="str">first</span>      <span class="cmt"># 取第一天的值</span>
+</pre>
+
+  <table>
+    <tr><th><code>period_agg</code></th><th>说明</th></tr>
+    <tr><td><code>last</code></td><td>窗口内最后一天的值（默认）</td></tr>
+    <tr><td><code>average</code></td><td>窗口内每日均值</td></tr>
+    <tr><td><code>first</code></td><td>窗口内第一天的值</td></tr>
+  </table>
+</div>
+
+<!-- ── Conversion Constant Properties ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.7 转化指标的固定属性</h3>
+  <p>在转化指标中，可以用 <code>constant_properties</code> 指定在不同事件间保持不变的属性：</p>
+
+<pre><span class="cmt"># 按"流量来源"维度分析转化，要求流量来源在两次事件间不变</span>
+<span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">visit_to_order_by_source</span>
+  <span class="kw">type:</span> <span class="str">conversion</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">conversion_type_params:</span>
+      <span class="kw">base_measure:</span>
+        <span class="kw">name:</span> <span class="str">visit_count</span>
+      <span class="kw">conversion_measure:</span>
+        <span class="kw">name:</span> <span class="str">order_count</span>
+      <span class="kw">entity:</span> <span class="str">user</span>
+      <span class="kw">constant_properties:</span>
+        <span class="kw">- base_property:</span> <span class="str">order_id__channel</span>    <span class="cmt"># 基础事件的属性</span>
+          <span class="kw">conversion_property:</span> <span class="str">order_id__channel</span> <span class="cmt"># 转化事件的属性（必须相同）</span>
+</pre>
+</div>
+
+<!-- ── Metric Time Granularity + Offset to Grain ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.8 指标时间粒度 & 偏移粒度</h3>
+
+  <p><strong>指标级 time_granularity：</strong>可以在指标定义中直接指定时间粒度（覆盖查询时的默认行为）：</p>
+<pre><span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">monthly_revenue</span>
+  <span class="kw">type:</span> <span class="str">simple</span>
+  <span class="kw">time_granularity:</span> <span class="str">month</span>     <span class="cmt"># 指定此指标默认按月聚合</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">measure:</span>
+      <span class="kw">name:</span> <span class="str">total_amount</span>
+</pre>
+
+  <p><strong>offset_to_grain：</strong>在 derived 指标中，将偏移对齐到指定粒度（而非默认的天级别）：</p>
+<pre><span class="kw">metric:</span>
+  <span class="kw">name:</span> <span class="str">yoy_growth</span>
+  <span class="kw">type:</span> <span class="str">derived</span>
+  <span class="kw">type_params:</span>
+    <span class="kw">expr:</span> <span class="str">(current - prev) / prev</span>
+    <span class="kw">metrics:</span>
+      <span class="kw">- name:</span> <span class="str">total_amount</span>
+        <span class="kw">alias:</span> <span class="str">current</span>
+      <span class="kw">- name:</span> <span class="str">total_amount</span>
+        <span class="kw">alias:</span> <span class="str">prev</span>
+        <span class="kw">offset_window:</span> <span class="str">1 year</span>
+        <span class="kw">offset_to_grain:</span> <span class="str">month</span>    <span class="cmt"># 偏移到月粒度（而非天）</span>
+</pre>
+</div>
+
+<!-- ── Entity Role ── -->
+<div class="card">
+  <h3 style="margin-top:0">10.9 实体角色 (Role)</h3>
+  <p>同一个实体（如 <code>user_id</code>）在表中可能有多个角色。比如订单表里的 <code>user_id</code> 既是"买家"也是"推荐人"。用 <code>role</code> 区分：</p>
+
+<pre><span class="kw">entities:</span>
+  <span class="kw">- name:</span> <span class="str">user</span>
+    <span class="kw">type:</span> <span class="str">foreign</span>
+    <span class="kw">expr:</span> <span class="str">buyer_id</span>
+    <span class="kw">role:</span> <span class="str">buyer</span>              <span class="cmt"># 此 user 实体的角色是"买家"</span>
+
+  <span class="kw">- name:</span> <span class="str">user</span>
+    <span class="kw">type:</span> <span class="str">foreign</span>
+    <span class="kw">expr:</span> <span class="str">referrer_id</span>
+    <span class="kw">role:</span> <span class="str">referrer</span>           <span class="cmt"># 此 user 实体的角色是"推荐人"</span>
+</pre>
+
+  <p>不指定 <code>role</code> 时，默认角色等同于实体名。</p>
+</div>
+
+<!-- ════════════════ 11. BEST PRACTICES ════════════════ -->
+<h2 id="best-practices">11. 最佳实践</h2>
+
+<div class="card">
+  <ol style="padding-left:20px;">
+    <li>
+      <strong>一张表一个文件。</strong>
+      文件命名用 <code>表名.yaml</code>，结构清晰易维护。
+      <br>✅ <code>orders.yaml</code>、<code>users.yaml</code>、<code>products.yaml</code>
+    </li>
+    <li style="margin-top:12px;">
+      <strong>先定义实体，再写维度，最后加度量。</strong>
+      实体是语义模型的骨架，维度是分组能力，度量是查询目标。按这个顺序写，不容易遗漏。
+    </li>
+    <li style="margin-top:12px;">
+      <strong>给每个度量写 <code>description</code>。</strong>
+      终端用户看到的是指标名称和描述。好的描述让他们不需要看 YAML 就能理解指标含义。
+    </li>
+    <li style="margin-top:12px;">
+      <strong>同一张时间列可以定义多个粒度维度。</strong>
+      比如 <code>order_date</code> 列可以同时有 day、week、month、quarter、year 五种粒度。
+    </li>
+    <li style="margin-top:12px;">
+      <strong>外键实体用有意义的业务名称。</strong>
+      实体名 <code>customer</code> 比 <code>user_id</code> 更好理解——它代表"客户"这个概念，而不只是"user_id 列"。
+    </li>
+    <li style="margin-top:12px;">
+      <strong>先验证，再提交。</strong>
+      每次修改 YAML 后，点击 <strong>💡 Validate</strong> 检查。系统会验证表存在性、列名正确性、以及命名规范。看到绿色通过再提交。
+    </li>
+    <li style="margin-top:12px;">
+      <strong>度量名在同一个模型内必须唯一。</strong>
+      不同模型的度量名可以重复，但那会导致指标覆盖——所以最好全局唯一。
+    </li>
+  </ol>
+</div>
+
+<!-- ════════════════ 10. ERRORS ════════════════ -->
+<h2 id="errors">12. 常见错误 & 排查</h2>
+
+<div class="card">
+  <table>
+    <tr><th>错误信息</th><th>原因</th><th>解决方法</th></tr>
+    <tr>
+      <td><code>Table xxx does not exist</code></td>
+      <td><code>db_table</code> 指向的表不存在</td>
+      <td>检查表名拼写，确认库名和表名都正确</td>
+    </tr>
+    <tr>
+      <td><code>measure references missing column: dw.orders.xxx</code></td>
+      <td>度量中的列名在表中不存在</td>
+      <td>检查 <code>expr</code> 是否和实际列名一致（注意大小写）</td>
+    </tr>
+    <tr>
+      <td><code>entity references missing column</code></td>
+      <td>实体中的 <code>expr</code> 列不存在</td>
+      <td>同上；如果是 SQL 表达式（如 <code>substring(...) </code>），确认函数名和列名正确</td>
+    </tr>
+    <tr>
+      <td><code>Duplicate measure 'xxx' defined in 2 models</code></td>
+      <td>两个模型定义了同名的度量</td>
+      <td>重命名其中一个度量，确保全局唯一</td>
+    </tr>
+    <tr>
+      <td><code>Duplicate semantic_model name</code></td>
+      <td>两个文件用了相同的模型名</td>
+      <td>重命名其中一个模型</td>
+    </tr>
+    <tr>
+      <td><code>Did not find exactly one project configuration</code></td>
+      <td>缺少 <code>project.yaml</code></td>
+      <td>创建包含 <code>time_config</code> 的 project.yaml</td>
+    </tr>
+    <tr>
+      <td><code>'xxx' does not match '^(?!.*__)...$'</code></td>
+      <td>命名不符合规范</td>
+      <td>使用小写字母开头，去除双下划线，加长到至少 2 个字符</td>
+    </tr>
+    <tr>
+      <td><code>No staging changes to validate</code></td>
+      <td>没有待验证的变更</td>
+      <td>先上传/修改 YAML 文件，再点 Validate</td>
+    </tr>
+  </table>
+</div>
+
+<div class="box box-info" style="margin-top:24px;">
+  <strong>🔍 快速排查步骤：</strong>
+  <ol style="padding-left:20px; margin-top:8px;">
+    <li>确认 Doris 中表存在：<code>DESCRIBE dw.orders</code></li>
+    <li>确认列名和大小写完全一致</li>
+    <li>检查 YAML 缩进是否正确（必须用空格，不能用 Tab）</li>
+    <li>确认所有名称符合小写字母开头的规范</li>
+  </ol>
+</div>
+
+<!-- ════════════════ 13. DORIS-MCP MANAGEMENT ════════════════ -->
+<h2 id="doris-mcp">13. doris-mcp 中的语义模型管理</h2>
+
+<div class="card">
+  <h3 style="margin-top:0">13.1 工作区 (Workspace)</h3>
+  <p>工作区是语义模型的<strong>隔离容器</strong>。每个工作区有独立的：</p>
+  <ul style="padding-left:20px; margin:8px 0;">
+    <li>模型文件（YAML 定义）</li>
+    <li>指标列表（<code>list_metrics</code> 只能看到本区的指标）</li>
+    <li>查询引擎实例（MetricFlow 编译器）</li>
+    <li>Doris 连接池</li>
+  </ul>
+  <p>工作区 A 的指标<strong>完全不可见</strong>于工作区 B。适合按团队、项目或环境划分。</p>
+
+  <div class="box box-info">
+    <strong>📌 命名规则：</strong>工作区名必须以英文字母开头，只能包含字母、数字和下划线。例如 <code>marketing</code>、<code>finance_v2</code>。
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">13.2 工作区的三种状态</h3>
+  <p>调用 <code>check_service_health</code> 可以查看每个工作区的运行状态。一个工作区始终处于以下三种状态之一：</p>
+
+  <table>
+    <tr><th>状态</th><th>图标</th><th>含义</th><th>触发条件</th></tr>
+    <tr>
+      <td><strong>healthy</strong></td>
+      <td>🟢</td>
+      <td>正常运行。语义模型已成功加载，指标可查询。</td>
+      <td>YAML 文件已 Commit，bootstrap 解析成功，MetricFlow 引擎就绪。</td>
+    </tr>
+    <tr>
+      <td><strong>no_models</strong></td>
+      <td>⚪</td>
+      <td>空工作区。尚未上传任何 YAML 文件。</td>
+      <td>新创建的工作区，或所有文件已被删除。</td>
+    </tr>
+    <tr>
+      <td><strong>not_ready</strong></td>
+      <td>🔴</td>
+      <td>加载失败。文件存在但无法编译为语义清单。</td>
+      <td>YAML 语法错误、表不存在、缺少 project.yaml、MetricFlow 校验失败等。检查 <code>validate</code> 的错误信息。</td>
+    </tr>
+  </table>
+
+  <div style="text-align:center; margin:20px 0;">
+    <pre style="display:inline-block; text-align:left;">
+  ┌──────────────┐    上传 YAML     ┌──────────────┐    Commit 成功    ┌──────────────┐
+  │  no_models   │ ──────────────→ │  not_ready   │ ───────────────→ │   healthy    │
+  │  (空工作区)   │                 │  (待修复)     │                   │  (正常运行)   │
+  └──────────────┘                 └──────────────┘                   └──────────────┘
+                                         ↑                                  │
+                                         │       上传错误 YAML               │
+                                         └──────────────────────────────────┘
+    </pre>
+  </div>
+
+  <div class="box box-info">
+    <strong>📊 版本追踪：</strong>每次重载后系统会记录版本号、指标数量、加载是否成功。可通过 <code>check_service_health</code> 返回的 <code>metric_count</code> 确认当前加载的指标数。
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">13.3 Active Store 与 Staging Store</h3>
+  <p>每个工作区内部有两层存储：</p>
+  <table>
+    <tr><th>存储层</th><th>表名</th><th>用途</th></tr>
+    <tr><td><strong>Active Store</strong><br>（已生效）</td><td><code>active_store_{workspace}</code></td><td>已提交并加载的模型。查询引擎使用此版本。文件<strong>只读</strong>。</td></tr>
+    <tr><td><strong>Staging Store</strong><br>（待提交）</td><td><code>staging_store_{workspace}</code></td><td>用户上传或编辑的待定变更。可增/改/删。<strong>验证通过后提交</strong>进入 Active。</td></tr>
+  </table>
+
+  <div style="text-align:center; margin:16px 0;">
+    <pre style="display:inline-block; text-align:left;">
+   Staging Store               Active Store
+  ┌─────────────┐   commit    ┌─────────────┐
+  │ edit / add  │ ─────────→ │  query use  │
+  │ validate ✓  │            │  read-only  │
+  │ discard  ✗  │            │             │
+  └─────────────┘            └─────────────┘
+       ↑                          ↑
+  用户修改                  查询引擎使用
+    </pre>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">13.4 更新流程</h3>
+  <p>语义模型的更新遵循<strong>编辑 → 验证 → 提交 → 自动重载</strong>的流程：</p>
+
+  <table>
+    <tr><th>步骤</th><th>操作</th><th>说明</th></tr>
+    <tr><td>1</td><td>上传/编辑 YAML</td><td>文件进入 Staging Store（不影响正在运行的查询）</td></tr>
+    <tr><td>2</td><td>💡 <strong>Validate</strong></td><td>必须执行！系统自动检查：表是否存在、列名是否正确、YAML 语法、MetricFlow 语义规则、命名规范、跨模型重复名</td></tr>
+    <tr><td>3</td><td>🚀 <strong>Commit</strong></td><td>Staging → Active。系统自动触发引擎重载（无需手动重启）</td></tr>
+    <tr><td>4</td><td>⟳ 自动重载</td><td>后台线程解析新模型、编译 JSON 清单、更新函数路由。通常 2-5 秒完成</td></tr>
+  </table>
+
+  <div class="box box-warn">
+    <strong>⚠️ 必须先验证再提交：</strong>未经过 Validate 的 Staging 会被 Commit 拒绝，返回 <code>"Staging must be validated before commit"</code>。
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">13.5 权限模型</h3>
+  <p>只有 <strong>admin</strong> 用户可以管理语义模型：</p>
+  <table>
+    <tr><th>操作</th><th>admin</th><th>普通用户</th></tr>
+    <tr><td>查看语义模型</td><td>✅</td><td>✅</td></tr>
+    <tr><td>查询指标 (<code>query_metric</code>)</td><td>✅</td><td>✅</td></tr>
+    <tr><td>列出指标 (<code>list_metrics</code>)</td><td>✅</td><td>✅</td></tr>
+    <tr><td>上传/编辑/删除 YAML</td><td>✅</td><td>❌</td></tr>
+    <tr><td>Validate / Commit / Discard</td><td>✅</td><td>❌</td></tr>
+    <tr><td>创建/删除工作区</td><td>✅</td><td>❌</td></tr>
+    <tr><td>执行 SQL (<code>execute_query</code>)</td><td>✅</td><td>✅（受限）</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">13.6 默认示例工作区</h3>
+  <p>首次启动时，系统会自动创建 <code>example</code> 工作区，包含完整的种子数据：</p>
+
+  <table>
+    <tr><th>内容</th><th>说明</th></tr>
+    <tr><td><code>dw.orders</code></td><td>订单表（12 条模拟数据），含 order_id、user_id、product_id、amount、channel、status、order_date</td></tr>
+    <tr><td><code>dw.users</code></td><td>用户表（5 条模拟数据），含 user_id、name、city、level、register_date</td></tr>
+    <tr><td><code>dw.products</code></td><td>商品表（5 条模拟数据），含 product_id、name、category、brand、price</td></tr>
+    <tr><td><code>dw.dim_date</code></td><td>日期维度表（日历表），用于时间轴对齐和累计计算</td></tr>
+    <tr><td>语义模型 YAML</td><td>orders.yaml、users.yaml、products.yaml + project.yaml（自动注入 active_store_example）</td></tr>
+  </table>
+
+  <p>示例指标包括：<code>total_amount</code>（订单总额）、<code>order_count</code>（订单数）、<code>avg_amount</code>（客单价）、<code>unique_users</code>（独立用户数）来自 orders 模型；<code>user_count</code>（用户数）来自 users 模型。</p>
+  <p>可在配置中设置 <code>seed_example: false</code> 禁用自动种子。</p>
+</div>
+
+<!-- ════════════════ 14. WEBUI & CLI ════════════════ -->
+<h2 id="webui-cli">14. 使用方式：WebUI & CLI</h2>
+
+<div class="card">
+  <h3 style="margin-top:0">14.1 WebUI（浏览器界面）</h3>
+  <p>访问 <code>http://&lt;服务器地址&gt;:&lt;端口&gt;/mcp/web</code>，登录后可使用图形化管理界面：</p>
+
+  <table>
+    <tr><th>页面</th><th>URL</th><th>功能</th></tr>
+    <tr><td>登录</td><td><code>/mcp/web/login</code></td><td>用 Doris 账号登录（admin:admin 为默认管理员）</td></tr>
+    <tr><td>首页</td><td><code>/mcp/web</code></td><td>工作区列表，可切换、创建、删除工作区</td></tr>
+    <tr><td>模型管理</td><td><code>/mcp/web/models?workspace=xxx</code></td><td>查看 Active 和 Staging 文件列表、编辑、上传、删除</td></tr>
+    <tr><td>文件编辑</td><td><code>/mcp/web/{filename}?workspace=xxx</code></td><td>在线编辑 YAML 文件，支持语法高亮</td></tr>
+  </table>
+
+  <p><strong>关键操作按钮（仅 admin）：</strong></p>
+  <table>
+    <tr><th>按钮</th><th>作用</th></tr>
+    <tr><td>💡 <strong>Validate</strong></td><td>验证 Staging 中的所有变更（物理校验 + 语义校验 + 重复检测）</td></tr>
+    <tr><td>🚀 <strong>Commit</strong></td><td>将验证通过的 Staging 提交到 Active，触发引擎重载</td></tr>
+    <tr><td>🗑 <strong>Discard</strong></td><td>丢弃 Staging 中的所有变更，回到 Active 版本</td></tr>
+    <tr><td>⟳ <strong>Reload</strong></td><td>手动触发引擎重载（通常 Commit 后自动执行）</td></tr>
+    <tr><td>+ <strong>New</strong></td><td>新建 YAML 文件</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">14.2 CLI（命令行客户端）</h3>
+  <p>doris-mcp-client 是独立部署的命令行客户端（<code>doris-mcp-client-0.2.0.tar.gz</code>, 59MB），通过 Bearer token 连接 MCP Server。所有命令（tool + semantic）统一走 Bearer 认证。</p>
+
+  <p><strong>MCP Tool 调用：</strong></p>
+<pre><span class="cmt"># 列出所有指标</span>
+doris-mcp-client tool call list_metrics --json '{"workspace":"example"}'
+
+<span class="cmt"># 查询指标（按月汇总订单总额）</span>
+doris-mcp-client tool call query_metric --json \
+  '{"workspace":"example","metrics":["total_amount"],"group_by":["order_month"]}'
+
+<span class="cmt"># 查看指标可用维度</span>
+doris-mcp-client tool call list_dimensions_for_metric --json \
+  '{"workspace":"example","metric_name":"total_amount"}'
+
+<span class="cmt"># 执行原始 SQL</span>
+doris-mcp-client tool call execute_query --arg sql="SELECT * FROM dw.orders LIMIT 5"
+
+<span class="cmt"># 健康检查 + 查看所有 workspace 状态</span>
+doris-mcp-client tool call check_service_health
+doris-mcp-client semantic status</pre>
+
+  <p><strong>语义模型管理：</strong></p>
+<pre><span class="cmt"># 列出工作区的所有模型文件</span>
+doris-mcp-client semantic list -w example
+
+<span class="cmt"># 上传 YAML 到 staging</span>
+doris-mcp-client semantic push ./models -w example
+
+<span class="cmt"># 拉取 active 模型到本地</span>
+doris-mcp-client semantic pull -o ./backup -w example
+
+<span class="cmt"># 在线编辑模型文件</span>
+doris-mcp-client semantic edit orders.yaml -w example
+
+<span class="cmt"># 触发语义层重载</span>
+doris-mcp-client semantic reload -w example</pre>
+
+  <div class="box box-ok">
+    <strong>🔌 MCP 接入：</strong>在 AI 工具（如 Claude Desktop）的配置中添加：
+    <pre style="margin-top:8px;">{
+  "mcpServers": {
+    "doris": {
+      "url": "http://&lt;服务器&gt;:&lt;端口&gt;/mcp",
+      "transport": "streamable-http",
+      "headers": { "Authorization": "Bearer admin:admin" }
+    }
+  }
+}</pre>
+  </div>
+</div>
+
+<!-- ════════════════ FOOTER ════════════════ -->
+<div style="text-align:center; margin-top:48px; padding:24px; color:var(--muted); font-size:.9rem; border-top:1px solid var(--border);">
+  <p>基于 MetricFlow v0.209.0 · Apache Doris 适配版 · doris-mcp-server 0.2.0</p>
+</div>
+
+</div>
+</section><section id="panel-server" class="doc-panel" role="tabpanel" aria-labelledby="tab-server">
+<header>
+  <h1>Doris MCP 用户指南</h1>
+  <p>接入 AI Agent（Claude Code / Codex），命令行管理语义模型，自然语言查询数据</p>
+</header>
+<div class="container">
+<div class="toc">
+    <h3>目录</h3>
+    <ul>
+      <li><a href="#server-接入-ai-agent">1. 接入 AI Agent（Claude Code / Cursor / Codex）</a>
+        <ul style="padding-left:16px; font-size:.82rem;">
+          <li><a href="#server-接入-ai-agent">1.1 接入 Claude Code</a></li>
+          <li><a href="#server-接入-ai-agent">1.2 接入 Cursor / VS Code</a></li>
+          <li><a href="#server-接入-ai-agent">1.3 可用 Tool 一览</a></li>
+          <li><a href="#server-接入-ai-agent">1.4 Agent 推荐工作流</a></li>
+          <li><a href="#server-接入-ai-agent">1.5 对话示例</a></li>
+        </ul>
+      </li>
+      <li><a href="#server-cli-工具">2. CLI 命令行工具</a></li>
+      <li><a href="#server-可用的查询能力">3. 可用的查询能力</a></li>
+      <li><a href="#server-查询示例">4. 查询示例</a></li>
+      <li><a href="#server-常见问题">5. 常见问题</a></li>
+    </ul>
+  </div>
+
+<blockquote>
+<p><strong>你是 Doris 的用户</strong>。管理员已经为你部署好了 MCP Server，你只需要知道：
+1. 如何把服务接入 AI Agent（Claude Code / Codex）
+2. 如何使用 CLI 管理语义模型
+3. 如何通过 AI 对话查询数据</p>
+</blockquote>
+<hr />
+<h2 id="server-接入-ai-agent">1. 接入 AI Agent（Claude Code / Cursor / Codex）</h2>
+
+<div class="card" style="background:#f0f7ff; border-left:4px solid #1a73e8;">
+  <p><strong>📋 接入前准备 — 你需要从管理员那里获取：</strong></p>
+  <ul style="padding-left:20px; margin:8px 0;">
+    <li><strong>MCP Server 地址</strong>：<code>http://&lt;IP&gt;:&lt;端口&gt;</code>（默认端口 3000）</li>
+    <li><strong>Doris 账号密码</strong>：用于认证（格式 <code>用户名:密码</code>，如 <code>admin:admin</code>）</li>
+    <li><strong>Workspace 名称</strong>：语义模型所在的工作区（默认 <code>example</code>）</li>
+  </ul>
+</div>
+
+<h3>1.1 接入 Claude Code</h3>
+<p><strong>步骤 1：添加 MCP Server</strong></p>
+<pre><code>claude mcp add --transport http doris http://&lt;MCP-Server-地址&gt;:&lt;端口&gt;/mcp \
+  --header "Authorization: Bearer admin:admin"</code></pre>
+
+<p><strong>步骤 2：验证连接</strong></p>
+<p>在 Claude Code 对话中输入：</p>
+<blockquote>
+<p>检查服务健康状态</p>
+</blockquote>
+<p>AI 会自动调用 <code>check_service_health</code>，返回 Doris 连接状态和所有 workspace 状态。如果看到 <code>"doris": "connected"</code> 说明接入成功。</p>
+
+<p><strong>步骤 3：开始查询</strong></p>
+<blockquote>
+<p>列出所有可用指标</p>
+</blockquote>
+<p>AI 会自动按三步流程操作：<code>list_metrics</code> → <code>list_dimensions_for_metric</code> → <code>query_metric</code>。</p>
+
+<h3>1.2 接入 Cursor / VS Code</h3>
+<p>在项目根目录创建 <code>.cursor/mcp.json</code> 或 VS Code 的 MCP 配置：</p>
+<pre><code>{
+  "mcpServers": {
+    "doris": {
+      "url": "http://&lt;MCP-Server-地址&gt;:&lt;端口&gt;/mcp",
+      "transport": "streamable-http",
+      "headers": {
+        "Authorization": "Bearer admin:admin"
+      }
+    }
+  }
+}</code></pre>
+
+<h3>1.3 可用 Tool 一览（共 10 个）</h3>
+
+<p><strong>🟢 启动 & 健康检查（Agent 对话开始时先调这里）</strong></p>
+<table>
+<thead><tr><th>Tool</th><th>参数</th><th>用途</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>get_query_guide</code></td>
+  <td>—</td>
+  <td><strong>第一步必调。</strong>返回完整工作流指引：何时用语义层 vs 裸 SQL、工具调用顺序、查询语法。不调此工具 Agent 会走弯路。</td>
+</tr>
+<tr>
+  <td><code>check_service_health</code></td>
+  <td>detail(可选)</td>
+  <td>返回 Doris 连通性 + 每个 workspace 的状态（healthy / no_models / not_ready）和指标数量。首次对话必调。</td>
+</tr>
+</tbody>
+</table>
+
+<p><strong>📊 语义查询（推荐优先使用，自动生成正确 SQL）</strong></p>
+<table>
+<thead><tr><th>Tool</th><th>参数</th><th>用途</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>list_metrics</code></td>
+  <td>workspace(必填), page_size, page_token</td>
+  <td>列出所有可用指标（name + description）。Agent 根据用户意图匹配指标。</td>
+</tr>
+<tr>
+  <td><code>list_dimensions_for_metric</code></td>
+  <td>workspace(必填), metric_name(必填)</td>
+  <td>返回指标的可用 group_by 维度（name + type + description）。确保 group_by 不报错。</td>
+</tr>
+<tr>
+  <td><code>query_metric</code></td>
+  <td>workspace(必填), metrics(必填), group_by, where, order_by, limit, having, database, max_rows</td>
+  <td><strong>核心查询工具。</strong>编译 + 执行语义查询。涉及计数/求和/比率/排名/趋势都必须走这里。支持 HAVING 过滤聚合结果。database 指定目标库，max_rows 硬限制返回行数（0=默认10000）。</td>
+</tr>
+<tr>
+  <td><code>reload_semantic_layer</code></td>
+  <td>workspace(必填)</td>
+  <td>手动触发语义层重载。管理员修改 YAML 模型并 commit 后如需立即生效可调用，否则 60s 自动轮询。</td>
+</tr>
+</tbody>
+</table>
+
+<p><strong>🔍 底层元数据 & 裸 SQL（仅在以下两种场景使用）</strong></p>
+
+<div class="card" style="background:#fff8e1; border-left:4px solid #d97706; margin-bottom:12px;">
+  <p><strong>⚠️ 两种裸 SQL 场景：</strong></p>
+  <ul style="padding-left:20px; margin:6px 0;">
+    <li><strong>场景 A — 语义层不可用：</strong><code>check_service_health</code> 返回所有 workspace 都不是 <code>healthy</code>（no_models / not_ready）。此时所有查询只能走 <code>list_databases</code> → <code>list_tables</code> → <code>describe_table</code> → <code>execute_query</code>。</li>
+    <li><strong>场景 B — 无匹配指标：</strong>语义层 healthy，但 <code>list_metrics</code> 中没有任何指标能匹配用户意图。此时同样回退到裸 SQL 路径。</li>
+  </ul>
+</div>
+
+<table>
+<thead><tr><th>Tool</th><th>参数</th><th>用途</th></tr></thead>
+<tbody>
+<tr>
+  <td><code>list_databases</code></td>
+  <td>page_size, page_token</td>
+  <td>列出所有数据库。探索阶段可用，但不能替代 <code>list_metrics</code>。</td>
+</tr>
+<tr>
+  <td><code>list_tables</code></td>
+  <td>database(必填), like, page_size, page_token</td>
+  <td>列出库中的表名。<strong>仅返回表名，不含列信息。</strong>想看列用 <code>describe_table</code>。</td>
+</tr>
+<tr>
+  <td><code>describe_table</code></td>
+  <td>database(必填), table(必填), detail_level</td>
+  <td>查看物理表结构（列名、类型）。detail_level: names/summary/full。</td>
+</tr>
+<tr>
+  <td><code>execute_query</code></td>
+  <td>sql(必填), database, max_rows</td>
+  <td><strong>裸 SQL 兜底。</strong>仅允许只读（SELECT/SHOW/DESCRIBE/EXPLAIN）。如果语义层有匹配指标，优先用 <code>query_metric</code>。</td>
+</tr>
+</tbody>
+</table>
+
+<h3>1.4 Agent 推荐工作流</h3>
+
+<div class="card" style="background:#f8fafc;">
+  <p><strong>🔁 每次对话的标准流程：</strong></p>
+  <ol style="padding-left:20px; margin:12px 0;">
+    <li><code>get_query_guide()</code> — 获取完整指引（Agent 知道何时用哪个工具）</li>
+    <li><code>check_service_health()</code> — 确认 Doris 连通，查看可用 workspace</li>
+    <li>
+      <strong>路由判断：</strong>
+      <ul style="padding-left:16px; margin:4px 0;">
+        <li>用户问"有多少"、"计算"、"趋势"、"比率" → 走语义层 4-5-6</li>
+        <li>用户问"看表结构"、"有哪些库" → 走元数据工具</li>
+        <li><strong>语义层不可用</strong>（所有 workspace 非 healthy）→ 跳过 4-6，直接走 7</li>
+      </ul>
+    </li>
+    <li><code>list_metrics(workspace)</code> — 列出指标，匹配用户意图</li>
+    <li><code>list_dimensions_for_metric(workspace, metric_name)</code> — 获取可用维度</li>
+    <li><code>query_metric(workspace, metrics, group_by, ...)</code> — 执行查询</li>
+    <li><strong>兜底：</strong>如果步骤 4 没有匹配的指标，用 <code>list_databases</code> → <code>list_tables</code> → <code>describe_table</code> → <code>execute_query</code> 走裸 SQL 路径</li>
+  </ol>
+</div>
+
+<div class="card" style="background:#fef2f2; border-left:4px solid #dc2626;">
+  <p><strong>🚫 关键禁区：</strong></p>
+  <ul style="padding-left:20px; margin:6px 0;">
+    <li><strong>语义层 healthy + 有匹配指标</strong> → 绝不允许绕开 <code>query_metric</code> 直接用 <code>execute_query</code> 写 SQL。</li>
+    <li><strong>语义层 healthy + 无匹配指标</strong> → 先告知用户"语义层没有覆盖此查询"，再用 <code>execute_query</code>，并在结果中附警告。</li>
+  </ul>
+</div>
+
+<h3>1.5 对话示例</h3>
+<pre><code>用户：最近一个月各渠道的订单总额是多少？
+
+AI 思考：
+  1. get_query_guide → 获取指引 ✓
+  2. check_service_health → workspace "example" healthy, 5 metrics ✓
+  3. 涉及"总额"、"渠道" → 走语义层
+  4. list_metrics(example) → total_amount（订单总金额）✓
+  5. list_dimensions_for_metric(example, total_amount) → channel ✓
+  6. query_metric(example, metrics=[total_amount], group_by=[channel],
+                  where="order_date >= '2026-04-30'")
+
+AI 回复：
+  渠道    订单总额
+  WEB    1,096.00
+  APP    2,396.00
+  MINI     298.00</code></pre>
+<hr />
+<h2 id="server-cli-工具">2. CLI 命令行工具</h2>
+<p><code>doris-mcp-client</code> 是 Doris MCP Server 的命令行客户端，用于调用 MCP Tool 和管理语义模型。</p>
+
+<h3>2.1 配置连接</h3>
+<p>CLI 通过环境变量或配置文件获取连接信息（二选一）：</p>
+<p><strong>方式一：环境变量</strong></p>
+<pre><code>export DORIS_MCP_SERVER=http://&lt;MCP-Server-地址&gt;:&lt;端口&gt;
+export DORIS_MCP_TOKEN=admin:admin</code></pre>
+<p><strong>方式二：配置文件 <code>doris-mcp-client.toml</code></strong></p>
+<pre><code>[server]
+DORIS_MCP_SERVER = "http://&lt;MCP-Server-地址&gt;:&lt;端口&gt;"
+DORIS_MCP_TOKEN = "admin:admin"</code></pre>
+<p>也可用 <code>-c</code> 指定配置文件路径：</p>
+<pre><code>doris-mcp-client -c /path/to/doris-mcp-client.toml tool list</code></pre>
+
+<h3>2.2 调用 MCP Tool</h3>
+<pre><code># 列出所有可用 Tool
+doris-mcp-client tool list
+
+# 查看 Tool 参数
+doris-mcp-client tool describe execute_query
+
+# 调用 Tool：简单参数
+doris-mcp-client tool call list_tables --arg database=analytics
+
+# 调用 Tool：JSON 参数
+doris-mcp-client tool call query_metric --json \
+  '{"workspace":"example","metrics":["total_amount"],"group_by":["channel"]}'
+
+# 查看服务健康状态
+doris-mcp-client tool call check_service_health
+
+# Verbose 模式（显示详细错误）
+doris-mcp-client -v tool call execute_query --arg sql="SELECT ..."</code></pre>
+
+<h3>2.3 语义模型管理</h3>
+<pre><code># 列出一个 workspace 的所有语义文件
+doris-mcp-client semantic list --workspace example
+
+# 查看某个文件内容
+doris-mcp-client semantic view orders.yaml --workspace example
+
+# 上传并推送语义模型
+doris-mcp-client semantic push ./models --workspace example
+
+# 查询推送结果（异步）
+doris-mcp-client semantic result &lt;request_id&gt;
+
+# 编辑语义文件（调起 $EDITOR）
+doris-mcp-client semantic edit orders.yaml --workspace example
+
+# 或直接传内容
+doris-mcp-client semantic edit orders.yaml --content "..." --workspace example
+
+# Stage 删除文件
+doris-mcp-client semantic delete old_model.yaml --workspace example
+
+# 触发语义层重载
+doris-mcp-client semantic reload --workspace example
+
+# 查看语义层状态
+doris-mcp-client semantic status
+
+# 拉取当前生效的语义模型到本地
+doris-mcp-client semantic pull --output ./remote-models --workspace example</code></pre>
+
+<h3>2.4 常用命令速查</h3>
+<table>
+<thead><tr><th>命令</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>doris-mcp-client tool list</code></td><td>列出所有 MCP Tool</td></tr>
+<tr><td><code>doris-mcp-client tool describe &lt;name&gt;</code></td><td>查看 Tool 参数</td></tr>
+<tr><td><code>doris-mcp-client tool call &lt;name&gt; --arg k=v</code></td><td>调用 Tool（键值参数）</td></tr>
+<tr><td><code>doris-mcp-client tool call &lt;name&gt; --json '{...}'</code></td><td>调用 Tool（JSON 参数）</td></tr>
+<tr><td><code>doris-mcp-client semantic list -w &lt;ws&gt;</code></td><td>列出语义文件</td></tr>
+<tr><td><code>doris-mcp-client semantic push &lt;dir&gt; -w &lt;ws&gt;</code></td><td>推送语义模型</td></tr>
+<tr><td><code>doris-mcp-client semantic result &lt;id&gt;</code></td><td>查询推送结果</td></tr>
+<tr><td><code>doris-mcp-client semantic edit &lt;file&gt; -w &lt;ws&gt;</code></td><td>编辑语义文件</td></tr>
+<tr><td><code>doris-mcp-client semantic pull -o &lt;dir&gt; -w &lt;ws&gt;</code></td><td>拉取语义模型</td></tr>
+<tr><td><code>doris-mcp-client semantic status</code></td><td>语义层状态</td></tr>
+<tr><td><code>doris-mcp-client semantic reload -w &lt;ws&gt;</code></td><td>触发重载</td></tr>
+</tbody>
+</table>
+
+<hr />
+<h2 id="server-可用的查询能力">3. 可用的查询能力</h2>
+<p>接入后，你在 Claude Code 对话中直接用自然语言提问，AI 会自动调用对应的 MCP Tool。</p>
+
+<h3>3.1 元数据发现</h3>
+<table>
+<thead><tr><th>你想做什么</th><th>直接说</th><th>调用了哪个 Tool</th></tr></thead>
+<tbody>
+<tr><td>看有哪些库</td><td>"列出所有数据库"</td><td><code>list_databases</code></td></tr>
+<tr><td>看库下有哪些表</td><td>"列出 dw 库的表"</td><td><code>list_tables</code></td></tr>
+<tr><td>看表结构</td><td>"查看 orders 表有哪些字段"</td><td><code>describe_table</code></td></tr>
+</tbody>
+</table>
+
+<h3>3.2 SQL 查询</h3>
+<table>
+<thead><tr><th>你想做什么</th><th>直接说</th><th>调用了哪个 Tool</th></tr></thead>
+<tbody>
+<tr><td>查数据</td><td>"查询 top 10 订单"</td><td><code>execute_query</code></td></tr>
+<tr><td>统计分析</td><td>"按状态统计订单数"</td><td><code>execute_query</code></td></tr>
+</tbody>
+</table>
+<p><code>execute_query</code> 只允许只读 SQL（SELECT / SHOW / DESCRIBE / EXPLAIN）。</p>
+
+<h3>3.3 语义层查询（需要管理员配置了语义模型）</h3>
+<p>如果你的 Doris 集群配置了语义层，Agent 三步即可完成查询：</p>
+<ol>
+  <li><code>list_metrics</code> — 列出所有可用指标（name + description）</li>
+  <li><code>list_dimensions_for_metric</code> — 查看指标的可用维度（name + type + description）</li>
+  <li><code>query_metric</code> — 执行语义查询（支持 having 过滤聚合结果）</li>
+</ol>
+<table>
+<thead><tr><th>你想做什么</th><th>直接说</th><th>调用了哪个 Tool</th></tr></thead>
+<tbody>
+<tr><td>看有哪些指标</td><td>"列出所有指标"</td><td><code>list_metrics</code></td></tr>
+<tr><td>查营收趋势</td><td>"查询过去 7 天的营收，按天分组"</td><td><code>query_metric</code></td></tr>
+<tr><td>看可用维度</td><td>"total_amount 可以按哪些维度分析"</td><td><code>list_dimensions_for_metric</code></td></tr>
+<tr><td>检查服务状态</td><td>"检查服务健康状态"</td><td><code>check_service_health</code></td></tr>
+</tbody>
+</table>
+<p>所有语义工具必传 <code>workspace</code> 参数（默认可用 <code>"example"</code>）。</p>
+
+<hr />
+<h2 id="server-查询示例">4. 查询示例</h2>
+
+<h3>示例 1：探索数据结构</h3>
+<pre><code>你：列出所有数据库
+AI：[调用 list_databases]
+    dw
+
+你：看看 dw 库里有哪些表
+AI：[调用 list_tables]
+    orders, users, products, dim_date
+
+你：看一下 orders 表的结构
+AI：[调用 describe_table]
+    列名        类型      注释
+    order_id    BIGINT    订单ID
+    user_id     BIGINT    用户ID
+    amount      DECIMAL   金额
+    channel     VARCHAR   渠道
+    status      VARCHAR   状态
+    order_date  DATE      下单日期</code></pre>
+
+<h3>示例 2：数据查询</h3>
+<pre><code>你：查一下最近一周各状态的订单数和总金额
+AI：[调用 execute_query]
+    status      count   total_amount
+    completed   1234    567890.00
+    pending     567     89012.00
+    cancelled   89      12345.00</code></pre>
+
+<h3>示例 3：语义指标</h3>
+<pre><code>你：列出所有可用的指标
+AI：[调用 list_metrics]
+    total_amount      订单总金额
+    order_count       订单数
+    avg_amount        平均客单价
+    unique_users      下单用户数
+    user_count        用户数
+
+你：查询最近 7 天各渠道的订单总金额
+AI：[调用 list_dimensions_for_metric] → channel
+    [调用 query_metric]
+    渠道      总金额
+    线上      12345.00
+    线下      15678.00
+    ...</code></pre>
+
+<hr />
+<h2 id="server-常见问题">5. 常见问题</h2>
+
+<h3>Q: 连不上，报 401</h3>
+<p>确认 Token 格式正确：<code>用户名:密码</code>（英文冒号分隔）。</p>
+
+<h3>Q: 语义查询报错 "workspace not found"</h3>
+<p>确认 workspace 名称正确，默认可用 <code>"example"</code>。登录 WebUI 查看可用 workspace。</p>
+
+<h3>Q: 能否执行写操作？</h3>
+<p>不能。<code>execute_query</code> 仅允许只读 SQL（SELECT / SHOW / DESCRIBE / EXPLAIN）。</p>
+
+<h3>Q: 查询很慢？</h3>
+<p>数据量大时让 AI 加 <code>LIMIT</code> 或缩小时间范围。</p>
+
+<h3>Q: 语义层能用哪些指标？</h3>
+<p>用 CLI 快速查看：</p>
+<pre><code>doris-mcp-client tool call list_metrics --json '{"workspace":"example"}'
+doris-mcp-client tool call check_service_health</code></pre>
+</div>
+</section>
+
+<script>
+(function () {
+  const buttons = Array.from(document.querySelectorAll('.tab-button'));
+  const panels = Array.from(document.querySelectorAll('.doc-panel'));
+  const rightTocList = document.getElementById('right-toc-list');
+  function renderRightToc(panel) {
+    if (!rightTocList || !panel) return;
+    rightTocList.innerHTML = '';
+    Array.from(panel.querySelectorAll('h2[id]')).forEach((heading) => {
+      const item = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '#' + heading.id;
+      link.textContent = heading.textContent.trim();
+      item.appendChild(link);
+      rightTocList.appendChild(item);
+    });
+  }
+  function activate(key) {
+    let activePanel = null;
+    buttons.forEach((button) => {
+      const active = button.dataset.tab === key;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+    });
+    panels.forEach((panel) => {
+      const active = panel.id === 'panel-' + key;
+      panel.classList.toggle('active', active);
+      if (active) activePanel = panel;
+    });
+    renderRightToc(activePanel);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  buttons.forEach((button) => button.addEventListener('click', () => activate(button.dataset.tab)));
+  renderRightToc(document.querySelector('.doc-panel.active'));
+})();
+</script>
+</body>
+</html>

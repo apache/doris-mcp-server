@@ -1,263 +1,141 @@
-<!--
-Licensed to the Apache Software Foundation (ASF) under one
-or more contributor license agreements.  See the NOTICE file
-distributed with this work for additional information
-regarding copyright ownership.  The ASF licenses this file
-to you under the Apache License, Version 2.0 (the
-"License"); you may not use this file except in compliance
-with the License.  You may obtain a copy of the License at
+# Test Cases — doris-new-mcp
 
-  http://www.apache.org/licenses/LICENSE-2.0
+基于 [DESIGN.md](../DESIGN.md)、[INSTALL.html](../INSTALL.html)、[doris-mcp-docs.html](../doris-mcp-docs.html) 生成。
 
-Unless required by applicable law or agreed to in writing,
-software distributed under the License is distributed on an
-"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-KIND, either express or implied.  See the License for the
-specific language governing permissions and limitations
-under the License.
--->
-# Doris MCP Server Testing System
+## 文件说明
 
-## Overview
+### 离线单元测试（无需 MCP Server / Doris）
 
-This testing system adopts a layered architecture, including unit tests, integration tests, and client-server tests. The testing system assumes the server is already properly started and focuses on testing functionality rather than startup configuration.
+| 文件 | 内容 |
+|------|------|
+| `test_sql_validator.py` | `core.sql_validator.validate_readonly` 只读 SQL 校验（放行/拦截/多语句/注释绕过/已知前缀行为） |
+| `test_sensitive_mask.py` | `core.sensitive_mask` 密码/token 脱敏 |
+| `test_pagination.py` | `core.pagination` 分页与 token TTL 行为 |
+| `test_private_ip_config.py` | 私网 IP 配置读取与启动装配 |
+| `test_deps.py` | 运行时依赖守卫（import 真实模块） |
+| `test_cross_file_deps.py` | 删除前跨文件依赖检测 |
+| `test_credential_pass.py` | 请求级凭据透传到 store 层 |
+| `test_watcher.py` | `MultiWorkspaceWatcher.ensure_fresh` 冷却/重载/降级 |
+| `test_web_session_cookie.py` | Web 会话 Cookie |
+| `test_session_affinity_proxy_routing.py` | 会话亲和代理路由 |
+| `test_session_affinity_proxy_streaming.py` | 会话亲和代理流式转发 |
+| `test_session_affinity_proxy_relogin.py` | 会话亲和代理重登录 |
+| `test_session_affinity_proxy_force_target.py` | 会话亲和代理强制目标 |
 
-## Testing Architecture
+### 在线测试（需运行中的 MCP Server + Doris）
 
-### 1. Unit Tests
-- **Location**: `test/security/`, `test/utils/`, `test/tools/`
-- **Purpose**: Test individual module functionality
-- **Features**: Uses Mock objects, no dependency on external services
+| 文件 | 内容 |
+|------|------|
+| `test_mcp_tools.py` | 全部 10 个 MCP Tool + 认证 + E2E（30 用例） |
+| `test_web_api.py` | Web UI + REST API + 工作区管理（12 用例） |
 
-### 2. Integration Tests
-- **Location**: `test/integration/`
-- **Purpose**: Test collaboration between modules
-- **Features**: Test complete workflows
+### 入口脚本
 
-### 3. Client-Server Tests
-- **Location**: `test/tools/test_tools_client_server.py`, `test/utils/test_query_executor_client_server.py`
-- **Purpose**: Test actual server functionality through MCP client
-- **Features**: Assumes server is running, skips tests if server is not available
+| 文件 | 内容 |
+|------|------|
+| `run_all_tests.sh` | 一键运行脚本，支持 `--offline` / `--tools` / `--web` / `--smoke` |
 
-## Configuration Files
+## 环境要求
 
-### test_config.json
-Test configuration file defines how to connect to the running server:
+| 条件 | 说明 |
+|------|------|
+| MCP Server | 运行在 `localhost:3000`（仅在线测试需要） |
+| Doris FE | 运行在 `127.0.0.1:9030`（仅在线测试需要） |
+| 认证 | `admin:admin` |
+| Python | 3.10+，离线测试使用项目 `.venv`（`PYTHONPATH=src`） |
 
-```json
-{
-  "server_endpoints": {
-    "http": {
-      "url": "http://localhost:3000/mcp",
-      "timeout": 30
-    },
-    "stdio": {
-      "command": "uv",
-      "args": ["run", "python", "-m", "doris_mcp_server.main", "--transport", "stdio"],
-      "timeout": 30
-    }
-  },
-  "test_settings": {
-    "default_transport": "http",
-    "retry_attempts": 3,
-    "retry_delay": 1.0,
-    "test_timeout": 60,
-    "enable_performance_tests": true,
-    "enable_security_tests": true
-  }
-}
-```
-
-## Usage
-
-### 1. Start the Server
-
-Before running client-server tests, you need to start the server first:
-
-#### HTTP Mode (Recommended)
+可通过环境变量覆盖默认配置:
 ```bash
-# Start HTTP server
-./start_server.sh
-# or
-uv run python -m doris_mcp_server.main --transport http --port 3000
+export MCP_URL=http://192.168.1.100:3000/mcp
+export MCP_BASE_URL=http://192.168.1.100:3000
+export MCP_TOKEN=admin:admin
+export MCP_WORKSPACE=example
+export DORIS_USER=admin          # test_web_api.py 登录凭据
+export DORIS_PASS=admin
+export DORIS_MCP_TEST_DESTRUCTIVE=1  # 允许破坏性用例（见下）
 ```
 
-#### Stdio Mode
+## 运行方式
+
 ```bash
-# Stdio mode is started directly by the client, no need to pre-start
+# 仅离线单元测试（无需启动任何服务）
+bash test/run_all_tests.sh --offline
+
+# 或用 unittest discover 跑全部离线用例（在线文件无可收集用例，不影响）
+PYTHONPATH=src .venv/bin/python -m unittest discover -s test -p 'test_*.py'
+
+# 单个离线文件也可直接运行（已内置 sys.path 自举）
+.venv/bin/python test/test_watcher.py
+
+# 全部测试（需 MCP Server 在线）
+bash test/run_all_tests.sh
+
+# 仅冒烟测试 (快速, ~5秒)
+bash test/run_all_tests.sh --smoke
+
+# 仅 MCP Tool 测试
+bash test/run_all_tests.sh --tools
+
+# 仅 Web/API 测试
+bash test/run_all_tests.sh --web
+
+# 或直接运行 Python（服务器不可达时整体跳过，退出码 0）
+python test/test_mcp_tools.py
+python test/test_web_api.py
 ```
 
-### 2. Run Tests
+## 破坏性用例
 
-#### Run All Tests
-```bash
-python -m pytest test/ -v
+`test_web_api.py` 中以下用例会影响共享服务器状态，**默认跳过**，
+需显式设置 `DORIS_MCP_TEST_DESTRUCTIVE=1` 才执行：
+
+- `test_api_staging_discard` — 会丢弃真实用户的暂存变更
+- `test_api_workspace_create_and_delete` — 会创建/删除真实工作区
+
+## 测试覆盖矩阵
+
+### MCP Tool 测试 (10 个 Tool)
+
+| Tool | 测试场景 | 验证点 |
+|------|----------|--------|
+| `get_query_guide` | 获取工作流指引 | 返回文本 >100字，含关键词 |
+| `check_service_health` | 基础/详细 | Doris=connected, workspaces 存在 |
+| `list_metrics` | 列表/分页 | data 数组, meta.total_count |
+| `list_dimensions_for_metric` | 按指标查维度 | data 包含维度 |
+| `query_metric` | 基础/group_by/where/order+limit | 4 种查询模式 |
+| `list_databases` | 列表/分页 | dw,mysql,system_mcp,information_schema |
+| `list_tables` | mysql库/dw种子上表/like模糊 | 4 张种子表验证 |
+| `describe_table` | summary/full/names | 3 级详细程度 |
+| `execute_query` | SELECT/VERSION/SHOW/EXPLAIN/max_rows/写拦截 | 7 种场景 |
+| `reload_semantic_layer` | 手动重载 | 返回结构化 JSON，含 success 字段 |
+
+注：语义层相关用例（`list_dimensions_for_metric`、`query_metric` 系列）
+仅在 MCP Server 不可达（连接类异常）时跳过；语义层未就绪等断言失败
+会如实计为 FAIL，不再静默跳过。
+
+### Web UI & API 测试
+
+| 分类 | 测试点 |
+|------|--------|
+| **Web UI** | 登录页面、登录提交、未认证拦截、模型管理页 |
+| **REST API** | 语义文件列表、pull 下载、reload 重载、staging validate/discard |
+| **工作区** | 创建 → 验证存在 → 删除 (完整生命周期，破坏性，默认跳过) |
+| **认证** | admin 权限控制、Bearer token 格式验证 |
+
+### 边界 & 错误测试
+
+| 场景 | 预期 |
+|------|------|
+| 无 Authorization | 401/403 |
+| 无效 Token | 401/403 |
+| 写操作 SQL (INSERT) | 被拦截 |
+| SQL 语法错误 | 友好错误信息 |
+| 非 admin 创建工作区 | 403 |
+| 不存在的指标 | 友好错误 |
+
+### 端到端测试 (Agent 工作流)
+
 ```
-
-#### Run Unit Tests
-```bash
-# Security module tests
-python -m pytest test/security/ -v
-
-# Tools module tests
-python -m pytest test/tools/test_tools_manager.py -v
-
-# Query executor tests
-python -m pytest test/utils/test_query_executor.py -v
+get_query_guide → check_service_health → list_databases
+  → list_tables → describe_table → execute_query
 ```
-
-#### Run Integration Tests
-```bash
-python -m pytest test/integration/ -v
-```
-
-#### Run Client-Server Tests
-```bash
-# Tools Client-Server tests
-python -m pytest test/tools/test_tools_client_server.py -v
-
-# QueryExecutor Client-Server tests
-python -m pytest test/utils/test_query_executor_client_server.py -v
-```
-
-### 3. Test Configuration
-
-#### Modify Server Endpoints
-Edit the `test/test_config.json` file:
-
-```json
-{
-  "server_endpoints": {
-    "http": {
-      "url": "http://your-server:port/mcp"
-    }
-  }
-}
-```
-
-#### Enable/Disable Specific Tests
-```json
-{
-  "test_settings": {
-    "enable_performance_tests": false,  // Disable performance tests
-    "enable_security_tests": true       // Enable security tests
-  }
-}
-```
-
-## Test Status
-
-### ✅ Completed Test Modules
-
-1. **Security Module** (100% Pass)
-   - Authentication tests: 5/5 passed
-   - Authorization tests: 7/7 passed
-   - Data masking tests: 13/13 passed
-   - SQL validation tests: 10/10 passed
-   - Security manager tests: 7/7 passed
-   - Coverage: 88%
-
-2. **Client-Server Test Architecture** (Implemented)
-   - Automatic server connection status detection
-   - Automatically skip tests when server is not running
-   - Support for both HTTP and Stdio transport modes
-
-### 🔄 Tests Requiring Server Running
-
-1. **Tools Client-Server Tests**
-   - Tool list retrieval
-   - SQL query execution
-   - Database list retrieval
-   - Table schema queries
-   - Performance statistics
-   - Error handling
-   - Security authentication
-
-2. **QueryExecutor Client-Server Tests**
-   - Simple query execution
-   - Database queries
-   - Information schema queries
-   - Parameterized queries
-   - Error handling
-   - Security authentication
-
-## Testing Best Practices
-
-### 1. Server Startup Check
-All client-server tests automatically check server connection status:
-- If server is running normally, execute actual tests
-- If server is not running, skip tests and display appropriate message
-
-### 2. Test Isolation
-- Unit tests use Mock objects, no dependency on external services
-- Integration tests use controlled test environments
-- Client-server tests connect to actually running servers
-
-### 3. Error Handling
-- Tests don't assume specific success/failure results
-- Verify response structure rather than specific content
-- Gracefully handle connection failures and timeouts
-
-### 4. Configuration Management
-- Use configuration files to manage test parameters
-- Support configuration switching for different environments
-- Provide reasonable default values
-
-## Troubleshooting
-
-### 1. Server Connection Failure
-```
-ERROR: Server is not running or not accessible
-```
-**Solution**: Ensure the server is started and listening on the correct port
-
-### 2. Import Errors
-```
-ImportError: cannot import name 'DorisUnifiedClient'
-```
-**Solution**: Check Python path and dependency installation
-
-### 3. Test Timeouts
-```
-TimeoutError: Test execution timeout
-```
-**Solution**: Increase timeout settings in `test_config.json`
-
-## Development Guide
-
-### Adding New Client-Server Tests
-
-1. Add test methods in the appropriate test file
-2. Use `@pytest.mark.asyncio` decorator
-3. Get test client through `client` fixture
-4. Implement test callback function
-5. Verify response structure
-
-Example:
-```python
-@pytest.mark.asyncio
-async def test_new_feature_via_client(self, client, test_config):
-    """Test new feature through client"""
-    async def test_callback(client_instance):
-        result = await client_instance.call_tool("new_tool", {
-            "param": "value"
-        })
-        
-        assert "success" in result
-        return result
-    
-    result = await client.connect_and_run(test_callback)
-    assert "success" in result
-```
-
-### Modifying Test Configuration
-
-Edit the `test/test_config.json` file to adjust:
-- Server endpoints
-- Timeout settings
-- Test data
-- Feature switches
-
-## Summary
-
-This testing system provides complete test coverage, from unit tests to end-to-end client-server tests. Through reasonable configuration and automated connection detection, it ensures tests can run stably in different environments. 

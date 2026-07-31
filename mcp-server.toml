@@ -1,0 +1,42 @@
+# =============================================================================
+# mcp-server 配置文件 (TOML)
+# =============================================================================
+# 传输模式：仅 streamable-http。
+# 配置值支持 ${VAR_NAME} 环境变量插值。
+
+# ---------------------------------------------------------------------------
+# 服务端
+# ---------------------------------------------------------------------------
+[server]
+mcp_name = "doris-new-mcp"        # MCP 服务名称
+mcp_host = "0.0.0.0"              # HTTP 监听地址
+mcp_port = 3000                   # HTTP 监听端口
+fe_port = 9030                    # Doris FE MySQL 端口（同机 127.0.0.1）
+# privateIp = "10.0.0.13"        # 可选：多机部署时所有节点填同一个 IP，
+                                  # /mcp/web 请求（含登录）固定转发到该节点。
+fe_host = "127.0.0.1"             # Doris FE 主机地址（同机部署保持 127.0.0.1）
+fe_user = "admin"                 # Doris FE 管理员用户名
+fe_password = ""                  # Doris FE 管理员密码，建议用 ${ENV_VAR} 环境变量注入
+admin_users = ["admin"]           # 管理员用户列表，用于管理操作权限判定
+seed_example = false              # 默认不部署；Admin 可在 WebUI 手动部署 example
+privateIp = ""                    # 每台机器填写自己的 RFC1918 私网 IPv4；非空优先，空则自动探测
+
+# ---------------------------------------------------------------------------
+# 日志
+# ---------------------------------------------------------------------------
+[logging]
+level = "info"                    # debug / info / warning / error
+audit_log = "./logs/audit.log"    # 审计日志路径
+rotation_when = "midnight"        # 轮转策略: midnight / H / D / W0~W6
+rotation_backup_count = 30        # 保留的轮转文件数
+
+# ---------------------------------------------------------------------------
+# 查询
+# ---------------------------------------------------------------------------
+[query]
+pool_min_size = 0                 # 连接池最小连接数（admin pool + per-user pool）
+pool_max_size = 10                # 连接池最大连接数
+pool_idle_timeout_seconds = 300   # 空闲连接超时回收（秒）；作为 aiomysql pool_recycle，应小于 Doris wait_timeout
+query_timeout_seconds = 600       # SQL 查询超时（秒）
+query_max_rows = 10000            # 单次查询最大返回行数
+db_whitelist = []                 # 数据库白名单；空列表表示不限制

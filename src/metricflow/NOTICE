@@ -1,0 +1,37 @@
+MetricFlow
+Copyright 2025 dbt Labs, Inc.
+
+This directory contains a vendored copy of MetricFlow, originally developed by
+dbt Labs, Inc. and licensed under the Apache License, Version 2.0 (see the
+LICENSE file in this directory).
+
+Upstream source:
+    https://github.com/dbt-labs/metricflow
+Version vendored:
+    v0.209.0 (see __about__.py)
+
+The following three upstream packages were merged into this single
+`metricflow.*` namespace:
+
+    - metricflow
+    - metricflow-semantics            (vendored as metricflow.semantics.*)
+    - metricflow-semantic-interfaces  (vendored as metricflow.semantic_interfaces.*)
+
+Local modifications (per Apache License 2.0, Section 4(b)):
+
+    1. Added `sql/render/doris.py`: a new Doris dialect SQL plan renderer
+       (`DorisSqlPlanRenderer`), not present upstream.
+    2. Added `msi_pydantic_shim.py`: replaces the upstream
+       `dsi_pydantic_shim` module for the merged
+       metricflow-semantic-interfaces tree.
+    3. Modified `protocols/sql_client.py`: added the `DORIS` member to the
+       `SqlEngine` enum and its engine-type mapping.
+    4. Modified `semantic_interfaces/implementations/project_configuration.py`:
+       patched the default `dsi_package_version` fallback — when the
+       `dbt_semantic_interfaces` distribution is not installed it now falls
+       back to the `mcp-server` distribution version and finally to "0.0.0",
+       instead of failing with PackageNotFoundError.
+    5. Rewrote imports throughout the tree: upstream imports of
+       `metricflow_semantics.*` and `dbt_semantic_interfaces.*` were rewritten
+       to `metricflow.semantics.*` and `metricflow.semantic_interfaces.*`
+       respectively, to match the merged single-namespace layout.

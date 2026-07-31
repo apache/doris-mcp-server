@@ -1,0 +1,27 @@
+Doris MCP Server
+Copyright 2026 SelectDB, Inc. and contributors
+
+This product includes software developed by SelectDB and contributors,
+licensed under the Apache License, Version 2.0 (see LICENSE.txt).
+
+================================================================================
+Third-party components
+================================================================================
+
+This distribution bundles the following third-party components:
+
+* MetricFlow (vendored at src/metricflow/)
+    Copyright 2025 dbt Labs, Inc.
+    Licensed under the Apache License, Version 2.0.
+    Upstream: https://github.com/dbt-labs/metricflow
+    Vendored version: 0.209.0
+    See src/metricflow/LICENSE and src/metricflow/NOTICE.
+
+* Python runtime (release tarballs only, under python/)
+    CPython 3.10 from python-build-standalone
+    (https://github.com/astral-sh/python-build-standalone),
+    licensed under the Python Software Foundation License Version 2.
+
+Runtime dependencies installed from PyPI (see requirements.txt) are not
+vendored in the source tree; they are retrieved and bundled at package
+build time under their respective licenses.
