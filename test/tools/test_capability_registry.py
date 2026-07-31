@@ -196,6 +196,52 @@ def test_evaluator_requires_version_probes_handler_and_call_permission() -> None
     assert allowed.callable is True
 
 
+@pytest.mark.parametrize(
+    ("domain_name", "child_name", "expected_components"),
+    (
+        ("doris_governance", "list_udfs", {"master_fe"}),
+        (
+            "doris_governance",
+            "get_lineage_capability_status",
+            {"master_fe", "follower_fe"},
+        ),
+        ("doris_cluster", "get_cache_status", {"be"}),
+        (
+            "doris_cluster",
+            "get_cluster_overview",
+            {"master_fe", "follower_fe", "be"},
+        ),
+        ("doris_query", "get_adbc_connection_info", {"master_fe"}),
+    ),
+)
+def test_evaluator_exposes_only_versions_relevant_to_feature_scope(
+    domain_name: str,
+    child_name: str,
+    expected_components: set[str],
+) -> None:
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(
+            f"{domain_name}.{child_name}"
+        ),  # type: ignore[arg-type]
+    )
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain(domain_name)
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        domain_name,
+        child_name,
+    )
+
+    availability = evaluator.evaluate(
+        snapshot=_snapshot(),
+        providers=CapabilityProviderRegistry({}).snapshot(),
+        domain=domain,
+        child=child,
+        auth_context=None,
+    )
+
+    assert set(availability.detected_versions) == expected_components
+
+
 def test_compaction_prefers_native_tracker_and_uses_legacy_on_405() -> None:
     evaluator = CapabilityEvaluator(
         matrix=DORIS_FEATURE_MATRIX,

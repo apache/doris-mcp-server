@@ -140,7 +140,6 @@ async def test_default_manager_detects_caches_and_dispatches() -> None:
     assert execute_child.availability.callable is True
     assert execute_child.availability.detected_versions == {
         "master_fe": ("4.0.5",),
-        "be": ("4.0.5",),
     }
     assert first.manifest_version == second.manifest_version
     assert result.mode == "result"
@@ -151,4 +150,3 @@ async def test_default_manager_detects_caches_and_dispatches() -> None:
         "EXPLAIN SELECT 1"
     ) == 1
     manager._exec_query_tool.assert_awaited_once()
-
