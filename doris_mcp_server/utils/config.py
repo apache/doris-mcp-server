@@ -866,6 +866,17 @@ class CapabilityConfig:
 
 
 @dataclass
+class GovernanceConfig:
+    """Read-only Governance runtime limits and optional lineage store."""
+
+    max_sample_ratio: float = 0.25
+    max_audit_window_days: int = 30
+    max_lineage_edges: int = 500
+    lineage_store_table: str = ""
+    lineage_recent_event_minutes: int = 1440
+
+
+@dataclass
 class DorisConfig:
     """Doris MCP Server complete configuration"""
 
@@ -904,6 +915,7 @@ class DorisConfig:
     capability: CapabilityConfig = field(
         default_factory=CapabilityConfig
     )
+    governance: GovernanceConfig = field(default_factory=GovernanceConfig)
 
     # Custom configuration
     custom_config: dict[str, Any] = field(default_factory=dict)
@@ -1575,6 +1587,33 @@ class DorisConfig:
                 config.capability.stale_grace_seconds,
             )
             _mark_source(config, "capability_stale_grace_seconds", "env")
+        if "GOVERNANCE_MAX_SAMPLE_RATIO" in os.environ:
+            config.governance.max_sample_ratio = float(
+                os.getenv(
+                    "GOVERNANCE_MAX_SAMPLE_RATIO",
+                    str(config.governance.max_sample_ratio),
+                )
+            )
+        if "GOVERNANCE_MAX_AUDIT_WINDOW_DAYS" in os.environ:
+            config.governance.max_audit_window_days = _env_int(
+                "GOVERNANCE_MAX_AUDIT_WINDOW_DAYS",
+                config.governance.max_audit_window_days,
+            )
+        if "GOVERNANCE_MAX_LINEAGE_EDGES" in os.environ:
+            config.governance.max_lineage_edges = _env_int(
+                "GOVERNANCE_MAX_LINEAGE_EDGES",
+                config.governance.max_lineage_edges,
+            )
+        if "GOVERNANCE_LINEAGE_STORE_TABLE" in os.environ:
+            config.governance.lineage_store_table = os.getenv(
+                "GOVERNANCE_LINEAGE_STORE_TABLE",
+                "",
+            ).strip()
+        if "GOVERNANCE_LINEAGE_RECENT_EVENT_MINUTES" in os.environ:
+            config.governance.lineage_recent_event_minutes = _env_int(
+                "GOVERNANCE_LINEAGE_RECENT_EVENT_MINUTES",
+                config.governance.lineage_recent_event_minutes,
+            )
         if "MCP_STATE_HANDLE_SECRET" in os.environ:
             config.mcp_state_handle_secret = os.getenv(
                 "MCP_STATE_HANDLE_SECRET",
@@ -1687,6 +1726,12 @@ class DorisConfig:
                 if hasattr(config.capability, key):
                     setattr(config.capability, key, value)
 
+        if "governance" in config_data:
+            governance_config = config_data["governance"]
+            for key, value in governance_config.items():
+                if hasattr(config.governance, key):
+                    setattr(config.governance, key, value)
+
         # Custom configuration
         config.custom_config = config_data.get("custom", {})
 
@@ -1718,6 +1763,17 @@ class DorisConfig:
                 ),
                 "stale_grace_seconds": (
                     self.capability.stale_grace_seconds
+                ),
+            },
+            "governance": {
+                "max_sample_ratio": self.governance.max_sample_ratio,
+                "max_audit_window_days": (
+                    self.governance.max_audit_window_days
+                ),
+                "max_lineage_edges": self.governance.max_lineage_edges,
+                "lineage_store_table": self.governance.lineage_store_table,
+                "lineage_recent_event_minutes": (
+                    self.governance.lineage_recent_event_minutes
                 ),
             },
             "database": {
@@ -1960,6 +2016,23 @@ class DorisConfig:
         if not 0 <= self.capability.stale_grace_seconds <= 86400:
             errors.append(
                 "Capability stale grace must be in the range 0-86400 seconds"
+            )
+        if not 0 < self.governance.max_sample_ratio <= 1:
+            errors.append(
+                "Governance maximum sample ratio must be in the range (0, 1]"
+            )
+        if not 1 <= self.governance.max_audit_window_days <= 365:
+            errors.append(
+                "Governance audit window must be in the range 1-365 days"
+            )
+        if not 1 <= self.governance.max_lineage_edges <= 5000:
+            errors.append(
+                "Governance lineage edge limit must be in the range 1-5000"
+            )
+        if not 1 <= self.governance.lineage_recent_event_minutes <= 525600:
+            errors.append(
+                "Governance recent lineage event window must be in the range "
+                "1-525600 minutes"
             )
 
         raw_tool_providers: Any = self.mcp_tool_providers

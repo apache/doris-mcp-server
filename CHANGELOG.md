@@ -57,6 +57,11 @@ under **Unreleased** until a new version is selected and published.
 - A read-only Search domain with four capability-gated children for
   target-index-validated text, vector, and hybrid retrieval, Doris-native
   tokenizer previews, search-index inspection, and evidence-based diagnosis.
+- A read-only Governance domain with eight capability-gated children for
+  column quality, table storage, lineage capability and tracing, access
+  patterns, audit events, user-defined functions, and authentication mappings.
+- An explicit queryable lineage-provider contract and canonical Doris lineage
+  event-store schema for companion-plugin deployments.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
@@ -93,6 +98,10 @@ under **Unreleased** until a new version is selected and published.
 - Separated production dependencies from test, lint, type-check, and build
   tooling across package metadata, generated requirements, Docker, and clean
   wheel verification.
+- Selected Governance lineage providers deterministically from observed Doris
+  versions and live plugin, store, and audit evidence: Doris 4.0.6 and later
+  can use native companion-plugin events, while audit inference remains the
+  primary path before 4.0.6 and an explicit degraded fallback afterward.
 
 ### Fixed
 
@@ -109,6 +118,12 @@ under **Unreleased** until a new version is selected and published.
   redaction.
 - Bound hybrid Search vector, text, and structured-filter parameters in exact
   SQL placeholder order.
+- Kept Governance sampling, audit windows, lineage traversals, identifiers,
+  and result collections bounded, and redacted raw SQL, client addresses,
+  authentication rules, secrets, and error messages from model-facing output.
+- Emitted lineage edges only from attributable native events or conservative
+  direct-column audit evidence, without placeholder sources or invented
+  numeric confidence scores.
 - Excluded explicitly dead Doris components from active version gating while
   preserving them in node inventory, and kept live runtime manifests within
   the 16 KiB domain budget.

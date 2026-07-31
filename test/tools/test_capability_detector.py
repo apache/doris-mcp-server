@@ -744,6 +744,111 @@ async def test_detector_uses_fallback_for_unknown_master_and_retains_follower() 
 
 
 @pytest.mark.asyncio
+async def test_governance_probes_keep_pre_406_audit_lineage_available() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides[
+        "SELECT TABLE_NAME, DATA_LENGTH "
+        "FROM information_schema.tables LIMIT 1"
+    ] = [{"TABLE_NAME": "orders", "DATA_LENGTH": 1024}]
+    connection.row_overrides[
+        "SELECT `time`, `query_id`, `stmt` "
+        "FROM internal.__internal_schema.audit_log LIMIT 1"
+    ] = [{"time": "2026-07-31", "query_id": "query-1", "stmt": "SELECT 1"}]
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.governance",
+    )
+
+    governance = await detector.detect_domain(base, "doris_governance", None)
+
+    assert (
+        governance.probe("audit_lineage_provider_status_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        governance.probe("all_fe_lineage_plugin_compatible").status
+        is CapabilityProbeStatus.UNSUPPORTED
+    )
+    assert (
+        governance.probe("lineage_store_readable").status
+        is CapabilityProbeStatus.MISCONFIGURED
+    )
+    assert (
+        governance.probe("storage_v3").status
+        is CapabilityProbeStatus.DEGRADED
+    )
+
+
+@pytest.mark.asyncio
+async def test_governance_probes_require_406_plugin_and_canonical_store_schema() -> None:
+    connection = _ProbeConnection()
+    version = "doris-4.0.6-43f06a5e26"
+    connection.row_overrides["SELECT @@version_comment;"] = [
+        {"@@version_comment": f"Doris version {version} (Cloud Mode)"}
+    ]
+    connection.row_overrides["SHOW FRONTENDS"] = [
+        {
+            "Name": "fe-1",
+            "Role": "FOLLOWER",
+            "IsMaster": "true",
+            "Version": version,
+        },
+        {
+            "Name": "fe-2",
+            "Role": "FOLLOWER",
+            "IsMaster": "false",
+            "Version": version,
+        },
+    ]
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {"BackendId": "1", "Version": version}
+    ]
+    connection.row_overrides[
+        "SHOW FRONTEND CONFIG LIKE 'activate_lineage_plugin'"
+    ] = [{"Value": "mcp_lineage_sink"}]
+    connection.row_overrides[
+        "DESC `governance`.`lineage_events`"
+    ] = [
+        {"Field": name}
+        for name in (
+            "event_id",
+            "event_time",
+            "source_object",
+            "target_object",
+        )
+    ]
+    manager = _ProbeConnectionManager(connection)
+    manager.config.governance = SimpleNamespace(
+        lineage_store_table="governance.lineage_events"
+    )
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.governance",
+    )
+
+    governance = await detector.detect_domain(base, "doris_governance", None)
+
+    assert (
+        governance.probe("all_fe_lineage_plugin_compatible").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        governance.probe("lineage_store_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        governance.probe("all_fe_lineage_plugin_compatible").reason_code
+        == "LINEAGE_SPI_AND_PLUGIN_CONFIG_OBSERVED"
+    )
+    assert "DESC `governance`.`lineage_events`" in connection.statements
+
+
+@pytest.mark.asyncio
 async def test_detector_rejects_route_change_before_domain_probe() -> None:
     connection = _ProbeConnection()
     manager = _ProbeConnectionManager(connection)

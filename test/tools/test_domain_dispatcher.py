@@ -52,6 +52,7 @@ from doris_mcp_server.tools.domain_models import (
 )
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
+from doris_mcp_server.utils.governance_runtime import GovernanceRuntimeFailure
 from doris_mcp_server.utils.query_runtime import QueryRuntimeFailure
 from doris_mcp_server.utils.security import AuthContext
 
@@ -148,6 +149,47 @@ def test_cluster_domain_binds_all_eleven_children() -> None:
         bound.is_bound(cluster.name, child.name)
         for child in cluster.children
     )
+
+
+def test_governance_domain_binds_all_eight_children() -> None:
+    manager = _manager()
+    bound = BoundHandlerAvailabilityProvider(manager)
+    governance = DORIS_DOMAIN_CATALOG.resolve_domain("doris_governance")
+
+    assert len(governance.children) == 8
+    assert all(
+        bound.is_bound(governance.name, child.name)
+        for child in governance.children
+    )
+
+
+@pytest.mark.asyncio
+async def test_governance_failures_keep_stable_reason_codes() -> None:
+    manager = _manager("doris_governance.analyze_columns")
+    manager.governance_runtime.analyze_columns = AsyncMock(
+        side_effect=GovernanceRuntimeFailure(
+            "The requested Doris table is unavailable.",
+            reason_code="GOVERNANCE_TABLE_NOT_FOUND",
+            status_code=404,
+        )
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_governance",
+        {
+            "child_tool": "analyze_columns",
+            "arguments": {
+                "database": "analytics",
+                "table": "missing",
+            },
+        },
+        None,
+    )
+
+    assert result.mode == "error"
+    assert result.error.code is DomainErrorCode.CHILD_ARGUMENTS_INVALID
+    assert result.error.details["reason_code"] == "GOVERNANCE_TABLE_NOT_FOUND"
+    assert result.error.details["status_code"] == 404
 
 
 @pytest.mark.asyncio

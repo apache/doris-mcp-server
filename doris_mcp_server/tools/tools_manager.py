@@ -63,6 +63,7 @@ from .domain_manifest import (
     DomainManifestService,
 )
 from .doris_feature_matrix import DORIS_FEATURE_MATRIX
+from .governance_handlers import GovernanceToolHandlersMixin
 from .pipeline_handlers import PipelineToolHandlersMixin
 from .query_handlers import QueryToolHandlersMixin
 from .search_handlers import SearchToolHandlersMixin
@@ -78,6 +79,7 @@ class DorisToolsManager(
     ClusterToolHandlersMixin,
     PipelineToolHandlersMixin,
     SearchToolHandlersMixin,
+    GovernanceToolHandlersMixin,
     DomainManifestManagerMixin,
 ):
     """Apache Doris Tools Manager"""
@@ -126,6 +128,7 @@ class DorisToolsManager(
             connection_manager,
             self.query_runtime,
         )
+        self._initialize_governance_handlers(connection_manager)
         self._capability_registry: CapabilityRegistry | None = None
         if domain_availability_provider is None:
             bound_handlers = BoundHandlerAvailabilityProvider(self)

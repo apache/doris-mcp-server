@@ -152,6 +152,70 @@ def test_capability_cache_controls_are_explicit_and_validated(
     assert "Capability stale grace must be in the range 0-86400 seconds" in errors
 
 
+def test_governance_runtime_controls_load_serialize_and_validate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("GOVERNANCE_MAX_SAMPLE_RATIO", "0.15")
+    monkeypatch.setenv("GOVERNANCE_MAX_AUDIT_WINDOW_DAYS", "45")
+    monkeypatch.setenv("GOVERNANCE_MAX_LINEAGE_EDGES", "750")
+    monkeypatch.setenv(
+        "GOVERNANCE_LINEAGE_STORE_TABLE",
+        "governance.lineage_events",
+    )
+    monkeypatch.setenv("GOVERNANCE_LINEAGE_RECENT_EVENT_MINUTES", "180")
+
+    configured = DorisConfig.from_env()
+
+    assert configured.to_dict()["governance"] == {
+        "max_sample_ratio": 0.15,
+        "max_audit_window_days": 45,
+        "max_lineage_edges": 750,
+        "lineage_store_table": "governance.lineage_events",
+        "lineage_recent_event_minutes": 180,
+    }
+    assert configured.validate() == []
+
+    config_path = tmp_path / "doris-mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "governance": {
+                    "max_sample_ratio": 0.2,
+                    "max_audit_window_days": 60,
+                    "max_lineage_edges": 900,
+                    "lineage_store_table": "metadata.lineage_events",
+                    "lineage_recent_event_minutes": 240,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    from_file = DorisConfig.from_file(str(config_path))
+    assert from_file.governance.max_sample_ratio == 0.2
+    assert from_file.governance.max_audit_window_days == 60
+    assert from_file.governance.max_lineage_edges == 900
+    assert from_file.governance.lineage_store_table == "metadata.lineage_events"
+    assert from_file.governance.lineage_recent_event_minutes == 240
+
+    from_file.governance.max_sample_ratio = 0
+    from_file.governance.max_audit_window_days = 366
+    from_file.governance.max_lineage_edges = 5001
+    from_file.governance.lineage_recent_event_minutes = 0
+    errors = from_file.validate()
+    assert (
+        "Governance maximum sample ratio must be in the range (0, 1]"
+        in errors
+    )
+    assert "Governance audit window must be in the range 1-365 days" in errors
+    assert "Governance lineage edge limit must be in the range 1-5000" in errors
+    assert (
+        "Governance recent lineage event window must be in the range "
+        "1-525600 minutes"
+        in errors
+    )
+
+
 def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
     monkeypatch,
 ):
