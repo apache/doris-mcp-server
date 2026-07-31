@@ -39,6 +39,7 @@ def test_real_doris_fixture_repr_redacts_passwords() -> None:
         settings=settings,
         admin_connection=cast(pymysql.Connection, object()),
         table="fixture",
+        restricted_table="restricted_fixture",
         readonly_user="readonly",
         readonly_password=readonly_password,
         marker="marker",

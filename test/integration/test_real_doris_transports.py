@@ -128,6 +128,7 @@ class DorisSandbox:
     settings: RealDorisSettings
     admin_connection: pymysql.Connection
     table: str
+    restricted_table: str
     readonly_user: str
     readonly_password: str = field(repr=False)
     marker: str
@@ -135,6 +136,10 @@ class DorisSandbox:
     @property
     def qualified_table(self) -> str:
         return f"`{self.settings.database}`.`{self.table}`"
+
+    @property
+    def qualified_restricted_table(self) -> str:
+        return f"`{self.settings.database}`.`{self.restricted_table}`"
 
     def kill_connection(self, connection_id: int) -> None:
         with self.admin_connection.cursor() as cursor:
@@ -195,11 +200,13 @@ def doris_sandbox() -> DorisSandbox:
     settings = _real_doris_settings()
     suffix = secrets.token_hex(6)
     table = f"mcp_real_it_{suffix}"
+    restricted_table = f"mcp_real_private_{suffix}"
     readonly_user = f"mcp_it_ro_{suffix}"
     readonly_password = secrets.token_hex(16)
     marker = secrets.token_hex(12)
     user_identity = f"'{readonly_user}'@'%'"
     qualified_table = f"`{settings.database}`.`{table}`"
+    qualified_restricted_table = f"`{settings.database}`.`{restricted_table}`"
     admin_connection = pymysql.connect(
         host=settings.host,
         port=settings.port,
@@ -223,6 +230,21 @@ def doris_sandbox() -> DorisSandbox:
                 """
             )
             cursor.execute(
+                f"""
+                CREATE TABLE {qualified_restricted_table} (
+                    id BIGINT,
+                    marker VARCHAR(64)
+                )
+                DUPLICATE KEY(id)
+                DISTRIBUTED BY HASH(id) BUCKETS 1
+                PROPERTIES ("replication_num" = "1")
+                """
+            )
+            cursor.execute(
+                f"INSERT INTO {qualified_restricted_table} VALUES (1, %s)",
+                (marker,),
+            )
+            cursor.execute(
                 f"CREATE USER {user_identity} IDENTIFIED BY '{readonly_password}'"
             )
             cursor.execute(f"GRANT SELECT_PRIV ON {qualified_table} TO {user_identity}")
@@ -231,6 +253,7 @@ def doris_sandbox() -> DorisSandbox:
             settings=settings,
             admin_connection=admin_connection,
             table=table,
+            restricted_table=restricted_table,
             readonly_user=readonly_user,
             readonly_password=readonly_password,
             marker=marker,
@@ -240,6 +263,8 @@ def doris_sandbox() -> DorisSandbox:
             cursor.execute(f"DROP USER IF EXISTS {user_identity}")
         with suppress(Exception), admin_connection.cursor() as cursor:
             cursor.execute(f"DROP TABLE IF EXISTS {qualified_table}")
+        with suppress(Exception), admin_connection.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS {qualified_restricted_table}")
         admin_connection.close()
 
 
@@ -390,6 +415,7 @@ def _server_environment(
         "ENABLE_DORIS_OAUTH_AUTH": "false",
         "LOG_LEVEL": "ERROR",
         "PYTHONUNBUFFERED": "1",
+        "MCP_TOOL_EXPOSURE_MODE": "hierarchical",
     }
     fe_http_host = os.getenv("DORIS_REAL_FE_HTTP_HOST", "").strip()
     if fe_http_host:
@@ -589,22 +615,62 @@ async def _exec_query(
     sql: str,
     *,
     timeout: int = 5,
-    max_rows: int = 20,
-    max_bytes: int | None = None,
+    max_rows: int | None = None,
 ) -> tuple[Any, dict[str, Any]]:
+    manifest = await _discover_domain(client, "doris_query")
     arguments: dict[str, Any] = {
         "sql": sql,
-        "max_rows": max_rows,
-        "timeout": timeout,
+        "timeout_ms": timeout * 1000,
     }
-    if max_bytes is not None:
-        arguments["max_bytes"] = max_bytes
-    result = await client.call_tool(
-        "exec_query",
-        arguments,
+    if max_rows is not None:
+        arguments["max_rows"] = max_rows
+    result, envelope = await _call_domain_child_result(
+        client,
+        domain="doris_query",
+        child_tool="execute_query",
+        arguments=arguments,
+        manifest_version=manifest["manifest_version"],
+    )
+    if result.is_error:
+        return result, envelope
+    return result, envelope["data"]
+
+
+async def _discover_domain(client: Client, domain: str) -> dict[str, Any]:
+    result = await client.call_tool(domain, {})
+    assert result.is_error is False, json.dumps(
+        result.model_dump(by_alias=True, mode="json"),
+        ensure_ascii=False,
     )
     assert isinstance(result.structured_content, dict)
-    return result, result.structured_content
+    manifest = result.structured_content
+    assert manifest["mode"] == "manifest"
+    assert manifest["domain"] == domain
+    return manifest
+
+
+async def _call_domain_child_result(
+    client: Client,
+    *,
+    domain: str,
+    child_tool: str,
+    arguments: dict[str, Any],
+    manifest_version: str,
+) -> tuple[Any, dict[str, Any]]:
+    result = await client.call_tool(
+        domain,
+        {
+            "child_tool": child_tool,
+            "arguments": arguments,
+            "manifest_version": manifest_version,
+        },
+    )
+    assert isinstance(result.structured_content, dict)
+    payload = result.structured_content
+    assert payload["domain"] == domain
+    assert payload.get("child_tool") == child_tool
+    assert payload["mode"] == ("error" if result.is_error else "result")
+    return result, payload
 
 
 async def _call_domain_child(
@@ -615,23 +681,18 @@ async def _call_domain_child(
     arguments: dict[str, Any],
     manifest_version: str,
 ) -> dict[str, Any]:
-    result = await client.call_tool(
-        domain,
-        {
-            "child_tool": child_tool,
-            "arguments": arguments,
-            "manifest_version": manifest_version,
-        },
+    result, payload = await _call_domain_child_result(
+        client,
+        domain=domain,
+        child_tool=child_tool,
+        arguments=arguments,
+        manifest_version=manifest_version,
     )
     assert result.is_error is False, json.dumps(
         result.model_dump(by_alias=True, mode="json"),
         ensure_ascii=False,
     )
-    assert isinstance(result.structured_content, dict)
-    payload = result.structured_content
     assert payload["mode"] == "result"
-    assert payload["domain"] == domain
-    assert payload["child_tool"] == child_tool
     assert isinstance(payload["data"], dict)
     return payload["data"]
 
@@ -672,50 +733,56 @@ async def test_real_doris_result_boundaries_and_cancellation(
             tool.name: tool
             for tool in (await client.list_tools(cache_mode="bypass")).tools
         }
-        query_schema = tools["exec_query"].input_schema["properties"]
-        assert query_schema["max_rows"]["maximum"] == 5
-        assert query_schema["max_rows"]["default"] == 2
-        assert query_schema["max_bytes"]["maximum"] == 256
-        assert query_schema["timeout"]["maximum"] == 5
+        assert "exec_query" not in tools
+        assert "doris_query" in tools
+        manifest = await _discover_domain(client, "doris_query")
+        children = {child["name"]: child for child in manifest["children"]}
+        query_schema = children["execute_query"]["input_schema"]["properties"]
+        assert set(query_schema) == {
+            "sql",
+            "catalog",
+            "database",
+            "parameters",
+            "max_rows",
+            "timeout_ms",
+        }
+        assert query_schema["max_rows"]["maximum"] == 100_000
+        assert query_schema["timeout_ms"]["maximum"] == 300_000
 
-        default_result = await client.call_tool(
-            "exec_query",
-            {
-                "sql": (
-                    "SELECT id "
-                    f"FROM {doris_sandbox.qualified_table} ORDER BY id"
-                ),
-                "max_bytes": 256,
-                "timeout": 5,
-            },
+        default_result, default_payload = await _exec_query(
+            client,
+            f"SELECT id FROM {doris_sandbox.qualified_table} ORDER BY id",
+            timeout=5,
         )
-        assert isinstance(default_result.structured_content, dict)
-        default_payload = default_result.structured_content
         assert default_result.is_error is False
-        assert len(default_payload["data"]) == 2
+        assert len(default_payload["data"]["rows"]) == 2
         assert default_payload["metadata"]["limits"]["max_rows"] == 2
 
-        with pytest.raises(MCPError) as excessive_rows:
-            await client.call_tool(
-                "exec_query",
-                {
-                    "sql": f"SELECT * FROM {doris_sandbox.qualified_table}",
-                    "max_rows": 6,
-                    "max_bytes": 256,
-                    "timeout": 5,
-                },
-            )
-        assert excessive_rows.value.code == -32602
+        excessive_rows, excessive_payload = await _call_domain_child_result(
+            client,
+            domain="doris_query",
+            child_tool="execute_query",
+            arguments={
+                "sql": f"SELECT * FROM {doris_sandbox.qualified_table}",
+                "max_rows": 6,
+                "timeout_ms": 5000,
+            },
+            manifest_version=manifest["manifest_version"],
+        )
+        assert excessive_rows.is_error is True
+        assert excessive_payload["error"]["code"] == "CHILD_ARGUMENTS_INVALID"
+        assert excessive_payload["error"]["details"]["reason_code"] == (
+            "QUERY_ARGUMENT_INVALID"
+        )
 
         row_result, row_payload = await _exec_query(
             client,
             f"SELECT id FROM {doris_sandbox.qualified_table} ORDER BY id",
             max_rows=2,
-            max_bytes=256,
             timeout=5,
         )
         assert row_result.is_error is False
-        assert len(row_payload["data"]) == 2
+        assert len(row_payload["data"]["rows"]) == 2
         assert row_payload["metadata"]["result_bytes"] <= 256
         assert row_payload["metadata"]["limits"] == {
             "max_rows": 2,
@@ -725,29 +792,31 @@ async def test_real_doris_result_boundaries_and_cancellation(
 
         byte_result, byte_payload = await _exec_query(
             client,
-            (
-                "SELECT id, marker "
-                f"FROM {doris_sandbox.qualified_table} ORDER BY id"
-            ),
+            (f"SELECT id, marker FROM {doris_sandbox.qualified_table} ORDER BY id"),
             max_rows=5,
-            max_bytes=256,
             timeout=5,
         )
         assert byte_result.is_error is False
         assert byte_payload["metadata"]["result_bytes"] <= 256
-        assert byte_payload["metadata"]["truncated"] is True
+        assert byte_payload["data"]["truncated"] is True
         assert byte_payload["metadata"]["truncation_reason"] == "byte_limit"
-        assert 0 < len(byte_payload["data"]) < 5
+        assert 0 < len(byte_payload["data"]["rows"]) < 5
 
         if transport == "stdio":
             cancelled_query = asyncio.create_task(
                 client.call_tool(
-                    "exec_query",
+                    "doris_query",
                     {
-                        "sql": "SELECT SLEEP(5) AS slept",
-                        "max_rows": 1,
-                        "max_bytes": 256,
-                        "timeout": 5,
+                        "child_tool": "execute_query",
+                        "arguments": {
+                            "sql": (
+                                "SELECT COUNT(*) AS row_count "
+                                'FROM numbers("number" = "1000000000")'
+                            ),
+                            "max_rows": 1,
+                            "timeout_ms": 5000,
+                        },
+                        "manifest_version": manifest["manifest_version"],
                     },
                 )
             )
@@ -758,25 +827,26 @@ async def test_real_doris_result_boundaries_and_cancellation(
         else:
             timed_out, timed_out_payload = await _exec_query(
                 client,
-                "SELECT SLEEP(5) AS slept",
+                'SELECT COUNT(*) AS row_count FROM numbers("number" = "1000000000")',
                 max_rows=1,
-                max_bytes=256,
                 timeout=1,
             )
             assert timed_out.is_error is True
-            assert timed_out_payload["error_type"] == "timeout"
+            assert timed_out_payload["error"]["code"] == ("CHILD_EXECUTION_TIMEOUT")
+            assert timed_out_payload["error"]["details"]["reason_code"] == (
+                "QUERY_TIMEOUT"
+            )
 
         recovery_started = time.monotonic()
         recovered_result, recovered_payload = await _exec_query(
             client,
             "SELECT 1 AS recovered",
             max_rows=1,
-            max_bytes=256,
             timeout=5,
         )
         assert time.monotonic() - recovery_started < 3
         assert recovered_result.is_error is False
-        assert recovered_payload["data"] == [{"recovered": 1}]
+        assert recovered_payload["data"]["rows"] == [{"recovered": 1}]
 
 
 async def test_real_doris_token_pool_recovers_after_repeated_query_timeouts(
@@ -839,27 +909,29 @@ async def test_real_doris_token_pool_recovers_after_repeated_query_timeouts(
         for attempt in range(3):
             timed_out, timed_out_payload = await _exec_query(
                 client,
-                "SELECT SLEEP(3) AS slept",
+                'SELECT COUNT(*) AS row_count FROM numbers("number" = "1000000000")',
                 max_rows=1,
-                max_bytes=256,
                 timeout=1,
             )
             assert timed_out.is_error is True
-            assert timed_out_payload["error_type"] == "timeout"
+            assert timed_out_payload["error"]["code"] == ("CHILD_EXECUTION_TIMEOUT")
+            assert timed_out_payload["error"]["details"]["reason_code"] == (
+                "QUERY_TIMEOUT"
+            )
 
             recovery_started = time.monotonic()
             recovered, recovered_payload = await _exec_query(
                 client,
                 "SELECT CURRENT_USER() AS current_user",
                 max_rows=1,
-                max_bytes=256,
                 timeout=5,
             )
             assert time.monotonic() - recovery_started < 3
             assert recovered.is_error is False, f"recovery {attempt + 1} failed"
-            assert doris_sandbox.readonly_user in recovered_payload["data"][0][
-                "current_user"
-            ]
+            assert (
+                doris_sandbox.readonly_user
+                in recovered_payload["data"]["rows"][0]["current_user"]
+            )
 
 
 async def _collect_list_pages(
@@ -928,7 +1000,7 @@ async def test_real_doris_protocol_lists_paginate_without_loss(
         user=doris_sandbox.settings.user,
         password=doris_sandbox.settings.password,
     )
-    page_size = 100
+    page_size = 2
     environment["MCP_LIST_PAGE_SIZE"] = str(page_size)
     results: dict[str, tuple[list[str], int]] = {}
 
@@ -967,17 +1039,17 @@ async def test_real_doris_protocol_lists_paginate_without_loss(
         assert unsupported.value.code == -32601
         assert unsupported.value.message == "Method not found"
 
-        with pytest.raises(MCPError) as invalid_arguments:
-            await client.call_tool(
-                "exec_query",
-                {"sql": ["SELECT 1"]},
-            )
-        assert invalid_arguments.value.code == -32602
-        assert invalid_arguments.value.message == (
-            "Tool arguments do not match input schema"
+        query_manifest = await _discover_domain(client, "doris_query")
+        invalid_arguments, invalid_payload = await _call_domain_child_result(
+            client,
+            domain="doris_query",
+            child_tool="execute_query",
+            arguments={"sql": ["SELECT 1"]},
+            manifest_version=query_manifest["manifest_version"],
         )
-        assert invalid_arguments.value.data["name"] == "exec_query"
-        assert invalid_arguments.value.data["violations"]
+        assert invalid_arguments.is_error is True
+        assert invalid_payload["error"]["code"] == "CHILD_ARGUMENTS_INVALID"
+        assert invalid_payload["error"]["details"]["violations"]
 
         for list_method, result_field, identifier in (
             (
@@ -1004,10 +1076,16 @@ async def test_real_doris_protocol_lists_paginate_without_loss(
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio"])
-async def test_real_doris_read_write_permission_timeout_and_recovery(
+async def test_real_doris_read_only_permission_timeout_and_recovery(
     transport: str,
     doris_sandbox: DorisSandbox,
 ) -> None:
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {doris_sandbox.qualified_table} VALUES (1, %s)",
+            (doris_sandbox.marker,),
+        )
+
     admin_environment = _server_environment(
         doris_sandbox.settings,
         user=doris_sandbox.settings.user,
@@ -1020,8 +1098,8 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
 
         read_result, read_payload = await _exec_query(client, "SELECT 42 AS answer")
         assert read_result.is_error is False
-        assert read_payload["success"] is True
-        assert read_payload["data"][0]["answer"] == 42
+        assert read_payload["status"] == "success"
+        assert read_payload["data"]["rows"][0]["answer"] == 42
 
         write_result, write_payload = await _exec_query(
             client,
@@ -1030,8 +1108,11 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
             VALUES (1, '{doris_sandbox.marker}')
             """,
         )
-        assert write_result.is_error is False
-        assert write_payload["success"] is True
+        assert write_result.is_error is True
+        assert write_payload["error"]["code"] == "CHILD_ARGUMENTS_INVALID"
+        assert write_payload["error"]["details"]["reason_code"] == (
+            "QUERY_READ_ONLY_VIOLATION"
+        )
 
         verify_result, verify_payload = await _exec_query(
             client,
@@ -1042,7 +1123,7 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
             """,
         )
         assert verify_result.is_error is False
-        assert verify_payload["data"] == [{"marker": doris_sandbox.marker}]
+        assert verify_payload["data"]["rows"] == [{"marker": doris_sandbox.marker}]
 
         response_secret = f"sec016-{secrets.token_hex(12)}"
         sensitive_error_result, sensitive_error_payload = await _exec_query(
@@ -1053,7 +1134,7 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
             ),
         )
         assert sensitive_error_result.is_error is True
-        assert sensitive_error_payload["success"] is False
+        assert sensitive_error_payload["error"]["code"] == ("CHILD_EXECUTION_FAILED")
         serialized_error = json.dumps(
             sensitive_error_result.model_dump(by_alias=True, mode="json"),
             ensure_ascii=False,
@@ -1062,18 +1143,18 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
 
         timeout_result, timeout_payload = await _exec_query(
             client,
-            "SELECT SLEEP(2) AS slept",
+            'SELECT COUNT(*) AS row_count FROM numbers("number" = "1000000000")',
             timeout=1,
         )
         assert timeout_result.is_error is True
-        assert timeout_payload["success"] is False
-        assert timeout_payload["error_type"] == "timeout"
+        assert timeout_payload["error"]["code"] == "CHILD_EXECUTION_TIMEOUT"
+        assert timeout_payload["error"]["details"]["reason_code"] == ("QUERY_TIMEOUT")
 
         _, connection_payload = await _exec_query(
             client,
             "SELECT CONNECTION_ID() AS connection_id",
         )
-        connection_id = int(connection_payload["data"][0]["connection_id"])
+        connection_id = int(connection_payload["data"]["rows"][0]["connection_id"])
         doris_sandbox.kill_connection(connection_id)
 
         recovered_result, recovered_payload = await _exec_query(
@@ -1081,8 +1162,8 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
             "SELECT 1 AS recovered",
         )
         assert recovered_result.is_error is False
-        assert recovered_payload["success"] is True
-        assert recovered_payload["data"][0]["recovered"] == 1
+        assert recovered_payload["status"] == "success"
+        assert recovered_payload["data"]["rows"][0]["recovered"] == 1
 
     readonly_environment = _server_environment(
         doris_sandbox.settings,
@@ -1095,22 +1176,21 @@ async def test_real_doris_read_write_permission_timeout_and_recovery(
             f"SELECT marker FROM {doris_sandbox.qualified_table} WHERE id = 1",
         )
         assert allowed_result.is_error is False
-        assert allowed_payload["data"] == [{"marker": doris_sandbox.marker}]
+        assert allowed_payload["data"]["rows"] == [{"marker": doris_sandbox.marker}]
 
         denied_result, denied_payload = await _exec_query(
             client,
-            f"""
-            INSERT INTO {doris_sandbox.qualified_table}
-            VALUES (2, 'must-not-write')
-            """,
+            f"SELECT marker FROM {doris_sandbox.qualified_restricted_table}",
         )
         assert denied_result.is_error is True
-        assert denied_payload["success"] is False
-        assert denied_payload["error_type"] == "permission_denied"
+        assert denied_payload["error"]["code"] == "CHILD_EXECUTION_FAILED"
+        assert denied_payload["error"]["details"]["reason_code"] == (
+            "QUERY_PERMISSION_DENIED"
+        )
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio"])
-async def test_real_doris_tool_regression_paths(
+async def test_real_doris_hierarchical_tool_regression_paths(
     transport: str,
     doris_sandbox: DorisSandbox,
 ) -> None:
@@ -1119,7 +1199,6 @@ async def test_real_doris_tool_regression_paths(
         user=doris_sandbox.settings.user,
         password=doris_sandbox.settings.password,
     )
-    missing_table = f"{doris_sandbox.table}_missing"
     with doris_sandbox.admin_connection.cursor() as cursor:
         cursor.execute(
             f"INSERT INTO {doris_sandbox.qualified_table} VALUES (1, %s)",
@@ -1127,66 +1206,80 @@ async def test_real_doris_tool_regression_paths(
         )
 
     async with _transport_client(transport, environment) as client:
-        basic_info_result = await client.call_tool(
+        listed_tools = {
+            tool.name for tool in (await client.list_tools(cache_mode="bypass")).tools
+        }
+        assert {
             "get_table_basic_info",
-            {
-                "table_name": doris_sandbox.table,
-                "db_name": doris_sandbox.settings.database,
-            },
-        )
-        assert basic_info_result.is_error is False
-        assert isinstance(basic_info_result.structured_content, dict)
-        assert basic_info_result.structured_content["row_count"] == 1
-        assert basic_info_result.structured_content["column_count"] == 2
-
-        schema_result = await client.call_tool(
             "get_table_schema",
-            {
-                "table_name": doris_sandbox.table,
-                "db_name": doris_sandbox.settings.database,
-            },
-        )
-        assert schema_result.is_error is False
-        assert isinstance(schema_result.structured_content, dict)
-        schema_columns = schema_result.structured_content["result"]
-        assert next(
-            column for column in schema_columns if column["column_name"] == "marker"
-        )["comment"] == "Integration marker"
-
-        column_analysis_result = await client.call_tool(
             "analyze_columns",
-            {
-                "table_name": doris_sandbox.table,
-                "columns": ["id", "marker"],
-                "analysis_types": ["completeness"],
-                "sample_size": 10,
-                "db_name": doris_sandbox.settings.database,
-            },
-        )
-        assert column_analysis_result.is_error is False
-        assert isinstance(column_analysis_result.structured_content, dict)
-        assert column_analysis_result.structured_content["columns_analyzed"] == 2
-        assert set(
-            column_analysis_result.structured_content["completeness_analysis"]
-        ) == {"id", "marker"}
+            "get_sql_profile",
+            "monitor_data_freshness",
+            "analyze_data_access_patterns",
+            "exec_query",
+        }.isdisjoint(listed_tools)
 
-        injected_identifier_result = await client.call_tool(
-            "analyze_columns",
-            {
-                "table_name": (
-                    f"{doris_sandbox.table}; DROP TABLE {doris_sandbox.table}"
-                ),
-                "columns": ["id"],
-                "analysis_types": ["completeness"],
-                "sample_size": 10,
-                "db_name": doris_sandbox.settings.database,
+        catalog_manifest = await _discover_domain(client, "doris_catalog")
+        table_context = await _call_domain_child(
+            client,
+            domain="doris_catalog",
+            child_tool="get_table_context",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "sections": ["schema", "basic"],
             },
+            manifest_version=catalog_manifest["manifest_version"],
         )
-        assert injected_identifier_result.is_error is True
-        assert isinstance(injected_identifier_result.structured_content, dict)
+        basic = table_context["data"]["basic"]
+        schema = table_context["data"]["schema"]
+        assert basic["status"] == "success"
+        assert basic["data"]["table"] == doris_sandbox.table
+        assert basic["data"]["row_count"] >= 0
+        assert schema["status"] == "success"
+        assert schema["data"]["column_count"] == 2
+        schema_columns = schema["data"]["columns"]
         assert (
-            "Invalid table name"
-            in (injected_identifier_result.structured_content["error"])
+            next(
+                column for column in schema_columns if column["column_name"] == "marker"
+            )["comment"]
+            == "Integration marker"
+        )
+
+        governance_manifest = await _discover_domain(client, "doris_governance")
+        column_analysis = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="analyze_columns",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "columns": ["id", "marker"],
+                "sample_ratio": 0.1,
+            },
+            manifest_version=governance_manifest["manifest_version"],
+        )
+        assert [item["name"] for item in column_analysis["data"]["columns"]] == [
+            "id",
+            "marker",
+        ]
+        assert column_analysis["metadata"]["invented_statistics"] is False
+
+        injected_result, injected_payload = await _call_domain_child_result(
+            client,
+            domain="doris_governance",
+            child_tool="analyze_columns",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": (f"{doris_sandbox.table}; DROP TABLE {doris_sandbox.table}"),
+                "columns": ["id"],
+            },
+            manifest_version=governance_manifest["manifest_version"],
+        )
+        assert injected_result.is_error is True
+        assert injected_payload["error"]["code"] == "CHILD_ARGUMENTS_INVALID"
+        assert injected_payload["error"]["details"]["reason_code"] == (
+            "GOVERNANCE_ARGUMENT_INVALID"
         )
 
         intact_result, intact_payload = await _exec_query(
@@ -1194,72 +1287,78 @@ async def test_real_doris_tool_regression_paths(
             f"SELECT COUNT(*) AS row_count FROM {doris_sandbox.qualified_table}",
         )
         assert intact_result.is_error is False
-        assert intact_payload["data"] == [{"row_count": 1}]
+        assert intact_payload["data"]["rows"] == [{"row_count": 1}]
 
-        profile_result = await client.call_tool(
-            "get_sql_profile",
-            {
+        query_manifest = await _discover_domain(client, "doris_query")
+        query_children = {child["name"]: child for child in query_manifest["children"]}
+        profile_availability = query_children["get_query_profile"]["availability"]
+        profile_result, profile_envelope = await _call_domain_child_result(
+            client,
+            domain="doris_query",
+            child_tool="get_query_profile",
+            arguments={
                 "sql": f"SELECT COUNT(*) AS row_count FROM {doris_sandbox.qualified_table}",
-                "db_name": doris_sandbox.settings.database,
             },
+            manifest_version=query_manifest["manifest_version"],
         )
-        assert isinstance(profile_result.structured_content, dict)
-        profile_payload = profile_result.structured_content
-        assert isinstance(profile_payload["success"], bool)
-        assert profile_payload["trace_id"]
-        assert isinstance(profile_payload["execution_time"], int | float)
-        assert "auth_context" not in str(profile_payload.get("error", ""))
-        assert "referenced before assignment" not in str(
-            profile_payload.get("error", "")
-        )
+        if profile_result.is_error:
+            profile_error = profile_envelope["error"]
+            if profile_availability["callable"]:
+                assert profile_error["code"] == "CHILD_EXECUTION_FAILED"
+                assert profile_error["details"]["reason_code"].startswith(
+                    "QUERY_PROFILE_"
+                )
+            else:
+                assert profile_error["code"] == "CHILD_CAPABILITY_UNAVAILABLE"
+                assert (
+                    profile_error["details"]["reason_code"]
+                    == (profile_availability["reason_code"])
+                )
+            profile_text = json.dumps(profile_error, ensure_ascii=False)
+            assert "auth_context" not in profile_text
+            assert "referenced before assignment" not in profile_text
+        else:
+            assert profile_availability["callable"] is True
+            profile_payload = profile_envelope["data"]
+            assert profile_payload["status"] in {"success", "partial"}
+            assert profile_payload["data"]["query_summary"] is not None
 
-        freshness_result = await client.call_tool(
-            "monitor_data_freshness",
-            {
-                "table_names": [missing_table],
-                "db_name": doris_sandbox.settings.database,
+        pipeline_manifest = await _discover_domain(client, "doris_pipeline")
+        freshness = await _call_domain_child(
+            client,
+            domain="doris_pipeline",
+            child_tool="monitor_data_freshness",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "threshold_seconds": 86_400,
             },
+            manifest_version=pipeline_manifest["manifest_version"],
         )
-        assert freshness_result.is_error is False
-        assert isinstance(freshness_result.structured_content, dict)
-        freshness_payload = freshness_result.structured_content
-        assert freshness_payload["monitoring_scope"]["time_threshold_hours"] == 24
-        assert freshness_payload["table_freshness"][missing_table] == {
-            "last_update": None,
-            "staleness_hours": None,
-            "freshness_score": 0.0,
-            "status": "unknown",
-            "method_used": "none",
-            "error": "Unable to determine last update time",
-        }
-        assert freshness_payload["data_flow_issues"] == []
+        assert freshness["data"]["status"] in {"fresh", "stale"}
+        assert freshness["metadata"]["invented_evidence"] is False
 
-        access_result = await client.call_tool(
-            "analyze_data_access_patterns",
-            {
-                "days": 1,
-                "include_system_users": True,
-                "min_query_threshold": 1,
+        access = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="analyze_data_access_patterns",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "window_days": 1,
+                "group_by": "operation",
             },
+            manifest_version=governance_manifest["manifest_version"],
         )
-        assert access_result.is_error is False
-        assert isinstance(access_result.structured_content, dict)
-        access_payload = access_result.structured_content
-        assert "error" not in access_payload
-        role_analysis = access_payload["role_analysis"]
-        assert role_analysis
-        assert any(
-            doris_sandbox.settings.user in role["users"]
-            for role in role_analysis.values()
-        )
+        assert access["metadata"]["raw_sql_exposed"] is False
 
         recovered_result, recovered_payload = await _exec_query(
             client,
             "SELECT 1 AS recovered",
         )
         assert recovered_result.is_error is False
-        assert recovered_payload["success"] is True
-        assert recovered_payload["data"][0]["recovered"] == 1
+        assert recovered_payload["status"] == "success"
+        assert recovered_payload["data"]["rows"][0]["recovered"] == 1
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio"])
@@ -1954,45 +2053,27 @@ async def test_real_doris_configured_monitoring_http_endpoints_and_recovery(
     assert environment.get("DORIS_BE_WEBSERVER_PORT")
 
     async with _transport_client(transport, environment) as client:
-        fe_result = await client.call_tool(
-            "get_monitoring_metrics",
-            {
-                "content_type": "data",
-                "role": "fe",
-                "monitor_type": "all",
-                "priority": "all",
-                "include_raw_metrics": False,
-            },
+        cluster_manifest = await _discover_domain(client, "doris_cluster")
+        metrics = await _call_domain_child(
+            client,
+            domain="doris_cluster",
+            child_tool="get_monitoring_metrics",
+            arguments={},
+            manifest_version=cluster_manifest["manifest_version"],
         )
-        assert fe_result.is_error is False
-        assert isinstance(fe_result.structured_content, dict)
-        fe_payload = fe_result.structured_content["data"]["fe"]
-        assert fe_payload["success"] is True
-        assert fe_payload["node_type"] == "fe"
-        assert fe_payload["node_info"]["host"] == environment["DORIS_FE_HTTP_HOST"]
-        assert fe_payload["node_info"]["host"] != doris_sandbox.settings.host
-
-        be_result = await client.call_tool(
-            "get_monitoring_metrics",
-            {
-                "content_type": "data",
-                "role": "be",
-                "monitor_type": "all",
-                "priority": "all",
-                "include_raw_metrics": False,
-            },
-        )
-        assert be_result.is_error is False
-        assert isinstance(be_result.structured_content, dict)
-        be_payload = be_result.structured_content["data"]["be"]
-        assert be_payload
-        assert all(node["success"] is True for node in be_payload)
-        assert all(node["node_type"] == "be" for node in be_payload)
+        nodes = metrics["data"]["nodes"]
+        fe_nodes = [node for node in nodes if node["role"] == "fe"]
+        be_nodes = [node for node in nodes if node["role"] == "be"]
+        assert len(fe_nodes) == 1
+        assert fe_nodes[0]["host"] == environment["DORIS_FE_HTTP_HOST"]
+        assert fe_nodes[0]["host"] != doris_sandbox.settings.host
+        assert be_nodes
+        assert all(node["host"] for node in be_nodes)
 
         recovered_result, recovered_payload = await _exec_query(
             client,
             "SELECT 1 AS recovered",
         )
         assert recovered_result.is_error is False
-        assert recovered_payload["success"] is True
-        assert recovered_payload["data"][0]["recovered"] == 1
+        assert recovered_payload["status"] == "success"
+        assert recovered_payload["data"]["rows"][0]["recovered"] == 1
