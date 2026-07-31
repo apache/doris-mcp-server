@@ -999,6 +999,145 @@ def create_server(
         return success_response({"status": status, "message": msg})
 
 
+    # ========== Semantic Provider Framework Tools (Cube / LookML / MetricFlow) ==========
+
+    from tools.semantic_provider import (
+        compile_semantic_model as _compile_semantic_model,
+        delete_semantic_artifact as _delete_semantic_artifact,
+        generate_semantic_sql as _generate_semantic_sql,
+        get_semantic_metadata as _get_semantic_metadata,
+        list_semantic_artifacts as _list_semantic_artifacts,
+        list_semantic_providers as _list_semantic_providers,
+        query_semantic_model as _query_semantic_model,
+    )
+
+    async def _workspace_dir_or_error(tool_name: str, workspace: str):
+        """Auth + workspace lookup shared by the provider tools."""
+        auth = check_tool_access(tool_name)
+        if auth.denied:
+            return None, None, auth.denied
+        ws = await asyncio.to_thread(multi_watcher.ensure_fresh, workspace)
+        if not ws:
+            return None, None, error_response(
+                ErrorCode.VALIDATION_ERROR, f"Workspace not found: {workspace}"
+            )
+        return auth, ws.workspace_dir, None
+
+    @mcp.tool(
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    )
+    async def list_semantic_providers() -> str:
+        """Lists registered semantic model providers (cube, lookml, metricflow). Call this to learn which model formats this server can compile."""
+        auth = check_tool_access("list_semantic_providers")
+        if auth.denied:
+            return auth.denied
+        result = await _list_semantic_providers()
+        log_tool_call("list_semantic_providers", client_id=auth.client_id, metricflow=True)
+        return result
+
+    @mcp.tool(
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    )
+    async def compile_semantic_model(workspace: str, filename: str, content: str, provider: str = "") -> str:
+        """Uploads a semantic model file (Cube YAML / LookML view / dbt semantic model), validates it, compiles it to a runtime artifact, and stores it in the workspace. Provider is auto-detected when omitted. Returns artifact_id + discovered metrics/dimensions."""
+        auth, ws_dir, err = await _workspace_dir_or_error("compile_semantic_model", workspace)
+        if err:
+            return err
+        start = time.monotonic()
+        result = await _compile_semantic_model(ws_dir, filename, content, provider or None)
+        log_tool_call("compile_semantic_model", client_id=auth.client_id,
+                      params={"filename": filename, "provider": provider or "auto"},
+                      duration_ms=(time.monotonic() - start) * 1000, metricflow=True)
+        return result
+
+    @mcp.tool(
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    )
+    async def list_semantic_artifacts(workspace: str) -> str:
+        """Lists compiled semantic artifacts stored in a workspace (artifact_id, provider, source digest). workspace is required."""
+        auth, ws_dir, err = await _workspace_dir_or_error("list_semantic_artifacts", workspace)
+        if err:
+            return err
+        result = await _list_semantic_artifacts(ws_dir)
+        log_tool_call("list_semantic_artifacts", client_id=auth.client_id, metricflow=True)
+        return result
+
+    @mcp.tool(
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    )
+    async def delete_semantic_artifact(workspace: str, artifact_id: str) -> str:
+        """Deletes a compiled semantic artifact from a workspace."""
+        auth, ws_dir, err = await _workspace_dir_or_error("delete_semantic_artifact", workspace)
+        if err:
+            return err
+        result = await _delete_semantic_artifact(ws_dir, artifact_id)
+        log_tool_call("delete_semantic_artifact", client_id=auth.client_id,
+                      params={"artifact_id": artifact_id}, metricflow=True)
+        return result
+
+    @mcp.tool(
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    )
+    async def get_semantic_metadata(workspace: str, artifact_id: str, metric: str = "") -> str:
+        """Discovers metrics and dimensions exposed by a compiled artifact. Pass metric to restrict dimensions to those valid for that metric. Use this BEFORE query_semantic_model to pick valid names."""
+        auth, ws_dir, err = await _workspace_dir_or_error("get_semantic_metadata", workspace)
+        if err:
+            return err
+        result = await _get_semantic_metadata(ws_dir, artifact_id, metric or None)
+        log_tool_call("get_semantic_metadata", client_id=auth.client_id,
+                      params={"artifact_id": artifact_id, "metric": metric}, metricflow=True)
+        return result
+
+    @mcp.tool(
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    )
+    async def generate_semantic_sql(
+        workspace: str,
+        artifact_id: str,
+        metrics: list[str],
+        dimensions: list[str] = [],
+        filters: list[dict] = [],
+        order_by: list[str] = [],
+        limit: int = 0,
+    ) -> str:
+        """Generates Doris SQL for a semantic query WITHOUT executing it (dry-run). filters: [{'dimension': 'country', 'operator': 'eq', 'value': 'US'}] with operators eq|ne|gt|gte|lt|lte|in|not_in|contains|between. order_by entries accept a '-' prefix for DESC."""
+        auth, ws_dir, err = await _workspace_dir_or_error("generate_semantic_sql", workspace)
+        if err:
+            return err
+        result = await _generate_semantic_sql(ws_dir, artifact_id, metrics, dimensions or None, filters or None, order_by or None, limit or None)
+        log_tool_call("generate_semantic_sql", client_id=auth.client_id,
+                      params={"artifact_id": artifact_id, "metrics": metrics}, metricflow=True)
+        return result
+
+    @mcp.tool(
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+    )
+    async def query_semantic_model(
+        workspace: str,
+        artifact_id: str,
+        metrics: list[str],
+        dimensions: list[str] = [],
+        filters: list[dict] = [],
+        order_by: list[str] = [],
+        limit: int = 0,
+        database: str = "",
+        max_rows: int = 0,
+    ) -> str:
+        """Queries a compiled semantic artifact end-to-end: provider runtime generates Doris SQL, read-only policy is enforced, then the SQL executes. Prefer this over execute_query for metric/dimension questions about compiled models. Use get_semantic_metadata first to discover valid names."""
+        auth, ws_dir, err = await _workspace_dir_or_error("query_semantic_model", workspace)
+        if err:
+            return err
+        start = time.monotonic()
+        pool = await _acquire_pool("query_semantic_model")
+        if isinstance(pool, str):
+            return pool
+        result = await _query_semantic_model(ws_dir, pool, artifact_id, metrics, dimensions or None, filters or None, order_by or None, limit or None, database or None, max_rows or None)
+        log_tool_call("query_semantic_model", client_id=auth.client_id,
+                      params={"artifact_id": artifact_id, "metrics": metrics},
+                      success=('"success": true' in result),
+                      duration_ms=(time.monotonic() - start) * 1000, metricflow=True)
+        return result
+
     @mcp.custom_route("/mcp/web/semantic/reload", methods=["POST"])
     async def api_reload_semantic_layer(request: Request) -> Response:
         """HTTP endpoint for CI/CD and schedulers. Admin only."""
