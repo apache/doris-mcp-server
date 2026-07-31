@@ -68,6 +68,9 @@ under **Unreleased** until a new version is selected and published.
 - An experimental read-only Apache Ossie Core semantic-grounding domain with
   four capability-gated children, revisioned model-summary resources, and
   explicit server-private Doris binding manifests.
+- A fail-closed `doris_admin` architecture reservation that defines future
+  high-risk action, scope, preview/execute, confirmation, idempotency, and
+  rollback contracts without registering any management capability.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
@@ -117,6 +120,8 @@ under **Unreleased** until a new version is selected and published.
   expressions.
 - Aligned semantic OAuth discovery, execution, resource exposure, and Doris
   OAuth scope issuance on explicit channel opt-in plus `semantic:read`.
+- Rejected 1.0 configuration attempts to enable the reserved administration
+  domain or disable its mandatory confirmation invariant.
 
 ### Fixed
 

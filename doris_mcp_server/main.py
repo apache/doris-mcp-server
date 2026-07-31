@@ -92,6 +92,12 @@ def _multiworker_environment(
         "MCP_LIST_PAGE_SIZE": str(config.mcp_list_page_size),
         "MCP_TOOL_PROVIDERS": ",".join(config.mcp_tool_providers),
         "MCP_TOOL_EXPOSURE_MODE": config.tool_exposure.mode,
+        "MCP_ADMIN_DOMAIN_ENABLED": str(
+            config.administration.enabled
+        ).lower(),
+        "MCP_ADMIN_REQUIRE_CONFIRMATION": str(
+            config.administration.require_confirmation
+        ).lower(),
         "CAPABILITY_SNAPSHOT_TTL_SECONDS": str(
             config.capability.snapshot_ttl_seconds
         ),
