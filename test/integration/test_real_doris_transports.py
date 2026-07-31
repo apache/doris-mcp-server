@@ -97,6 +97,16 @@ SEARCH_CHILD_NAMES = (
     "inspect_search_indexes",
     "diagnose_search_query",
 )
+GOVERNANCE_CHILD_NAMES = (
+    "analyze_columns",
+    "analyze_table_storage",
+    "get_lineage_capability_status",
+    "trace_column_lineage",
+    "analyze_data_access_patterns",
+    "get_recent_audit_logs",
+    "list_udfs",
+    "get_auth_mapping_status",
+)
 
 
 @dataclass(frozen=True)
@@ -1547,6 +1557,158 @@ async def test_real_doris_hierarchical_search_domain_is_read_only_and_live(
         cursor.execute(
             f"SELECT COUNT(*) FROM {doris_search_sandbox.qualified_table}"
         )
+        row_count_after = int(cursor.fetchone()[0])
+    assert row_count_after == row_count_before
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_hierarchical_governance_domain_is_read_only_and_live(
+    transport: str,
+    doris_sandbox: DorisSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    environment["MCP_TOOL_EXPOSURE_MODE"] = "hierarchical"
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {doris_sandbox.qualified_table} VALUES (1, %s)",
+            (doris_sandbox.marker,),
+        )
+        cursor.execute(f"SELECT COUNT(*) FROM {doris_sandbox.qualified_table}")
+        row_count_before = int(cursor.fetchone()[0])
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        governance_result = await client.call_tool("doris_governance", {})
+        assert governance_result.is_error is False
+        assert isinstance(governance_result.structured_content, dict)
+        manifest = governance_result.structured_content
+        assert manifest["mode"] == "manifest"
+        assert manifest["domain"] == "doris_governance"
+        children = {child["name"]: child for child in manifest["children"]}
+        assert tuple(children) == GOVERNANCE_CHILD_NAMES
+        assert all(child["availability"]["callable"] for child in children.values())
+        manifest_version = manifest["manifest_version"]
+
+        columns = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="analyze_columns",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "columns": ["id", "marker"],
+                "sample_ratio": 0.1,
+            },
+            manifest_version=manifest_version,
+        )
+        assert [item["name"] for item in columns["data"]["columns"]] == [
+            "id",
+            "marker",
+        ]
+        assert columns["metadata"]["invented_statistics"] is False
+
+        storage = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="analyze_table_storage",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "include_partitions": True,
+                "include_indexes": True,
+            },
+            manifest_version=manifest_version,
+        )
+        assert storage["data"]["table"] == doris_sandbox.table
+        assert storage["metadata"]["raw_create_table_exposed"] is False
+
+        lineage_status = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="get_lineage_capability_status",
+            arguments={},
+            manifest_version=manifest_version,
+        )
+        assert lineage_status["data"]["active_path"] in {
+            "audit_sql_inference",
+            "doris_native_event_store",
+        }
+        assert lineage_status["metadata"]["invented_lineage_capability"] is False
+
+        lineage = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="trace_column_lineage",
+            arguments={
+                "object": (
+                    f"{doris_sandbox.settings.database}.{doris_sandbox.table}"
+                ),
+                "direction": "both",
+                "depth": 2,
+                "evidence_mode": "audit",
+            },
+            manifest_version=manifest_version,
+        )
+        assert lineage["metadata"]["invented_edges"] is False
+        assert "unknown_source" not in str(lineage)
+
+        access = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="analyze_data_access_patterns",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "window_days": 1,
+                "group_by": "operation",
+            },
+            manifest_version=manifest_version,
+        )
+        assert access["metadata"]["raw_sql_exposed"] is False
+
+        audit = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="get_recent_audit_logs",
+            arguments={
+                "window_minutes": 60,
+                "database": doris_sandbox.settings.database,
+                "limit": 20,
+            },
+            manifest_version=manifest_version,
+        )
+        assert audit["metadata"]["raw_sql_exposed"] is False
+        assert audit["metadata"]["client_address_exposed"] is False
+
+        udfs = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="list_udfs",
+            arguments={"database": doris_sandbox.settings.database},
+            manifest_version=manifest_version,
+        )
+        assert isinstance(udfs["data"]["items"], list)
+        assert udfs["metadata"]["code_executed"] is False
+
+        auth = await _call_domain_child(
+            client,
+            domain="doris_governance",
+            child_tool="get_auth_mapping_status",
+            arguments={"provider": "ldap", "include_roles": False},
+            manifest_version=manifest_version,
+        )
+        assert auth["data"]["secrets_exposed"] is False
+        assert auth["data"]["mapping_rules_exposed"] is False
+
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(f"SELECT COUNT(*) FROM {doris_sandbox.qualified_table}")
         row_count_after = int(cursor.fetchone()[0])
     assert row_count_after == row_count_before
 

@@ -361,6 +361,43 @@ def test_adbc_provider_requires_configuration_and_bound_consumer(
     )
 
 
+@pytest.mark.parametrize(
+    ("store_table", "bound", "expected_status"),
+    [
+        ("", True, CapabilityProbeStatus.MISCONFIGURED),
+        ("governance.lineage_events", False, CapabilityProbeStatus.MISCONFIGURED),
+        ("governance.lineage_events", True, CapabilityProbeStatus.SUPPORTED),
+    ],
+)
+def test_lineage_store_provider_requires_configuration_and_bound_consumer(
+    store_table: str,
+    bound: bool,
+    expected_status: CapabilityProbeStatus,
+) -> None:
+    handlers = (
+        _BoundHandlers("doris_governance.trace_column_lineage")
+        if bound
+        else _BoundHandlers()
+    )
+    registry = CapabilityProviderRegistry.from_runtime(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=handlers,  # type: ignore[arg-type]
+        config=SimpleNamespace(
+            adbc=SimpleNamespace(enabled=False),
+            governance=SimpleNamespace(lineage_store_table=store_table),
+        ),
+    )
+
+    provider = registry.snapshot().providers["lineage_event_store"]
+
+    assert provider.status is expected_status
+    assert provider.reason_code == (
+        "PROVIDER_CONFIGURED"
+        if expected_status is CapabilityProbeStatus.SUPPORTED
+        else "PROVIDER_NOT_CONFIGURED"
+    )
+
+
 def test_builtin_query_evidence_providers_are_ready_when_bound() -> None:
     handlers = _BoundHandlers(
         "doris_query.diagnose_query_performance",

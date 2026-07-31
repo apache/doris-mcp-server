@@ -50,6 +50,18 @@ from .doris_version import (
     probe_doris_version,
 )
 
+_NATIVE_LINEAGE_MINIMUM = parse_doris_version_comment(
+    "Doris version doris-4.0.6"
+)
+_LINEAGE_STORE_REQUIRED_COLUMNS = frozenset(
+    {
+        "event_id",
+        "event_time",
+        "source_object",
+        "target_object",
+    }
+)
+
 
 class CapabilityProbeStatus(StrEnum):
     """Normalized result of one private runtime capability probe."""
@@ -288,6 +300,53 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ("search_explain_readable",),
         ),
     ),
+    "doris_governance": (
+        (
+            (
+                "SELECT COLUMN_NAME, DATA_TYPE "
+                "FROM information_schema.columns LIMIT 1"
+            ),
+            ("column_statistics_and_safe_sampling_ready",),
+        ),
+        (
+            (
+                "SELECT TABLE_NAME, DATA_LENGTH "
+                "FROM information_schema.tables LIMIT 1"
+            ),
+            ("table_storage_metadata_readable",),
+        ),
+        (
+            (
+                "SELECT `time`, `query_id`, `stmt` "
+                "FROM internal.__internal_schema.audit_log LIMIT 1"
+            ),
+            (
+                "audit_log_readable",
+                "audit_history_readable",
+                "audit_lineage_provider_status_readable",
+                "enhanced_audit_fields_present",
+            ),
+        ),
+        (
+            "SHOW GLOBAL FULL FUNCTIONS",
+            (
+                "udf_metadata_readable",
+                "python_udf_metadata_readable",
+            ),
+        ),
+        (
+            "SHOW FRONTEND CONFIG LIKE 'ldap_authentication_enabled'",
+            ("ldap_mapping_status_readable",),
+        ),
+        (
+            "SELECT * FROM information_schema.role_mappings LIMIT 1",
+            ("oidc_and_role_mapping_status_readable",),
+        ),
+        (
+            "SHOW FRONTEND CONFIG LIKE 'activate_lineage_plugin'",
+            ("lineage_plugin_config_readable",),
+        ),
+    ),
 }
 
 
@@ -420,6 +479,17 @@ class DorisCapabilityDetector:
                     )
                     probes[match_probe.probe_id] = match_probe
                     probes.update(_combine_search_evidence_probes(probes))
+                elif domain_name == "doris_governance":
+                    plugin_probe = await self._probe_lineage_plugin_status(
+                        auth_context,
+                        base.version_vector,
+                    )
+                    probes[plugin_probe.probe_id] = plugin_probe
+                    store_probe = await self._probe_lineage_store(auth_context)
+                    probes[store_probe.probe_id] = store_probe
+                    probes.update(
+                        _combine_governance_evidence_probes(probes)
+                    )
                 completed_route = self.route_identity(auth_context)
                 if completed_route.fingerprint != base.route.fingerprint:
                     raise CapabilityRouteChangedError(
@@ -823,6 +893,185 @@ class DorisCapabilityDetector:
             status=status,
             reason_code=reason,
             evidence_sources=("doris_fe_http", "runtime_probe"),
+        )
+
+    async def _probe_lineage_plugin_status(
+        self,
+        auth_context: Any | None,
+        versions: DorisClusterVersionVector,
+    ) -> CapabilityProbeEvidence:
+        fe_versions = (versions.master_fe, *versions.follower_fes)
+        if not fe_versions or any(
+            not version.is_parsed for version in fe_versions
+        ):
+            return CapabilityProbeEvidence(
+                probe_id="all_fe_lineage_plugin_compatible",
+                status=CapabilityProbeStatus.UNKNOWN,
+                reason_code="LINEAGE_FE_VERSION_COVERAGE_INCOMPLETE",
+                evidence_sources=("show_frontends", "runtime_probe"),
+            )
+        if any(
+            not version.is_at_least(_NATIVE_LINEAGE_MINIMUM)
+            for version in fe_versions
+        ):
+            return CapabilityProbeEvidence(
+                probe_id="all_fe_lineage_plugin_compatible",
+                status=CapabilityProbeStatus.UNSUPPORTED,
+                reason_code="LINEAGE_SPI_VERSION_UNSUPPORTED",
+                evidence_sources=("show_frontends", "runtime_probe"),
+            )
+        session_id = (
+            "capability-governance:lineage-plugin:"
+            + (self.route_identity(auth_context).fingerprint[:12])
+        )
+        try:
+            async with (
+                self._connection_manager
+                .get_connection_context_for_auth_context(
+                    session_id,
+                    auth_context,
+                ) as connection
+            ):
+                rows, probe = await self._probe_rows(
+                    connection,
+                    "SHOW FRONTEND CONFIG LIKE 'activate_lineage_plugin'",
+                    "lineage_plugin_config_readable",
+                )
+        except Exception as exc:
+            status, reason = _classify_probe_error(exc)
+            return CapabilityProbeEvidence(
+                probe_id="all_fe_lineage_plugin_compatible",
+                status=status,
+                reason_code=reason,
+            )
+        if probe.status is not CapabilityProbeStatus.SUPPORTED:
+            return CapabilityProbeEvidence(
+                probe_id="all_fe_lineage_plugin_compatible",
+                status=probe.status,
+                reason_code=probe.reason_code,
+                evidence_sources=probe.evidence_sources,
+            )
+        active_names = tuple(
+            name.strip()
+            for row in rows
+            for name in str(_row_value(row, "Value") or "").split(",")
+            if name.strip()
+        )
+        if not active_names:
+            return CapabilityProbeEvidence(
+                probe_id="all_fe_lineage_plugin_compatible",
+                status=CapabilityProbeStatus.DEGRADED,
+                reason_code="LINEAGE_PLUGIN_NOT_EXPLICITLY_CONFIGURED",
+                evidence_sources=(
+                    "show_frontend_config",
+                    "runtime_probe",
+                ),
+            )
+        return CapabilityProbeEvidence(
+            probe_id="all_fe_lineage_plugin_compatible",
+            status=CapabilityProbeStatus.SUPPORTED,
+            reason_code="LINEAGE_SPI_AND_PLUGIN_CONFIG_OBSERVED",
+            evidence_sources=(
+                "show_frontends",
+                "show_frontend_config",
+                "runtime_probe",
+            ),
+        )
+
+    async def _probe_lineage_store(
+        self,
+        auth_context: Any | None,
+    ) -> CapabilityProbeEvidence:
+        configured_store = getattr(
+            getattr(
+                getattr(self._connection_manager, "config", None),
+                "governance",
+                None,
+            ),
+            "lineage_store_table",
+            None,
+        )
+        raw_table = (
+            configured_store.strip()
+            if isinstance(configured_store, str)
+            else ""
+        )
+        if not raw_table:
+            return CapabilityProbeEvidence(
+                probe_id="lineage_store_readable",
+                status=CapabilityProbeStatus.MISCONFIGURED,
+                reason_code="LINEAGE_STORE_NOT_CONFIGURED",
+                evidence_sources=("server_config",),
+            )
+        try:
+            parts = tuple(
+                validate_identifier(
+                    part.strip().strip("`"),
+                    "lineage store identifier",
+                )
+                for part in raw_table.split(".")
+            )
+            if len(parts) not in {2, 3}:
+                raise SQLSecurityError(
+                    "lineage store requires "
+                    "database.table or catalog.database.table"
+                )
+            table = ".".join(
+                quote_identifier(part, "lineage store identifier")
+                for part in parts
+            )
+        except SQLSecurityError:
+            return CapabilityProbeEvidence(
+                probe_id="lineage_store_readable",
+                status=CapabilityProbeStatus.MISCONFIGURED,
+                reason_code="LINEAGE_STORE_IDENTIFIER_INVALID",
+                evidence_sources=("server_config",),
+            )
+        session_id = (
+            "capability-governance:lineage-store:"
+            + (self.route_identity(auth_context).fingerprint[:12])
+        )
+        try:
+            async with (
+                self._connection_manager
+                .get_connection_context_for_auth_context(
+                    session_id,
+                    auth_context,
+                ) as connection
+            ):
+                # SQL sink audit: every configured lineage-store identifier was
+                # strictly validated and quoted above before _probe_rows sends
+                # this read-only DESC statement to connection.execute.
+                rows, probe = await self._probe_rows(
+                    connection,
+                    f"DESC {table}",  # nosec B608
+                    "lineage_store_readable",
+                )
+        except Exception as exc:
+            status, reason = _classify_probe_error(exc)
+            return CapabilityProbeEvidence(
+                probe_id="lineage_store_readable",
+                status=status,
+                reason_code=reason,
+            )
+        if probe.status is not CapabilityProbeStatus.SUPPORTED:
+            return probe
+        observed = {
+            str(_row_value(row, "Field") or "").casefold()
+            for row in rows
+        }
+        if not _LINEAGE_STORE_REQUIRED_COLUMNS <= observed:
+            return CapabilityProbeEvidence(
+                probe_id="lineage_store_readable",
+                status=CapabilityProbeStatus.MISCONFIGURED,
+                reason_code="LINEAGE_STORE_SCHEMA_INVALID",
+                evidence_sources=("lineage_store", "runtime_probe"),
+            )
+        return CapabilityProbeEvidence(
+            probe_id="lineage_store_readable",
+            status=CapabilityProbeStatus.SUPPORTED,
+            reason_code="LINEAGE_STORE_SCHEMA_READABLE",
+            evidence_sources=("lineage_store", "runtime_probe"),
         )
 
     async def _probe_adbc_services(
@@ -1592,6 +1841,68 @@ def _combine_search_evidence_probes(
         diagnosis.probe_id: diagnosis,
         plan.probe_id: plan,
     }
+
+
+def _combine_governance_evidence_probes(
+    probes: Mapping[str, CapabilityProbeEvidence],
+) -> dict[str, CapabilityProbeEvidence]:
+    storage = probes.get("table_storage_metadata_readable")
+    audit = probes.get("audit_log_readable")
+    udf = probes.get("udf_metadata_readable")
+    derived: dict[str, CapabilityProbeEvidence] = {}
+    if storage is not None:
+        for probe_id in (
+            "storage_v3_variant_properties_readable",
+            "storage_v3",
+            "variant_sparse",
+            "variant_doc",
+        ):
+            derived[probe_id] = CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=(
+                    CapabilityProbeStatus.DEGRADED
+                    if storage.status is CapabilityProbeStatus.SUPPORTED
+                    else storage.status
+                ),
+                reason_code=(
+                    "TARGET_STORAGE_FACETS_REQUIRE_CALL_TIME_VALIDATION"
+                    if storage.status is CapabilityProbeStatus.SUPPORTED
+                    else storage.reason_code
+                ),
+                evidence_sources=storage.evidence_sources,
+            )
+    if audit is not None:
+        for probe_id in (
+            "set_var_audit",
+            "enhanced_secret_masking",
+        ):
+            derived[probe_id] = CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=(
+                    CapabilityProbeStatus.DEGRADED
+                    if audit.status is CapabilityProbeStatus.SUPPORTED
+                    else audit.status
+                ),
+                reason_code=(
+                    "ENHANCED_AUDIT_FIELDS_REQUIRE_CALL_TIME_VALIDATION"
+                    if audit.status is CapabilityProbeStatus.SUPPORTED
+                    else audit.reason_code
+                ),
+                evidence_sources=audit.evidence_sources,
+            )
+    if udf is not None:
+        for probe_id in (
+            "python_udf",
+            "python_udaf",
+            "python_udtf",
+        ):
+            derived[probe_id] = CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=udf.status,
+                reason_code=udf.reason_code,
+                evidence_sources=udf.evidence_sources,
+            )
+    return derived
 
 
 def _combine_all_runtime_probes(

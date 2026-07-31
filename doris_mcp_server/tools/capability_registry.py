@@ -114,6 +114,17 @@ class CapabilityProviderRegistry:
             configured = has_bound_consumer
             if provider_id == "adbc_provider":
                 configured = configured and configured_adbc
+            elif provider_id == "lineage_event_store":
+                configured_store = getattr(
+                    getattr(config, "governance", None),
+                    "lineage_store_table",
+                    None,
+                )
+                configured = (
+                    configured
+                    and isinstance(configured_store, str)
+                    and bool(configured_store.strip())
+                )
             providers[provider_id] = CapabilityProviderEvidence(
                 provider_id=provider_id,
                 status=(
