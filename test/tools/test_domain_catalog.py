@@ -450,7 +450,10 @@ def test_catalog_markdown_is_deterministic_and_complete() -> None:
     second = DORIS_DOMAIN_CATALOG.render_markdown()
 
     assert first == second
-    assert first.startswith("# Doris MCP Hierarchical Domain Catalog")
+    assert first.startswith(
+        "<!--\n  ~ Licensed to the Apache Software Foundation (ASF) under one"
+    )
+    assert "\n# Doris MCP Hierarchical Domain Catalog\n" in first
     assert first.count("| `doris_") >= 55 + 8
     assert "`doris_query.execute_adbc_query`" in first
     assert "`get_table_schema`" in first

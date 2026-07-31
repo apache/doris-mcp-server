@@ -28,6 +28,9 @@ WORKFLOW_PATH = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 PYPROJECT_PATH = REPOSITORY_ROOT / "pyproject.toml"
 FULL_COMMIT_ACTION = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 CHECKOUT_ACTION = "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803"
+SKYWALKING_EYES_ACTION = (
+    "apache/skywalking-eyes/header@315732dd4b8d3a015d8d9b91936b935a0b854817"
+)
 CONFORMANCE_COMMIT = "49103de6ed70804e940637bf3e9e29e4a3f54e64"
 
 
@@ -60,7 +63,7 @@ def test_ci_jobs_are_bounded_and_external_actions_are_commit_pinned():
             assert "continue-on-error" not in step
             if action := step.get("uses"):
                 assert FULL_COMMIT_ACTION.fullmatch(action), action
-                assert action.startswith("actions/"), action
+                assert action.startswith("actions/") or action == SKYWALKING_EYES_ACTION
                 if action.startswith("actions/checkout@"):
                     assert action == CHECKOUT_ACTION
         assert (
@@ -76,6 +79,10 @@ def test_quality_test_and_package_gates_cover_the_release_contract():
     package = _commands(jobs["package"])
 
     assert "uv lock --check" in quality
+    assert any(
+        step.get("uses") == SKYWALKING_EYES_ACTION
+        for step in jobs["quality"]["steps"]
+    )
     assert "uv sync --frozen --group dev" in quality
     assert "uv run python generate_tool_catalog.py --check" in quality
     assert "uv run ruff check ." in quality
