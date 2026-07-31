@@ -41,6 +41,12 @@ from ..utils.query_executor import DorisQueryExecutor
 from ..utils.schema_extractor import MetadataExtractor
 from ..utils.security import get_current_auth_context
 from ..utils.security_analytics_tools import SecurityAnalyticsTools
+from .capability_detector import DorisCapabilityDetector
+from .capability_registry import (
+    CapabilityEvaluator,
+    CapabilityProviderRegistry,
+    CapabilityRegistry,
+)
 from .domain_catalog import CURRENT_FLAT_TOOL_NAMES
 from .domain_dispatcher import (
     BoundHandlerAvailabilityProvider,
@@ -54,6 +60,7 @@ from .domain_manifest import (
     DomainManifestManagerMixin,
     DomainManifestService,
 )
+from .doris_feature_matrix import DORIS_FEATURE_MATRIX
 from .tool_provider import CustomToolProvider, ToolProviderRuntime
 from .tool_registry import ToolRegistryError
 
@@ -95,8 +102,42 @@ class DorisToolsManager(DomainManifestManagerMixin):
 
         # Initialize ADBC query tools
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
+        self._capability_registry: CapabilityRegistry | None = None
         if domain_availability_provider is None:
-            domain_availability_provider = BoundHandlerAvailabilityProvider(self)
+            bound_handlers = BoundHandlerAvailabilityProvider(self)
+            capability_config = getattr(config, "capability", None)
+            detector = DorisCapabilityDetector(
+                connection_manager,
+                probe_timeout_seconds=getattr(
+                    capability_config,
+                    "probe_timeout_seconds",
+                    5,
+                ),
+                snapshot_ttl_seconds=getattr(
+                    capability_config,
+                    "snapshot_ttl_seconds",
+                    300,
+                ),
+                stale_grace_seconds=getattr(
+                    capability_config,
+                    "stale_grace_seconds",
+                    900,
+                ),
+            )
+            provider_registry = CapabilityProviderRegistry.from_runtime(
+                matrix=DORIS_FEATURE_MATRIX,
+                bound_handlers=bound_handlers,
+                config=config,
+            )
+            self._capability_registry = CapabilityRegistry(
+                detector=detector,
+                provider_registry=provider_registry,
+                evaluator=CapabilityEvaluator(
+                    matrix=DORIS_FEATURE_MATRIX,
+                    bound_handlers=bound_handlers,
+                ),
+            )
+            domain_availability_provider = self._capability_registry
         self._domain_manifest_service = DomainManifestService(
             availability_provider=domain_availability_provider,
         )
@@ -135,6 +176,8 @@ class DorisToolsManager(DomainManifestManagerMixin):
 
     async def close(self) -> None:
         """Stop runtime resources owned by the tools manager."""
+        if self._capability_registry is not None:
+            await self._capability_registry.close()
         await self._tool_provider_runtime.close()
         await self.query_executor.close()
 

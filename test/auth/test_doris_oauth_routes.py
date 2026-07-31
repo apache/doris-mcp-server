@@ -11,10 +11,15 @@ from starlette.applications import Starlette
 
 from doris_mcp_server.auth.doris_oauth_handlers import DorisOAuthHandlers
 from doris_mcp_server.auth.doris_oauth_provider import DorisOAuthProvider
+from doris_mcp_server.auth.doris_oauth_scope_policy import (
+    child_call_scope,
+    child_discovery_scope,
+)
 from doris_mcp_server.auth.doris_oauth_types import (
     ProtectedResourceAuthError,
     TokenEndpointError,
 )
+from doris_mcp_server.tools.domain_catalog import FORMAL_CHILD_FEATURE_IDS
 from doris_mcp_server.utils.auth_credentials import BearerCredentials
 from doris_mcp_server.utils.config import (
     DorisConfig,
@@ -28,18 +33,17 @@ FULL_DORIS_OAUTH_SCOPE_SET = tuple(
             "tool:list",
             "resource:list",
             "resource:read",
-            "tool:call:get_db_list",
-            "tool:call:get_db_table_list",
-            "tool:call:get_table_schema",
-            "tool:call:get_table_comment",
-            "tool:call:get_table_column_comments",
-            "tool:call:get_table_indexes",
-            "tool:call:get_catalog_list",
-            "tool:call:exec_query",
-            "tool:call:get_sql_explain",
+            *(
+                child_call_scope(feature_id)
+                for feature_id in FORMAL_CHILD_FEATURE_IDS
+            ),
         }
     )
 )
+
+CATALOG_DATABASES_FEATURE = "doris_catalog.list_databases"
+QUERY_EXECUTE_FEATURE = "doris_query.execute_query"
+QUERY_EXPLAIN_FEATURE = "doris_query.explain_query"
 
 
 class FakeConnectionManager:
@@ -71,10 +75,8 @@ def _pkce(verifier="verifier-123"):
 
 def _config(
     *,
-    db_tools_enabled=False,
+    child_tools_enabled=False,
     allowlist=None,
-    query_tools_enabled=False,
-    explain_tools_enabled=False,
 ):
     config = DorisConfig()
     config.transport = "http"
@@ -82,11 +84,9 @@ def _config(
     config.security.enable_doris_oauth_auth = True
     _mark_source(config, "enable_doris_oauth_auth", "test")
     config.security.doris_oauth_base_url = "http://localhost:3000"
-    config.security.doris_oauth_db_tools_enabled = db_tools_enabled
+    config.security.doris_oauth_child_tools_enabled = child_tools_enabled
     if allowlist is not None:
-        config.security.doris_oauth_db_tool_allowlist = list(allowlist)
-    config.security.doris_oauth_query_tools_enabled = query_tools_enabled
-    config.security.doris_oauth_explain_tools_enabled = explain_tools_enabled
+        config.security.doris_oauth_child_tool_allowlist = list(allowlist)
     config.security.doris_oauth_access_token_expire_seconds = 900
     config.security.doris_oauth_refresh_token_expire_seconds = 86400
     normalize_effective_auth_config(config, requested_workers=1)
@@ -333,8 +333,11 @@ async def test_register_omitted_and_blank_scope_allow_safe_client_scope_set():
 
 
 @pytest.mark.asyncio
-async def test_register_omitted_scope_client_allowlist_includes_safe_metadata_when_db_gate_true():
-    config = _config(db_tools_enabled=True, allowlist=["get_db_list"])
+async def test_register_omitted_scope_includes_enabled_child_envelope():
+    config = _config(
+        child_tools_enabled=True,
+        allowlist=[CATALOG_DATABASES_FEATURE],
+    )
     _provider, _cm, app = _provider_app(config)
     async with await _client(app) as client:
         response = await client.post(
@@ -343,7 +346,17 @@ async def test_register_omitted_scope_client_allowlist_includes_safe_metadata_wh
         )
 
     assert response.status_code == 201
-    assert response.json()["scope"] == "resource:list resource:read tool:call:get_db_list tool:list"
+    assert response.json()["scope"] == " ".join(
+        sorted(
+            {
+                "resource:list",
+                "resource:read",
+                "tool:list",
+                child_call_scope(CATALOG_DATABASES_FEATURE),
+                child_discovery_scope(CATALOG_DATABASES_FEATURE),
+            }
+        )
+    )
 
 
 @pytest.mark.asyncio
@@ -364,7 +377,7 @@ async def test_register_explicit_unknown_or_forbidden_scope_is_invalid_scope():
 
 
 @pytest.mark.asyncio
-async def test_register_metadata_scope_requires_db_gate():
+async def test_register_child_scope_requires_child_gate():
     _provider, _cm, app = _provider_app()
     async with await _client(app) as client:
         response = await client.post(
@@ -372,7 +385,10 @@ async def test_register_metadata_scope_requires_db_gate():
             json={
                 "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
-                "scope": "tool:list tool:call:get_db_list",
+                "scope": (
+                    "tool:list "
+                    "child:call:doris_catalog:list_databases"
+                ),
             },
         )
 
@@ -381,8 +397,11 @@ async def test_register_metadata_scope_requires_db_gate():
 
 
 @pytest.mark.asyncio
-async def test_register_metadata_scope_allowed_when_db_gate_true_and_explicit():
-    config = _config(db_tools_enabled=True, allowlist=["get_db_list"])
+async def test_register_exact_child_scope_allowed_when_gate_is_enabled():
+    config = _config(
+        child_tools_enabled=True,
+        allowlist=[CATALOG_DATABASES_FEATURE],
+    )
     _provider, _cm, app = _provider_app(config)
     async with await _client(app) as client:
         response = await client.post(
@@ -390,12 +409,17 @@ async def test_register_metadata_scope_allowed_when_db_gate_true_and_explicit():
             json={
                 "application_type": "native",
                 "redirect_uris": ["http://localhost:7777/callback"],
-                "scope": "tool:list tool:call:get_db_list",
+                "scope": (
+                    "tool:list "
+                    "child:call:doris_catalog:list_databases"
+                ),
             },
         )
 
     assert response.status_code == 201
-    assert response.json()["scope"] == "tool:call:get_db_list tool:list"
+    assert response.json()["scope"] == (
+        "child:call:doris_catalog:list_databases tool:list"
+    )
 
 
 @pytest.mark.asyncio
@@ -452,10 +476,19 @@ async def test_authorize_can_request_resource_scopes_after_dcr_omits_scope():
     )
 
 
-@pytest.mark.parametrize("scope", ["tool:call:exec_query", "tool:call:get_sql_explain"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "child:call:doris_query:execute_query",
+        "child:call:doris_query:explain_query",
+    ],
+)
 @pytest.mark.asyncio
-async def test_register_query_and_explain_scopes_require_their_own_gates(scope):
-    config = _config(db_tools_enabled=True, allowlist=["get_db_list"])
+async def test_register_children_outside_allowlist_is_rejected(scope):
+    config = _config(
+        child_tools_enabled=True,
+        allowlist=[CATALOG_DATABASES_FEATURE],
+    )
     _provider, _cm, app = _provider_app(config)
     async with await _client(app) as client:
         response = await client.post(
@@ -472,12 +505,15 @@ async def test_register_query_and_explain_scopes_require_their_own_gates(scope):
 
 
 @pytest.mark.asyncio
-async def test_register_omitted_scope_client_allowlist_includes_query_and_explain_when_enabled():
+async def test_register_omitted_scope_includes_multiple_enabled_children():
+    feature_ids = (
+        CATALOG_DATABASES_FEATURE,
+        QUERY_EXECUTE_FEATURE,
+        QUERY_EXPLAIN_FEATURE,
+    )
     config = _config(
-        db_tools_enabled=True,
-        allowlist=["get_db_list"],
-        query_tools_enabled=True,
-        explain_tools_enabled=True,
+        child_tools_enabled=True,
+        allowlist=list(feature_ids),
     )
     _provider, _cm, app = _provider_app(config)
     async with await _client(app) as client:
@@ -487,19 +523,31 @@ async def test_register_omitted_scope_client_allowlist_includes_query_and_explai
         )
 
     assert response.status_code == 201
-    assert response.json()["scope"] == (
-        "resource:list resource:read tool:call:exec_query "
-        "tool:call:get_db_list tool:call:get_sql_explain tool:list"
+    assert response.json()["scope"] == " ".join(
+        sorted(
+            {
+                "resource:list",
+                "resource:read",
+                "tool:list",
+                *(child_call_scope(feature_id) for feature_id in feature_ids),
+                *(
+                    child_discovery_scope(feature_id)
+                    for feature_id in feature_ids
+                ),
+            }
+        )
     )
 
 
 @pytest.mark.asyncio
-async def test_register_short_tool_scope_aliases_are_canonicalized_when_enabled():
+async def test_register_legacy_tool_scope_aliases_are_rejected():
     config = _config(
-        db_tools_enabled=True,
-        allowlist=["get_db_list"],
-        query_tools_enabled=True,
-        explain_tools_enabled=True,
+        child_tools_enabled=True,
+        allowlist=[
+            CATALOG_DATABASES_FEATURE,
+            QUERY_EXECUTE_FEATURE,
+            QUERY_EXPLAIN_FEATURE,
+        ],
     )
     _provider, _cm, app = _provider_app(config)
     async with await _client(app) as client:
@@ -512,21 +560,21 @@ async def test_register_short_tool_scope_aliases_are_canonicalized_when_enabled(
             },
         )
 
-    assert response.status_code == 201
-    assert response.json()["scope"] == (
-        "tool:call:exec_query tool:call:get_db_list "
-        "tool:call:get_sql_explain tool:list"
-    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_scope"
 
 
 @pytest.mark.asyncio
 async def test_authorize_omitted_scope_grants_configured_server_allowlist():
+    feature_ids = (
+        CATALOG_DATABASES_FEATURE,
+        QUERY_EXECUTE_FEATURE,
+        QUERY_EXPLAIN_FEATURE,
+    )
     provider, _cm, app = _provider_app(
         _config(
-            db_tools_enabled=True,
-            allowlist=["get_db_list"],
-            query_tools_enabled=True,
-            explain_tools_enabled=True,
+            child_tools_enabled=True,
+            allowlist=list(feature_ids),
         )
     )
     async with await _client(app) as client:
@@ -551,24 +599,28 @@ async def test_authorize_omitted_scope_grants_configured_server_allowlist():
     assert authorize.status_code == 302
     txn_id = parse_qs(urlparse(authorize.headers["location"]).query)["txn_id"][0]
     transaction = provider.get_login_transaction(txn_id)
-    assert transaction.candidate_granted_scopes == (
-        "resource:list",
-        "resource:read",
-        "tool:call:exec_query",
-        "tool:call:get_db_list",
-        "tool:call:get_sql_explain",
-        "tool:list",
+    assert transaction.candidate_granted_scopes == tuple(
+        sorted(
+            {
+                "resource:list",
+                "resource:read",
+                "tool:list",
+                *(child_call_scope(feature_id) for feature_id in feature_ids),
+            }
+        )
     )
 
 
 @pytest.mark.asyncio
-async def test_authorize_short_tool_scope_aliases_are_canonicalized_when_enabled():
+async def test_authorize_legacy_tool_scope_aliases_are_rejected():
     provider, _cm, app = _provider_app(
         _config(
-            db_tools_enabled=True,
-            allowlist=["get_db_list"],
-            query_tools_enabled=True,
-            explain_tools_enabled=True,
+            child_tools_enabled=True,
+            allowlist=[
+                CATALOG_DATABASES_FEATURE,
+                QUERY_EXECUTE_FEATURE,
+                QUERY_EXPLAIN_FEATURE,
+            ],
         )
     )
     async with await _client(app) as client:
@@ -592,20 +644,8 @@ async def test_authorize_short_tool_scope_aliases_are_canonicalized_when_enabled
         )
 
     assert authorize.status_code == 302
-    txn_id = parse_qs(urlparse(authorize.headers["location"]).query)["txn_id"][0]
-    transaction = provider.get_login_transaction(txn_id)
-    assert transaction.requested_scopes == (
-        "tool:list",
-        "tool:call:get_db_list",
-        "tool:call:exec_query",
-        "tool:call:get_sql_explain",
-    )
-    assert transaction.candidate_granted_scopes == (
-        "tool:call:exec_query",
-        "tool:call:get_db_list",
-        "tool:call:get_sql_explain",
-        "tool:list",
-    )
+    query = parse_qs(urlparse(authorize.headers["location"]).query)
+    assert query["error"] == ["invalid_scope"]
 
 
 @pytest.mark.asyncio
@@ -930,9 +970,7 @@ async def test_authorization_code_exchange_rejects_unbound_resource(
 async def test_full_login_without_scope_grants_configured_rbac_capability_envelope():
     provider, cm, app = _provider_app(
         _config(
-            db_tools_enabled=True,
-            query_tools_enabled=True,
-            explain_tools_enabled=True,
+            child_tools_enabled=True,
         )
     )
     async with await _client(app) as client:
@@ -1002,9 +1040,10 @@ async def test_full_login_without_scope_grants_configured_rbac_capability_envelo
     assert auth_context.auth_method == "doris_oauth"
     assert auth_context.doris_user == "alice"
     assert tuple(auth_context.oauth_scopes) == FULL_DORIS_OAUTH_SCOPE_SET
-    assert auth_context.doris_oauth_db_tools_enabled is True
-    assert auth_context.doris_oauth_query_tools_enabled is True
-    assert auth_context.doris_oauth_explain_tools_enabled is True
+    assert auth_context.doris_oauth_child_tools_enabled is True
+    assert auth_context.doris_oauth_child_tool_allowlist == (
+        FORMAL_CHILD_FEATURE_IDS
+    )
     assert auth_context.pool_key == "doris_user:alice"
     assert auth_context.token == ""
 

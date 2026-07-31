@@ -128,6 +128,70 @@ def test_doris_oauth_query_and_explain_flags_are_supported(field_name):
     normalize_effective_auth_config(config)
 
 
+@pytest.mark.parametrize(
+    "feature_id",
+    [
+        "get_db_list",
+        "doris_catalog.not_real",
+        "not_a_feature",
+    ],
+)
+def test_doris_oauth_child_allowlist_rejects_non_formal_features(
+    feature_id,
+):
+    config = _doris_oauth_http_config("http://localhost:3000")
+    config.security.doris_oauth_child_tool_allowlist = [
+        "doris_catalog.list_databases",
+        feature_id,
+    ]
+
+    with pytest.raises(
+        AuthConfigError,
+        match="DORIS_OAUTH_CHILD_TOOL_ALLOWLIST",
+    ):
+        normalize_effective_auth_config(config)
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "DORIS_OAUTH_DB_TOOLS_ENABLED",
+        "DORIS_OAUTH_DB_TOOL_ALLOWLIST",
+        "DORIS_OAUTH_QUERY_TOOLS_ENABLED",
+        "DORIS_OAUTH_QUERY_TOOL_ALLOWLIST",
+        "DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED",
+        "DORIS_OAUTH_EXPLAIN_TOOL_ALLOWLIST",
+    ],
+)
+def test_legacy_doris_oauth_tool_bucket_environment_is_rejected(
+    monkeypatch,
+    setting,
+):
+    monkeypatch.setenv(setting, "true")
+    config = DorisConfig.from_env()
+
+    with pytest.raises(
+        AuthConfigError,
+        match="Legacy Doris OAuth tool-bucket settings",
+    ):
+        normalize_effective_auth_config(config)
+
+
+def test_serialized_config_exposes_only_formal_child_oauth_controls():
+    security = DorisConfig().to_dict()["security"]
+
+    assert security["doris_oauth_child_tools_enabled"] is False
+    assert security["doris_oauth_child_tool_allowlist"]
+    assert {
+        "doris_oauth_db_tools_enabled",
+        "doris_oauth_db_tool_allowlist",
+        "doris_oauth_query_tools_enabled",
+        "doris_oauth_query_tool_allowlist",
+        "doris_oauth_explain_tools_enabled",
+        "doris_oauth_explain_tool_allowlist",
+    }.isdisjoint(security)
+
+
 def _doris_oauth_smoke_env_values():
     return {
         "TRANSPORT": "http",
@@ -145,13 +209,12 @@ def _doris_oauth_smoke_env_values():
         "ENABLE_JWT_AUTH": "false",
         "ENABLE_OAUTH_AUTH": "false",
         "OAUTH_ENABLED": "false",
-        "DORIS_OAUTH_DB_TOOLS_ENABLED": "true",
-        "DORIS_OAUTH_DB_TOOL_ALLOWLIST": (
-            "get_db_list,get_db_table_list,get_table_schema,get_table_comment,"
-            "get_table_column_comments,get_table_indexes,get_catalog_list"
+        "DORIS_OAUTH_CHILD_TOOLS_ENABLED": "true",
+        "DORIS_OAUTH_CHILD_TOOL_ALLOWLIST": (
+            "doris_catalog.list_databases,"
+            "doris_query.execute_query,"
+            "doris_query.explain_query"
         ),
-        "DORIS_OAUTH_QUERY_TOOLS_ENABLED": "true",
-        "DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED": "true",
         "ENABLE_SECURITY_CHECK": "false",
         "DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE": "auto",
         "DORIS_OAUTH_CIMD_FETCH_TIMEOUT_SECONDS": "7",
@@ -180,10 +243,8 @@ def test_runtime_doris_oauth_smoke_env_matches_rbac_default_scope_model(monkeypa
         "ENABLE_JWT_AUTH",
         "ENABLE_OAUTH_AUTH",
         "OAUTH_ENABLED",
-        "DORIS_OAUTH_DB_TOOLS_ENABLED",
-        "DORIS_OAUTH_DB_TOOL_ALLOWLIST",
-        "DORIS_OAUTH_QUERY_TOOLS_ENABLED",
-        "DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED",
+        "DORIS_OAUTH_CHILD_TOOLS_ENABLED",
+        "DORIS_OAUTH_CHILD_TOOL_ALLOWLIST",
         "ENABLE_SECURITY_CHECK",
         "DORIS_OAUTH_DYNAMIC_CLIENT_REGISTRATION_MODE",
         "DORIS_OAUTH_CIMD_FETCH_TIMEOUT_SECONDS",
@@ -218,16 +279,18 @@ def test_runtime_doris_oauth_smoke_env_matches_rbac_default_scope_model(monkeypa
         "tool:list",
         "resource:list",
         "resource:read",
+        "child:call:doris_catalog:list_databases",
+        "child:discover:doris_catalog:list_databases",
+        "child:call:doris_query:execute_query",
+        "child:discover:doris_query:execute_query",
+        "child:call:doris_query:explain_query",
+        "child:discover:doris_query:explain_query",
+    } <= policy.server_allowed_scopes
+    assert {
         "tool:call:get_db_list",
-        "tool:call:get_db_table_list",
-        "tool:call:get_table_schema",
-        "tool:call:get_table_comment",
-        "tool:call:get_table_column_comments",
-        "tool:call:get_table_indexes",
-        "tool:call:get_catalog_list",
         "tool:call:exec_query",
         "tool:call:get_sql_explain",
-    } <= policy.server_allowed_scopes
+    }.isdisjoint(policy.server_allowed_scopes)
     assert {
         "*",
         "scope:admin",

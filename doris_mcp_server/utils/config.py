@@ -70,6 +70,14 @@ DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT = list(
     DORIS_OAUTH_METADATA_TOOL_NAMES
 )
 
+
+def _default_doris_oauth_child_tool_allowlist() -> list[str]:
+    """Load formal child feature IDs without creating a config import cycle."""
+    from ..tools.domain_catalog import FORMAL_CHILD_FEATURE_IDS
+
+    return list(FORMAL_CHILD_FEATURE_IDS)
+
+
 EXTERNAL_OAUTH_SECURITY_LEVELS = frozenset(
     {"public", "internal", "confidential", "secret"}
 )
@@ -417,6 +425,10 @@ class SecurityConfig:
     enable_doris_oauth_auth: bool = False  # Enable Doris-backed OAuth (default: disabled)
     allow_unauthenticated_non_loopback: bool = False
     doris_oauth_base_url: str = ""  # Public base URL for future Doris OAuth metadata
+    doris_oauth_child_tools_enabled: bool = False
+    doris_oauth_child_tool_allowlist: list[str] = field(
+        default_factory=_default_doris_oauth_child_tool_allowlist
+    )
     doris_oauth_db_tools_enabled: bool = False
     doris_oauth_db_tool_allowlist: list[str] = field(
         default_factory=lambda: list(DORIS_OAUTH_METADATA_TOOL_ALLOWLIST_DEFAULT)
@@ -845,6 +857,15 @@ class ToolExposureConfig:
 
 
 @dataclass
+class CapabilityConfig:
+    """Private Doris capability snapshot controls."""
+
+    snapshot_ttl_seconds: int = 300
+    probe_timeout_seconds: int = 5
+    stale_grace_seconds: int = 900
+
+
+@dataclass
 class DorisConfig:
     """Doris MCP Server complete configuration"""
 
@@ -879,6 +900,9 @@ class DorisConfig:
     adbc: ADBCConfig = field(default_factory=ADBCConfig)
     tool_exposure: ToolExposureConfig = field(
         default_factory=ToolExposureConfig
+    )
+    capability: CapabilityConfig = field(
+        default_factory=CapabilityConfig
     )
 
     # Custom configuration
@@ -1164,6 +1188,17 @@ class DorisConfig:
         if "DORIS_OAUTH_BASE_URL" in os.environ:
             config.security.doris_oauth_base_url = os.getenv("DORIS_OAUTH_BASE_URL", "").strip()
             _mark_source(config, "doris_oauth_base_url", "env")
+        if "DORIS_OAUTH_CHILD_TOOLS_ENABLED" in os.environ:
+            config.security.doris_oauth_child_tools_enabled = _str_to_bool(
+                os.getenv("DORIS_OAUTH_CHILD_TOOLS_ENABLED")
+            )
+            _mark_source(config, "doris_oauth_child_tools_enabled", "env")
+        if "DORIS_OAUTH_CHILD_TOOL_ALLOWLIST" in os.environ:
+            config.security.doris_oauth_child_tool_allowlist = _env_csv(
+                "DORIS_OAUTH_CHILD_TOOL_ALLOWLIST",
+                config.security.doris_oauth_child_tool_allowlist,
+            )
+            _mark_source(config, "doris_oauth_child_tool_allowlist", "env")
         if "DORIS_OAUTH_DB_TOOLS_ENABLED" in os.environ:
             config.security.doris_oauth_db_tools_enabled = _str_to_bool(os.getenv("DORIS_OAUTH_DB_TOOLS_ENABLED"))
             _mark_source(config, "doris_oauth_db_tools_enabled", "env")
@@ -1522,6 +1557,24 @@ class DorisConfig:
                 config.tool_exposure.mode,
             ).strip()
             _mark_source(config, "mcp_tool_exposure_mode", "env")
+        if "CAPABILITY_SNAPSHOT_TTL_SECONDS" in os.environ:
+            config.capability.snapshot_ttl_seconds = _env_int(
+                "CAPABILITY_SNAPSHOT_TTL_SECONDS",
+                config.capability.snapshot_ttl_seconds,
+            )
+            _mark_source(config, "capability_snapshot_ttl_seconds", "env")
+        if "CAPABILITY_PROBE_TIMEOUT_SECONDS" in os.environ:
+            config.capability.probe_timeout_seconds = _env_int(
+                "CAPABILITY_PROBE_TIMEOUT_SECONDS",
+                config.capability.probe_timeout_seconds,
+            )
+            _mark_source(config, "capability_probe_timeout_seconds", "env")
+        if "CAPABILITY_STALE_GRACE_SECONDS" in os.environ:
+            config.capability.stale_grace_seconds = _env_int(
+                "CAPABILITY_STALE_GRACE_SECONDS",
+                config.capability.stale_grace_seconds,
+            )
+            _mark_source(config, "capability_stale_grace_seconds", "env")
         if "MCP_STATE_HANDLE_SECRET" in os.environ:
             config.mcp_state_handle_secret = os.getenv(
                 "MCP_STATE_HANDLE_SECRET",
@@ -1628,6 +1681,12 @@ class DorisConfig:
                 "config_file",
             )
 
+        if "capability" in config_data:
+            capability_config = config_data["capability"]
+            for key, value in capability_config.items():
+                if hasattr(config.capability, key):
+                    setattr(config.capability, key, value)
+
         # Custom configuration
         config.custom_config = config_data.get("custom", {})
 
@@ -1649,6 +1708,17 @@ class DorisConfig:
             "temp_files_dir": self.temp_files_dir,
             "tool_exposure": {
                 "mode": self.tool_exposure.mode,
+            },
+            "capability": {
+                "snapshot_ttl_seconds": (
+                    self.capability.snapshot_ttl_seconds
+                ),
+                "probe_timeout_seconds": (
+                    self.capability.probe_timeout_seconds
+                ),
+                "stale_grace_seconds": (
+                    self.capability.stale_grace_seconds
+                ),
             },
             "database": {
                 "host": self.database.host,
@@ -1698,12 +1768,8 @@ class DorisConfig:
                 "enable_doris_oauth_auth": self.security.enable_doris_oauth_auth,
                 "allow_unauthenticated_non_loopback": self.security.allow_unauthenticated_non_loopback,
                 "doris_oauth_base_url": self.security.doris_oauth_base_url,
-                "doris_oauth_db_tools_enabled": self.security.doris_oauth_db_tools_enabled,
-                "doris_oauth_db_tool_allowlist": self.security.doris_oauth_db_tool_allowlist,
-                "doris_oauth_query_tools_enabled": self.security.doris_oauth_query_tools_enabled,
-                "doris_oauth_query_tool_allowlist": self.security.doris_oauth_query_tool_allowlist,
-                "doris_oauth_explain_tools_enabled": self.security.doris_oauth_explain_tools_enabled,
-                "doris_oauth_explain_tool_allowlist": self.security.doris_oauth_explain_tool_allowlist,
+                "doris_oauth_child_tools_enabled": self.security.doris_oauth_child_tools_enabled,
+                "doris_oauth_child_tool_allowlist": self.security.doris_oauth_child_tool_allowlist,
                 "doris_oauth_access_token_expire_seconds": self.security.doris_oauth_access_token_expire_seconds,
                 "doris_oauth_refresh_token_expire_seconds": self.security.doris_oauth_refresh_token_expire_seconds,
                 "doris_oauth_auth_code_expire_seconds": self.security.doris_oauth_auth_code_expire_seconds,
@@ -1883,6 +1949,18 @@ class DorisConfig:
             errors.append(
                 "MCP tool exposure mode must be hierarchical or flat"
             )
+        if not 1 <= self.capability.snapshot_ttl_seconds <= 86400:
+            errors.append(
+                "Capability snapshot TTL must be in the range 1-86400 seconds"
+            )
+        if not 1 <= self.capability.probe_timeout_seconds <= 60:
+            errors.append(
+                "Capability probe timeout must be in the range 1-60 seconds"
+            )
+        if not 0 <= self.capability.stale_grace_seconds <= 86400:
+            errors.append(
+                "Capability stale grace must be in the range 0-86400 seconds"
+            )
 
         raw_tool_providers: Any = self.mcp_tool_providers
         if not isinstance(raw_tool_providers, list):
@@ -2058,6 +2136,17 @@ class DorisConfig:
             "tool_exposure": {
                 "mode": self.tool_exposure.mode,
             },
+            "capability": {
+                "snapshot_ttl_seconds": (
+                    self.capability.snapshot_ttl_seconds
+                ),
+                "probe_timeout_seconds": (
+                    self.capability.probe_timeout_seconds
+                ),
+                "stale_grace_seconds": (
+                    self.capability.stale_grace_seconds
+                ),
+            },
         }
 
 
@@ -2206,8 +2295,47 @@ def normalize_effective_auth_config(
     enable_external_oauth_auth = _str_to_bool(inputs.enable_external_oauth_auth.value)
     enable_doris_oauth_auth = _str_to_bool(inputs.enable_doris_oauth_auth.value)
 
+    explicit_sources = getattr(config, "_explicit_sources", {})
+    legacy_doris_oauth_fields = (
+        "doris_oauth_db_tools_enabled",
+        "doris_oauth_db_tool_allowlist",
+        "doris_oauth_query_tools_enabled",
+        "doris_oauth_query_tool_allowlist",
+        "doris_oauth_explain_tools_enabled",
+        "doris_oauth_explain_tool_allowlist",
+    )
+    configured_legacy_fields = [
+        field_name
+        for field_name in legacy_doris_oauth_fields
+        if explicit_sources.get(field_name, "default") != "default"
+    ]
+    if configured_legacy_fields:
+        raise AuthConfigError(
+            "Legacy Doris OAuth tool-bucket settings are not supported. "
+            "Use DORIS_OAUTH_CHILD_TOOLS_ENABLED and "
+            "DORIS_OAUTH_CHILD_TOOL_ALLOWLIST with formal domain.child "
+            "feature IDs."
+        )
+
     config.security.doris_oauth_db_tool_allowlist = _validate_doris_oauth_metadata_tool_allowlist(
         config.security.doris_oauth_db_tool_allowlist
+    )
+    child_allowlist = _coerce_csv_config(
+        config.security.doris_oauth_child_tool_allowlist
+    )
+    from ..tools.domain_catalog import FORMAL_CHILD_FEATURE_IDS
+
+    invalid_child_features = set(child_allowlist) - set(
+        FORMAL_CHILD_FEATURE_IDS
+    )
+    if invalid_child_features:
+        invalid_list = ", ".join(sorted(invalid_child_features))
+        raise AuthConfigError(
+            "DORIS_OAUTH_CHILD_TOOL_ALLOWLIST can only contain formal "
+            f"domain.child feature IDs; invalid entries: {invalid_list}"
+        )
+    config.security.doris_oauth_child_tool_allowlist = list(
+        dict.fromkeys(child_allowlist)
     )
     query_allowlist = _coerce_csv_config(config.security.doris_oauth_query_tool_allowlist)
     invalid_query_tools = set(query_allowlist) - DORIS_OAUTH_QUERY_TOOL_SET

@@ -225,6 +225,11 @@ export MCP_LIST_PAGE_SIZE=100
 export MCP_TOOL_EXPOSURE_MODE=hierarchical
 # Load only these installed custom tool providers. Empty disables extensions.
 export MCP_TOOL_PROVIDERS="orders_api"
+# Cache private route-specific Doris capability evidence for five minutes,
+# probe for at most five seconds, and allow a bounded stale fallback.
+export CAPABILITY_SNAPSHOT_TTL_SECONDS=300
+export CAPABILITY_PROBE_TIMEOUT_SECONDS=5
+export CAPABILITY_STALE_GRACE_SECONDS=900
 # A launch-local key is generated automatically. Configure one shared
 # high-entropy value when independently launched replicas share traffic.
 export MCP_STATE_HANDLE_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -329,6 +334,12 @@ cp .env.example .env
         (default: hierarchical)
     *   `MCP_TOOL_PROVIDERS`: Comma-separated allowlist of installed
         `doris_mcp_server.tool_providers` entry points (default: empty)
+    *   `CAPABILITY_SNAPSHOT_TTL_SECONDS`: Lifetime of a private route-specific
+        Doris capability snapshot (default: 300; range: 1-86400)
+    *   `CAPABILITY_PROBE_TIMEOUT_SECONDS`: Total timeout for one capability
+        probe phase (default: 5; range: 1-60)
+    *   `CAPABILITY_STALE_GRACE_SECONDS`: Bounded interval in which a failed
+        refresh may reuse stale private evidence (default: 900; range: 0-86400)
     *   `MCP_STATE_HANDLE_SECRET`: Optional shared high-entropy key (at least
         32 bytes) used to authenticate explicit cross-call state handles
     *   `MCP_STATE_HANDLE_TTL_SECONDS`: Lifetime of an explicit state handle
@@ -402,11 +413,13 @@ tools, schemas, version support, availability, evidence, and risk annotations.
 See [docs/tool-registry.md](docs/tool-registry.md). The checked-in catalog is
 generated from the same validated domain definitions used at runtime.
 
-`tool:list` authorizes domain-manifest discovery for OAuth sessions; it does
-not authorize child execution. Children without discovery permission are
-omitted, while authorized but unavailable children remain visible with
-`callable=false`. Doris RBAC remains the final data authorization backend for
-all Doris object access.
+`tool:list` authorizes only the stable top-level domain list for OAuth
+sessions. Each child additionally requires its exact
+`child:discover:<domain>:<child>` or `child:call:<domain>:<child>` scope;
+`child:call` permits both discovery and execution. Children without an exact
+discovery grant are omitted, while authorized but unavailable children remain
+visible with `callable=false`. Doris RBAC remains the final data authorization
+backend for all Doris object access.
 
 ### 4. Run the Service
 
@@ -901,7 +914,7 @@ OAUTH_AUDIENCE=https://mcp.example.com/mcp
 OAUTH_INTROSPECTION_URL=https://issuer.example.com/introspect
 OAUTH_USERINFO_URL=https://issuer.example.com/userinfo
 
-OAUTH_SCOPE="tool:list tool:call:exec_query resource:list resource:read"
+OAUTH_SCOPE="tool:list child:call:doris_query:execute_query resource:list resource:read"
 OAUTH_REQUIRED_SCOPE="tool:list resource:read"
 ```
 
@@ -922,11 +935,14 @@ not copied into these responses. These HTTP OAuth challenges do not apply to
 stdio transport, where credentials are supplied through the local process
 environment.
 
-External OAuth operation scopes are exact: listing tools requires `tool:list`,
-calling a tool requires `tool:call:<tool-name>`, listing and reading resources
-require `resource:list` and `resource:read`, and Prompt operations require
-`prompt:list` and `prompt:get`. Add every callable tool scope to
-`OAUTH_SCOPE`; `*` and unrelated scopes never satisfy an operation check.
+External OAuth operation scopes are exact: listing the stable domains requires
+`tool:list`; each child requires
+`child:call:<domain>:<child>` for execution or
+`child:discover:<domain>:<child>` for discovery only. Listing and reading
+resources require `resource:list` and `resource:read`, and Prompt operations
+require `prompt:list` and `prompt:get`. Add every required child scope to
+`OAUTH_SCOPE`; `*`, legacy flat-tool scopes, and unrelated scopes never satisfy
+an operation check.
 Static token, JWT, anonymous loopback, and local stdio authorization keep
 their existing non-OAuth permission behavior.
 
@@ -963,10 +979,8 @@ ENABLE_DORIS_OAUTH_AUTH=true
 DORIS_OAUTH_BASE_URL=http://localhost:3000
 ENABLE_OAUTH_AUTH=false
 
-DORIS_OAUTH_DB_TOOLS_ENABLED=true
-DORIS_OAUTH_DB_TOOL_ALLOWLIST=get_db_list,get_db_table_list,get_table_schema,get_table_comment,get_table_column_comments,get_table_indexes,get_catalog_list
-DORIS_OAUTH_QUERY_TOOLS_ENABLED=true
-DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true
+DORIS_OAUTH_CHILD_TOOLS_ENABLED=true
+DORIS_OAUTH_CHILD_TOOL_ALLOWLIST=doris_catalog.list_databases,doris_query.execute_query,doris_query.explain_query
 
 # Optional: let Doris RBAC, not the legacy MCP SQL guard, decide DDL/DML.
 ENABLE_SECURITY_CHECK=false
@@ -974,23 +988,25 @@ ENABLE_SECURITY_CHECK=false
 
 The configured service Doris account is still required by startup validation and by non-Doris-OAuth compatibility paths. Doris-backed OAuth requests are fail-closed if the per-user pool is missing and must not fall back to the service/global account.
 
-#### Doris OAuth Tool Access
+#### Doris OAuth Child Access
 
-`DORIS_OAUTH_DB_TOOLS_ENABLED=true` opens the reviewed metadata bucket. The reviewed tools are:
+`DORIS_OAUTH_CHILD_TOOLS_ENABLED=true` opens only the formal child features in
+`DORIS_OAUTH_CHILD_TOOL_ALLOWLIST`. The allowlist uses exact
+`domain.child` IDs, such as `doris_catalog.list_databases` and
+`doris_query.execute_query`.
 
-*   `get_db_list`
-*   `get_db_table_list`
-*   `get_table_schema`
-*   `get_table_comment`
-*   `get_table_column_comments`
-*   `get_table_indexes`
-*   `get_catalog_list`
+The authorization server issues exact
+`child:call:<domain>:<child>` and
+`child:discover:<domain>:<child>` scopes. A call scope also permits discovery;
+a discovery scope never permits execution. Legacy flat names and
+`tool:call:<legacy-name>` scopes are rejected. If an OAuth request omits
+scope, the server grants the configured call envelope. For MySQL-channel
+operations, Doris RBAC still decides whether the logged-in Doris user can read
+metadata or run the requested SQL.
 
-For normal MCP OAuth flows, clients do not need to pass a long `--scopes` list. If the OAuth request omits scope, the server grants the configured Doris OAuth capability envelope. For MySQL-channel operations, Doris RBAC decides whether the logged-in Doris user can actually read metadata, run SQL, or explain SQL.
-
-`DORIS_OAUTH_QUERY_TOOLS_ENABLED=true` opens `exec_query`. `DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true` opens `get_sql_explain`. If `ENABLE_SECURITY_CHECK=true`, the legacy MCP SQL security layer can still reject some SQL before Doris sees it. Set `ENABLE_SECURITY_CHECK=false` when the intended policy is to let Doris RBAC decide SQL/DDL/DML.
-
-Doris-backed OAuth still does not open prompts, ADBC, FE HTTP profile/monitoring, audit/governance, or performance analytics in this phase unless those paths are separately routed through per-user credentials or given an explicit service-account/admin design.
+If `ENABLE_SECURITY_CHECK=true`, the MCP SQL security layer can still reject
+some SQL before Doris sees it. Set `ENABLE_SECURITY_CHECK=false` only when the
+intended policy is to let Doris RBAC decide SQL, DDL, and DML.
 
 #### OAuth Client Registration
 
@@ -2205,7 +2221,11 @@ cat logs/doris_mcp_server_critical.log
 
 These modes are mutually exclusive on one MCP URL. Do not enable `ENABLE_DORIS_OAUTH_AUTH=true` together with `ENABLE_OAUTH_AUTH=true`, `OAUTH_ENABLED=true`, or `AUTH_TYPE=oauth`; startup fails fast if both OAuth modes are configured.
 
-Doris-backed OAuth currently exposes MCP resources with disabled resources metadata cache. It exposes reviewed metadata tools when `DORIS_OAUTH_DB_TOOLS_ENABLED=true`, `exec_query` when `DORIS_OAUTH_QUERY_TOOLS_ENABLED=true`, and SQL explain when `DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true`. Normal clients do not need to pass a long scope list; omitted OAuth scope grants the configured Doris OAuth capability envelope. Doris RBAC remains the final data authorization backend for these MySQL-channel operations.
+Doris-backed OAuth exposes MCP resources with disabled resources metadata
+cache. Child access is controlled by `DORIS_OAUTH_CHILD_TOOLS_ENABLED`, the
+exact formal Feature-ID allowlist, and exact child discovery/call scopes.
+Omitted OAuth scope grants the configured call envelope. Doris RBAC remains
+the final data authorization backend for Doris operations.
 
 ### Q: Can Doris-backed OAuth run with multiple workers or multiple nodes?
 

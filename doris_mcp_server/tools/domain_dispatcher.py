@@ -160,6 +160,15 @@ class BoundHandlerAvailabilityProvider:
         self._catalog = catalog or domain_catalog_module.DORIS_DOMAIN_CATALOG
         self._bindings = _build_bindings(owner, self._catalog)
 
+    @property
+    def bound_feature_ids(self) -> frozenset[str]:
+        """Return the exact formal features backed by production handlers."""
+        return frozenset(self._bindings)
+
+    def is_bound(self, domain_name: str, child_name: str) -> bool:
+        """Return whether one formal child has a production handler."""
+        return f"{domain_name}.{child_name}" in self._bindings
+
     async def availability_for(
         self,
         domain: DomainDefinition,

@@ -92,11 +92,13 @@ def _connection_manager() -> Mock:
 def _manager(
     *callable_features: str,
     mode: str | ToolExposureMode = ToolExposureMode.HIERARCHICAL,
+    availability_provider: SelectiveAvailabilityProvider | None = None,
 ) -> DorisToolsManager:
     return DorisToolsManager(
         _connection_manager(),
-        domain_availability_provider=SelectiveAvailabilityProvider(
-            set(callable_features)
+        domain_availability_provider=(
+            availability_provider
+            or SelectiveAvailabilityProvider(set(callable_features))
         ),
         tool_exposure_mode=mode,
     )
@@ -130,14 +132,12 @@ def test_dispatcher_registers_exactly_47_formal_flat_names() -> None:
     assert len(set(names)) == 47
     assert "doris_query_execute_query" in names
     assert not set(CURRENT_FLAT_TOOL_NAMES).intersection(names)
-    assert manager.domain_dispatcher.handles_flat(
-        "doris_query_execute_query"
-    )
+    assert manager.domain_dispatcher.handles_flat("doris_query_execute_query")
     assert not manager.domain_dispatcher.handles_flat("exec_query")
 
 
 @pytest.mark.asyncio
-async def test_default_manager_exposes_bound_handlers_as_callable() -> None:
+async def test_default_manager_fails_closed_without_capability_snapshot() -> None:
     manager = DorisToolsManager(_connection_manager())
     manager._exec_query_tool = AsyncMock(return_value=_successful_query())
 
@@ -148,28 +148,15 @@ async def test_default_manager_exposes_bound_handlers_as_callable() -> None:
     )
     children = {child.name: child for child in manifest.children}
 
-    assert children["execute_query"].availability.callable is True
-    assert (
-        children["execute_query"].availability.reason_code
-        == "BOUND_HANDLER_FALLBACK"
-    )
+    assert children["execute_query"].availability.callable is False
+    assert children["execute_query"].availability.reason_code == "DORIS_VERSION_UNKNOWN"
     assert children["diagnose_query_performance"].availability.callable is False
     assert (
         children["diagnose_query_performance"].availability.reason_code
         == "HANDLER_NOT_BOUND"
     )
 
-    result = await manager.domain_dispatcher.call_domain(
-        "doris_query",
-        {
-            "child_tool": "execute_query",
-            "arguments": {"sql": "SELECT 1"},
-        },
-        None,
-    )
-
-    assert result.mode == "result"
-    manager._exec_query_tool.assert_awaited_once()
+    manager._exec_query_tool.assert_not_awaited()
 
 
 def test_dispatcher_rejects_colliding_formal_flat_names() -> None:
@@ -253,18 +240,14 @@ async def test_flat_mode_lists_47_formal_tools_and_uses_same_handler() -> None:
     assert tools[5].input_schema["required"] == ["sql"]
     assert result["domain"] == "doris_query"
     assert result["child_tool"] == "execute_query"
-    manager._exec_query_tool.assert_awaited_once_with(
-        {"sql": "SELECT 1 AS answer"}
-    )
+    manager._exec_query_tool.assert_awaited_once_with({"sql": "SELECT 1 AS answer"})
 
 
 @pytest.mark.asyncio
 async def test_error_envelopes_match_both_public_output_schemas() -> None:
     hierarchical = _manager("doris_query.execute_query")
     hierarchical_tool = next(
-        tool
-        for tool in await hierarchical.list_tools()
-        if tool.name == "doris_query"
+        tool for tool in await hierarchical.list_tools() if tool.name == "doris_query"
     )
     hierarchical_schema = ToolSchemaGuard().compile_tool(hierarchical_tool)
     hierarchical_error = json.loads(
@@ -439,12 +422,8 @@ async def test_domain_and_child_argument_schemas_fail_closed() -> None:
         )
     )
 
-    assert invalid_outer["error"]["code"] == (
-        DomainErrorCode.CHILD_ARGUMENTS_INVALID
-    )
-    assert invalid_child["error"]["code"] == (
-        DomainErrorCode.CHILD_ARGUMENTS_INVALID
-    )
+    assert invalid_outer["error"]["code"] == (DomainErrorCode.CHILD_ARGUMENTS_INVALID)
+    assert invalid_child["error"]["code"] == (DomainErrorCode.CHILD_ARGUMENTS_INVALID)
     assert invalid_child["error"]["details"]["violations"] == [
         {"instancePath": "", "keyword": "required"}
     ]
@@ -456,9 +435,7 @@ async def test_child_argument_violation_list_is_bounded_and_marked() -> None:
     dispatcher = DomainDispatcher(
         manager,
         manager.domain_manifest_service,
-        schema_guard=ToolSchemaGuard(
-            SchemaLimits(max_validation_errors=1)
-        ),
+        schema_guard=ToolSchemaGuard(SchemaLimits(max_validation_errors=1)),
     )
 
     result = await dispatcher.call_domain(
@@ -514,10 +491,46 @@ async def test_manifest_version_unavailable_and_unbound_fail_closed() -> None:
     assert unavailable["error"]["code"] == (
         DomainErrorCode.CHILD_CAPABILITY_UNAVAILABLE
     )
-    assert unavailable["error"]["details"]["reason_code"] == (
-        "TEST_HANDLER_PENDING"
-    )
+    assert unavailable["error"]["details"]["reason_code"] == ("TEST_HANDLER_PENDING")
     assert unbound["error"]["details"]["reason_code"] == "HANDLER_NOT_BOUND"
+
+
+@pytest.mark.asyncio
+async def test_runtime_provider_down_is_rechecked_before_execution() -> None:
+    provider = SelectiveAvailabilityProvider({"doris_query.execute_query"})
+    manager = _manager(availability_provider=provider)
+    manager._exec_query_tool = AsyncMock(return_value=_successful_query())
+    manifest = await manager.domain_dispatcher.call_domain(
+        "doris_query",
+        {},
+        None,
+    )
+
+    provider.callable_features.clear()
+    stale = await manager.domain_dispatcher.call_domain(
+        "doris_query",
+        {
+            "child_tool": "execute_query",
+            "arguments": {"sql": "SELECT 1"},
+            "manifest_version": manifest.manifest_version,
+        },
+        None,
+    )
+    unavailable = await manager.domain_dispatcher.call_domain(
+        "doris_query",
+        {
+            "child_tool": "execute_query",
+            "arguments": {"sql": "SELECT 1"},
+        },
+        None,
+    )
+
+    assert stale.mode == "error"
+    assert stale.error.code is DomainErrorCode.CHILD_MANIFEST_STALE
+    assert unavailable.mode == "error"
+    assert unavailable.error.code is DomainErrorCode.CHILD_CAPABILITY_UNAVAILABLE
+    assert unavailable.error.details["reason_code"] == "TEST_HANDLER_PENDING"
+    manager._exec_query_tool.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -564,6 +577,10 @@ async def test_oauth_execution_requires_exact_child_call_grant(
     context = AuthContext(
         auth_method=auth_method,
         oauth_scopes=oauth_scopes,
+        doris_oauth_child_tools_enabled=auth_method == "doris_oauth",
+        doris_oauth_child_tool_allowlist=(
+            ("doris_query.execute_query",) if auth_method == "doris_oauth" else ()
+        ),
     )
 
     result = await manager.domain_dispatcher.call_domain(
@@ -601,6 +618,10 @@ async def test_exact_child_call_grant_executes_and_static_token_fallback_remains
                 "tool:list",
                 "child:call:doris_query:execute_query",
             ],
+            doris_oauth_child_tools_enabled=auth_method == "doris_oauth",
+            doris_oauth_child_tool_allowlist=(
+                ("doris_query.execute_query",) if auth_method == "doris_oauth" else ()
+            ),
         ),
     )
     token_result = await manager.domain_dispatcher.call_domain(
@@ -848,9 +869,7 @@ async def test_table_context_skips_unrequested_optional_sections() -> None:
     )
 
     assert result.mode == "result"
-    assert result.to_wire()["data"]["data"] == {
-        "schema": {"columns": ["id"]}
-    }
+    assert result.to_wire()["data"]["data"] == {"schema": {"columns": ["id"]}}
 
 
 @pytest.mark.asyncio

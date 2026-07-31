@@ -105,6 +105,53 @@ def test_tool_exposure_mode_loads_from_json_config(tmp_path) -> None:
     assert configured.tool_exposure.mode == "flat"
 
 
+def test_capability_cache_controls_are_explicit_and_validated(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("CAPABILITY_SNAPSHOT_TTL_SECONDS", "120")
+    monkeypatch.setenv("CAPABILITY_PROBE_TIMEOUT_SECONDS", "7")
+    monkeypatch.setenv("CAPABILITY_STALE_GRACE_SECONDS", "480")
+
+    configured = DorisConfig.from_env()
+
+    assert configured.capability.snapshot_ttl_seconds == 120
+    assert configured.capability.probe_timeout_seconds == 7
+    assert configured.capability.stale_grace_seconds == 480
+    assert configured.to_dict()["capability"] == {
+        "snapshot_ttl_seconds": 120,
+        "probe_timeout_seconds": 7,
+        "stale_grace_seconds": 480,
+    }
+    assert configured.validate() == []
+
+    config_path = tmp_path / "doris-mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "capability": {
+                    "snapshot_ttl_seconds": 30,
+                    "probe_timeout_seconds": 3,
+                    "stale_grace_seconds": 60,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    from_file = DorisConfig.from_file(str(config_path))
+    assert from_file.capability.snapshot_ttl_seconds == 30
+    assert from_file.capability.probe_timeout_seconds == 3
+    assert from_file.capability.stale_grace_seconds == 60
+
+    from_file.capability.snapshot_ttl_seconds = 0
+    from_file.capability.probe_timeout_seconds = 61
+    from_file.capability.stale_grace_seconds = -1
+    errors = from_file.validate()
+    assert "Capability snapshot TTL must be in the range 1-86400 seconds" in errors
+    assert "Capability probe timeout must be in the range 1-60 seconds" in errors
+    assert "Capability stale grace must be in the range 0-86400 seconds" in errors
+
+
 def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
     monkeypatch,
 ):
@@ -150,6 +197,9 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.mcp_list_page_size = 17
     config.mcp_tool_providers = ["orders_api", "customer-tools"]
     config.tool_exposure.mode = "flat"
+    config.capability.snapshot_ttl_seconds = 120
+    config.capability.probe_timeout_seconds = 7
+    config.capability.stale_grace_seconds = 480
     config.mcp_state_handle_secret = "parent-shared-state-handle-secret-value"
     config.mcp_state_handle_ttl_seconds = 45
 
@@ -188,6 +238,9 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.mcp_list_page_size == 17
     assert child_config.mcp_tool_providers == ["orders_api", "customer-tools"]
     assert child_config.tool_exposure.mode == "flat"
+    assert child_config.capability.snapshot_ttl_seconds == 120
+    assert child_config.capability.probe_timeout_seconds == 7
+    assert child_config.capability.stale_grace_seconds == 480
     assert (
         child_config.mcp_state_handle_secret
         == "parent-shared-state-handle-secret-value"

@@ -411,6 +411,34 @@ def test_master_fe_scope_does_not_inherit_an_unrelated_old_be_version() -> None:
     assert result.compatible is True
 
 
+@pytest.mark.parametrize(
+    "child_name",
+    [
+        "execute_query",
+        "explain_query",
+        "get_query_profile",
+    ],
+)
+def test_fe_query_entrypoints_ignore_unknown_backend_version(
+    child_name: str,
+) -> None:
+    result = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_query",
+        child_name=child_name,
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe="Doris version doris-4.0.5",
+            backends=(
+                "Doris version doris-4.0.5",
+                "",
+            ),
+        ),
+    )
+
+    assert result.version_scope is CapabilityVersionScope.MASTER_FE
+    assert result.effective_version == "4.0.5"
+    assert result.compatible is True
+
+
 def test_missing_required_component_version_fails_closed() -> None:
     versions = DorisClusterVersionVector.from_comments(
         master_fe="Doris version doris-4.1.2",
