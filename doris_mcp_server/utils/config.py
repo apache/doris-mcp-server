@@ -889,6 +889,26 @@ class LakehouseConfig:
 
 
 @dataclass
+class SemanticConfig:
+    """Opt-in Apache Ossie adapter and bounded semantic context controls."""
+
+    enabled: bool = False
+    model_directory: str = ""
+    binding_manifest: str = ""
+    max_file_bytes: int = 2 * 1024 * 1024
+    max_total_bytes: int = 8 * 1024 * 1024
+    max_models: int = 64
+    max_depth: int = 32
+    max_aliases: int = 32
+    max_string_bytes: int = 16 * 1024
+    max_expression_bytes: int = 4096
+    context_max_bytes: int = 16 * 1024
+    context_hard_max_bytes: int = 64 * 1024
+    oauth_tools_enabled: bool = False
+    oauth_resources_enabled: bool = False
+
+
+@dataclass
 class DorisConfig:
     """Doris MCP Server complete configuration"""
 
@@ -929,6 +949,7 @@ class DorisConfig:
     )
     governance: GovernanceConfig = field(default_factory=GovernanceConfig)
     lakehouse: LakehouseConfig = field(default_factory=LakehouseConfig)
+    semantic: SemanticConfig = field(default_factory=SemanticConfig)
 
     # Custom configuration
     custom_config: dict[str, Any] = field(default_factory=dict)
@@ -1657,6 +1678,57 @@ class DorisConfig:
                 "LAKEHOUSE_MAX_VARIANT_PATHS",
                 config.lakehouse.max_variant_paths,
             )
+        if "OSSIE_ENABLED" in os.environ:
+            config.semantic.enabled = (
+                os.getenv("OSSIE_ENABLED", "false").lower() == "true"
+            )
+        if "OSSIE_MODEL_DIRECTORY" in os.environ:
+            config.semantic.model_directory = os.getenv(
+                "OSSIE_MODEL_DIRECTORY",
+                "",
+            ).strip()
+        if "OSSIE_BINDING_MANIFEST" in os.environ:
+            config.semantic.binding_manifest = os.getenv(
+                "OSSIE_BINDING_MANIFEST",
+                "",
+            ).strip()
+        semantic_integer_env = (
+            ("OSSIE_MAX_FILE_BYTES", "max_file_bytes"),
+            ("OSSIE_MAX_TOTAL_BYTES", "max_total_bytes"),
+            ("OSSIE_MAX_MODELS", "max_models"),
+            ("OSSIE_MAX_DEPTH", "max_depth"),
+            ("OSSIE_MAX_ALIASES", "max_aliases"),
+            ("OSSIE_MAX_STRING_BYTES", "max_string_bytes"),
+            ("OSSIE_MAX_EXPRESSION_BYTES", "max_expression_bytes"),
+            ("OSSIE_CONTEXT_MAX_BYTES", "context_max_bytes"),
+            ("OSSIE_CONTEXT_HARD_MAX_BYTES", "context_hard_max_bytes"),
+        )
+        for env_name, attribute in semantic_integer_env:
+            if env_name in os.environ:
+                setattr(
+                    config.semantic,
+                    attribute,
+                    _env_int(
+                        env_name,
+                        int(getattr(config.semantic, attribute)),
+                    ),
+                )
+        if "DORIS_OAUTH_SEMANTIC_TOOLS_ENABLED" in os.environ:
+            config.semantic.oauth_tools_enabled = (
+                os.getenv(
+                    "DORIS_OAUTH_SEMANTIC_TOOLS_ENABLED",
+                    "false",
+                ).lower()
+                == "true"
+            )
+        if "DORIS_OAUTH_SEMANTIC_RESOURCES_ENABLED" in os.environ:
+            config.semantic.oauth_resources_enabled = (
+                os.getenv(
+                    "DORIS_OAUTH_SEMANTIC_RESOURCES_ENABLED",
+                    "false",
+                ).lower()
+                == "true"
+            )
         if "MCP_STATE_HANDLE_SECRET" in os.environ:
             config.mcp_state_handle_secret = os.getenv(
                 "MCP_STATE_HANDLE_SECRET",
@@ -1781,6 +1853,12 @@ class DorisConfig:
                 if hasattr(config.lakehouse, key):
                     setattr(config.lakehouse, key, value)
 
+        if "semantic" in config_data:
+            semantic_config = config_data["semantic"]
+            for key, value in semantic_config.items():
+                if hasattr(config.semantic, key):
+                    setattr(config.semantic, key, value)
+
         # Custom configuration
         config.custom_config = config_data.get("custom", {})
 
@@ -1836,6 +1914,26 @@ class DorisConfig:
                     self.lakehouse.max_variant_sample_rows
                 ),
                 "max_variant_paths": self.lakehouse.max_variant_paths,
+            },
+            "semantic": {
+                "enabled": self.semantic.enabled,
+                "model_directory": self.semantic.model_directory,
+                "binding_manifest": self.semantic.binding_manifest,
+                "max_file_bytes": self.semantic.max_file_bytes,
+                "max_total_bytes": self.semantic.max_total_bytes,
+                "max_models": self.semantic.max_models,
+                "max_depth": self.semantic.max_depth,
+                "max_aliases": self.semantic.max_aliases,
+                "max_string_bytes": self.semantic.max_string_bytes,
+                "max_expression_bytes": self.semantic.max_expression_bytes,
+                "context_max_bytes": self.semantic.context_max_bytes,
+                "context_hard_max_bytes": (
+                    self.semantic.context_hard_max_bytes
+                ),
+                "oauth_tools_enabled": self.semantic.oauth_tools_enabled,
+                "oauth_resources_enabled": (
+                    self.semantic.oauth_resources_enabled
+                ),
             },
             "database": {
                 "host": self.database.host,
@@ -2119,6 +2217,79 @@ class DorisConfig:
             errors.append(
                 "Lakehouse Variant path limit must be in the range 1-2000"
             )
+        if self.semantic.enabled and (
+            not self.semantic.model_directory or not self.semantic.binding_manifest
+        ):
+            errors.append(
+                "Enabled Ossie support requires model directory and binding manifest"
+            )
+        semantic_integer_limits = (
+            (
+                "file byte limit",
+                self.semantic.max_file_bytes,
+                1024,
+                16 * 1024 * 1024,
+            ),
+            (
+                "total byte limit",
+                self.semantic.max_total_bytes,
+                1024,
+                64 * 1024 * 1024,
+            ),
+            ("model limit", self.semantic.max_models, 1, 256),
+            ("depth limit", self.semantic.max_depth, 4, 64),
+            ("alias limit", self.semantic.max_aliases, 0, 256),
+            (
+                "string byte limit",
+                self.semantic.max_string_bytes,
+                256,
+                64 * 1024,
+            ),
+            (
+                "expression byte limit",
+                self.semantic.max_expression_bytes,
+                64,
+                16 * 1024,
+            ),
+            (
+                "context byte limit",
+                self.semantic.context_max_bytes,
+                1024,
+                64 * 1024,
+            ),
+            (
+                "context hard byte limit",
+                self.semantic.context_hard_max_bytes,
+                1024,
+                64 * 1024,
+            ),
+        )
+        for label, value, minimum, maximum in semantic_integer_limits:
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not minimum <= value <= maximum
+            ):
+                errors.append(
+                    f"Ossie {label} must be in the range {minimum}-{maximum}"
+                )
+        if (
+            isinstance(self.semantic.max_total_bytes, int)
+            and isinstance(self.semantic.max_file_bytes, int)
+            and self.semantic.max_total_bytes < self.semantic.max_file_bytes
+        ):
+            errors.append(
+                "Ossie total byte limit must not be smaller than file byte limit"
+            )
+        if (
+            isinstance(self.semantic.context_max_bytes, int)
+            and isinstance(self.semantic.context_hard_max_bytes, int)
+            and self.semantic.context_max_bytes
+            > self.semantic.context_hard_max_bytes
+        ):
+            errors.append(
+                "Ossie context byte limit must not exceed the hard byte limit"
+            )
 
         raw_tool_providers: Any = self.mcp_tool_providers
         if not isinstance(raw_tool_providers, list):
@@ -2303,6 +2474,14 @@ class DorisConfig:
                 ),
                 "stale_grace_seconds": (
                     self.capability.stale_grace_seconds
+                ),
+            },
+            "semantic": {
+                "enabled": self.semantic.enabled,
+                "context_max_bytes": self.semantic.context_max_bytes,
+                "oauth_tools_enabled": self.semantic.oauth_tools_enabled,
+                "oauth_resources_enabled": (
+                    self.semantic.oauth_resources_enabled
                 ),
             },
         }

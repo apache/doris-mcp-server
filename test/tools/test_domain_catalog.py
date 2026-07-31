@@ -252,6 +252,39 @@ def test_semantic_content_children_require_explicit_model_ref() -> None:
         assert "model_ref" in schemas[name]["properties"]
 
 
+def test_semantic_context_schema_requires_nonempty_unambiguous_selectors() -> None:
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_semantic",
+        "get_semantic_context",
+    )
+    validator = Draft202012Validator(_wire_input(child))
+
+    valid = {
+        "model_ref": "retail/main",
+        "request": {
+            "metrics": ["total_sales"],
+            "dimensions": ["customers.segment"],
+            "max_bytes": 8192,
+        },
+    }
+    assert list(validator.iter_errors(valid)) == []
+    for invalid_request in (
+        {},
+        {"metrics": []},
+        {"question": ""},
+        {"dimensions": ["customers.segment.extra"]},
+        {"metrics": ["total_sales"], "unexpected": True},
+    ):
+        assert list(
+            validator.iter_errors(
+                {
+                    "model_ref": "retail/main",
+                    "request": invalid_request,
+                }
+            )
+        )
+
+
 def test_table_context_has_four_sections_and_five_deterministic_steps() -> None:
     child = DORIS_DOMAIN_CATALOG.resolve_child(
         "doris_catalog",

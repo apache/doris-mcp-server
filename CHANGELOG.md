@@ -65,6 +65,9 @@ under **Unreleased** until a new version is selected and published.
 - A read-only Lakehouse domain with capability-gated external-catalog,
   lakehouse-table, snapshot, partition, pushdown, and Variant-shape
   inspection.
+- An experimental read-only Apache Ossie Core semantic-grounding domain with
+  four capability-gated children, revisioned model-summary resources, and
+  explicit server-private Doris binding manifests.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
@@ -108,6 +111,12 @@ under **Unreleased** until a new version is selected and published.
 - Selected Lakehouse and Variant capability variants from observed Doris
   component versions and live metadata probes, with 4.1 lifecycle and
   advanced Variant facets reported separately from target-level evidence.
+- Pinned Ossie model loading to the reviewed `0.2.0.dev0` schema, exact
+  `model_ref` selection, bounded deterministic context construction, and
+  route-aware Doris permission filtering without compiling or executing model
+  expressions.
+- Aligned semantic OAuth discovery, execution, resource exposure, and Doris
+  OAuth scope issuance on explicit channel opt-in plus `semantic:read`.
 
 ### Fixed
 
@@ -133,8 +142,13 @@ under **Unreleased** until a new version is selected and published.
 - Kept catalog property values, storage locations, raw plans, and sampled
   Variant values out of model-facing output while bounding object, snapshot,
   partition, path, and type-shape evidence.
+- Kept semantic discovery, resources, summaries, mappings, metrics, and
+  relationships fail-closed when a configured route, binding, physical
+  dependency, or Doris permission cannot be verified.
 - Preserved configured Governance and Lakehouse runtime limits across the
   multi-worker parent-to-worker environment handoff.
+- Preserved configured semantic loader, context, and OAuth exposure limits
+  across the multi-worker parent-to-worker environment handoff.
 - Excluded explicitly dead Doris components from active version gating while
   preserving them in node inventory, and kept live runtime manifests within
   the 16 KiB domain budget.

@@ -113,6 +113,8 @@ class AuthContext:
     oauth_resource: str = ""
     oauth_audiences: list[str] = field(default_factory=list)
     pool_key: str = ""
+    semantic_tools_enabled: bool = False
+    semantic_resources_enabled: bool = False
     doris_oauth_child_tools_enabled: bool = False
     doris_oauth_child_tool_allowlist: tuple[str, ...] = field(
         default_factory=tuple

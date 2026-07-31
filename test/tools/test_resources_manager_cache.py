@@ -1,9 +1,11 @@
 import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from doris_mcp_server.semantic.runtime import SemanticRuntimeFailure
 from doris_mcp_server.tools.resources_manager import (
     DorisOAuthResourceError,
     DorisResourcesManager,
@@ -221,6 +223,55 @@ def doris_context(scopes):
         oauth_scopes=list(scopes),
         pool_key="doris_user:doris_user",
     )
+
+
+@pytest.mark.asyncio
+async def test_semantic_resources_are_listed_and_read_through_exact_runtime() -> None:
+    manager = DorisResourcesManager(FakeConnectionManager())  # type: ignore[arg-type]
+    semantic_uri = "doris://semantic/models/retail%2Fmain/0123456789abcdef"
+    manager.semantic_runtime.list_resource_descriptors = AsyncMock(
+        return_value=[
+            {
+                "uri": semantic_uri,
+                "name": "Semantic Model: retail",
+                "description": "Validated Ossie summary for retail",
+            }
+        ]
+    )
+    manager.semantic_runtime.read_resource = AsyncMock(
+        return_value='{"model_ref":"retail/main"}'
+    )
+
+    resources = await manager.list_resources()
+    semantic = [resource for resource in resources if str(resource.uri) == semantic_uri]
+
+    assert len(semantic) == 1
+    assert semantic[0].mime_type == "application/json"
+    assert await manager.read_resource(semantic_uri) == (
+        '{"model_ref":"retail/main"}'
+    )
+    manager.semantic_runtime.read_resource.assert_awaited_once_with(semantic_uri)
+
+
+@pytest.mark.asyncio
+async def test_hidden_semantic_resource_uses_generic_not_found_payload() -> None:
+    manager = DorisResourcesManager(FakeConnectionManager())  # type: ignore[arg-type]
+    uri = "doris://semantic/models/hidden%2Fmodel/0123456789abcdef"
+    manager.semantic_runtime.read_resource = AsyncMock(
+        side_effect=SemanticRuntimeFailure(
+            "SEMANTIC_MODEL_NOT_FOUND",
+            "Semantic model was not found.",
+            status_code=404,
+        )
+    )
+
+    payload = json.loads(await manager.read_resource(uri))
+
+    assert payload == {
+        "error": "Resource not found",
+        "uri": uri,
+        "error_code": "RESOURCE_NOT_FOUND",
+    }
 
 
 @pytest.mark.asyncio

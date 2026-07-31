@@ -134,6 +134,28 @@ def _multiworker_environment(
         "LAKEHOUSE_MAX_VARIANT_PATHS": str(
             config.lakehouse.max_variant_paths
         ),
+        "OSSIE_ENABLED": str(config.semantic.enabled).lower(),
+        "OSSIE_MODEL_DIRECTORY": config.semantic.model_directory,
+        "OSSIE_BINDING_MANIFEST": config.semantic.binding_manifest,
+        "OSSIE_MAX_FILE_BYTES": str(config.semantic.max_file_bytes),
+        "OSSIE_MAX_TOTAL_BYTES": str(config.semantic.max_total_bytes),
+        "OSSIE_MAX_MODELS": str(config.semantic.max_models),
+        "OSSIE_MAX_DEPTH": str(config.semantic.max_depth),
+        "OSSIE_MAX_ALIASES": str(config.semantic.max_aliases),
+        "OSSIE_MAX_STRING_BYTES": str(config.semantic.max_string_bytes),
+        "OSSIE_MAX_EXPRESSION_BYTES": str(
+            config.semantic.max_expression_bytes
+        ),
+        "OSSIE_CONTEXT_MAX_BYTES": str(config.semantic.context_max_bytes),
+        "OSSIE_CONTEXT_HARD_MAX_BYTES": str(
+            config.semantic.context_hard_max_bytes
+        ),
+        "DORIS_OAUTH_SEMANTIC_TOOLS_ENABLED": str(
+            config.semantic.oauth_tools_enabled
+        ).lower(),
+        "DORIS_OAUTH_SEMANTIC_RESOURCES_ENABLED": str(
+            config.semantic.oauth_resources_enabled
+        ).lower(),
         "MCP_STATE_HANDLE_SECRET": config.mcp_state_handle_secret,
         "MCP_STATE_HANDLE_TTL_SECONDS": str(config.mcp_state_handle_ttl_seconds),
         "SERVER_NAME": config.server_name,

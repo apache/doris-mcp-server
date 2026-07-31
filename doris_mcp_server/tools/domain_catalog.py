@@ -1857,9 +1857,18 @@ DOMAIN_DEFINITIONS = (
                 "List authorized validated Ossie model references.",
                 _input_schema(
                     {
-                        "namespace": _string("Model namespace."),
-                        "tag": _string("Model tag."),
-                        "pattern": _string("Model-name pattern."),
+                        "namespace": _string(
+                            "Exact model namespace.",
+                            max_length=192,
+                        ),
+                        "tag": _string(
+                            "Exact model tag.",
+                            max_length=192,
+                        ),
+                        "pattern": _string(
+                            "Optional deterministic model-name glob.",
+                            max_length=192,
+                        ),
                     }
                 ),
                 _COLLECTION_OUTPUT,
@@ -1874,6 +1883,7 @@ DOMAIN_DEFINITIONS = (
                         "model_ref": _string(
                             "Exact semantic model reference.",
                             pattern=r"^[A-Za-z0-9_.:/@-]+$",
+                            max_length=192,
                         ),
                         "include_bindings": _boolean(
                             "Include authorized Doris bindings."
@@ -1893,10 +1903,78 @@ DOMAIN_DEFINITIONS = (
                         "model_ref": _string(
                             "Exact semantic model reference.",
                             pattern=r"^[A-Za-z0-9_.:/@-]+$",
+                            max_length=192,
                         ),
-                        "request": _object(
-                            "Structured measures, dimensions, filters, and time grain."
-                        ),
+                        "request": {
+                            "type": "object",
+                            "description": (
+                                "Deterministic semantic selection request. "
+                                "This operation returns grounding metadata and "
+                                "never compiles or executes SQL."
+                            ),
+                            "properties": {
+                                "question": {
+                                    **_string(
+                                        "Natural-language relevance input.",
+                                        max_length=4096,
+                                    ),
+                                    "minLength": 1,
+                                },
+                                "metrics": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "pattern": (
+                                            r"^[A-Za-z_]"
+                                            r"[A-Za-z0-9_.-]{0,127}$"
+                                        ),
+                                    },
+                                    "minItems": 1,
+                                    "maxItems": 64,
+                                    "uniqueItems": True,
+                                },
+                                "dimensions": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "pattern": (
+                                            r"^[A-Za-z_]"
+                                            r"[A-Za-z0-9_-]{0,127}"
+                                            r"\.[A-Za-z_]"
+                                            r"[A-Za-z0-9_-]{0,127}$"
+                                        ),
+                                    },
+                                    "minItems": 1,
+                                    "maxItems": 64,
+                                    "uniqueItems": True,
+                                },
+                                "datasets": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "pattern": (
+                                            r"^[A-Za-z_]"
+                                            r"[A-Za-z0-9_.-]{0,127}$"
+                                        ),
+                                    },
+                                    "minItems": 1,
+                                    "maxItems": 64,
+                                    "uniqueItems": True,
+                                },
+                                "max_bytes": _integer(
+                                    "Maximum returned context bytes.",
+                                    minimum=1024,
+                                    maximum=65536,
+                                ),
+                            },
+                            "anyOf": [
+                                {"required": ["question"]},
+                                {"required": ["metrics"]},
+                                {"required": ["dimensions"]},
+                                {"required": ["datasets"]},
+                            ],
+                            "additionalProperties": False,
+                        },
                     },
                     required=("model_ref", "request"),
                 ),
@@ -1912,8 +1990,12 @@ DOMAIN_DEFINITIONS = (
                         "model_ref": _string(
                             "Exact semantic model reference.",
                             pattern=r"^[A-Za-z0-9_.:/@-]+$",
+                            max_length=192,
                         ),
-                        "datasource": _string("Optional datasource filter."),
+                        "datasource": _string(
+                            "Optional exact logical dataset filter.",
+                            max_length=128,
+                        ),
                     },
                     required=("model_ref",),
                 ),

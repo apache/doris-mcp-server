@@ -271,6 +271,10 @@ class OAuthAuthenticationProvider:
             oauth_resource=token_context.resource,
             oauth_audiences=list(token_context.audiences),
             pool_key="global",
+            semantic_tools_enabled=self.config.semantic.oauth_tools_enabled,
+            semantic_resources_enabled=(
+                self.config.semantic.oauth_resources_enabled
+            ),
         )
 
     async def _determine_security_level(self, user_info: OAuthUserInfo) -> SecurityLevel:

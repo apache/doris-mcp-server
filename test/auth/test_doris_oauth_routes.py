@@ -968,11 +968,12 @@ async def test_authorization_code_exchange_rejects_unbound_resource(
 
 @pytest.mark.asyncio
 async def test_full_login_without_scope_grants_configured_rbac_capability_envelope():
-    provider, cm, app = _provider_app(
-        _config(
-            child_tools_enabled=True,
-        )
+    config = _config(
+        child_tools_enabled=True,
     )
+    config.semantic.oauth_tools_enabled = True
+    config.semantic.oauth_resources_enabled = True
+    provider, cm, app = _provider_app(config)
     async with await _client(app) as client:
         register = await client.post(
             "/oauth/register",
@@ -1024,7 +1025,10 @@ async def test_full_login_without_scope_grants_configured_rbac_capability_envelo
     assert cm.create_calls == [("alice", "correct")]
     assert token_response.status_code == 200
     token_json = token_response.json()
-    assert tuple(token_json["scope"].split()) == FULL_DORIS_OAUTH_SCOPE_SET
+    expected_scopes = tuple(
+        sorted((*FULL_DORIS_OAUTH_SCOPE_SET, "semantic:read"))
+    )
+    assert tuple(token_json["scope"].split()) == expected_scopes
     assert "*" not in token_json["scope"].split()
     assert "scope:admin" not in token_json["scope"].split()
     assert "scope:profile:read" not in token_json["scope"].split()
@@ -1039,7 +1043,9 @@ async def test_full_login_without_scope_grants_configured_rbac_capability_envelo
     )
     assert auth_context.auth_method == "doris_oauth"
     assert auth_context.doris_user == "alice"
-    assert tuple(auth_context.oauth_scopes) == FULL_DORIS_OAUTH_SCOPE_SET
+    assert tuple(auth_context.oauth_scopes) == expected_scopes
+    assert auth_context.semantic_tools_enabled is True
+    assert auth_context.semantic_resources_enabled is True
     assert auth_context.doris_oauth_child_tools_enabled is True
     assert auth_context.doris_oauth_child_tool_allowlist == (
         FORMAL_CHILD_FEATURE_IDS

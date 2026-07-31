@@ -90,6 +90,20 @@ def test_domain_discovery_does_not_expand_default_oauth_scope_set() -> None:
     assert "tool:list" in policy.server_allowed_scopes
 
 
+def test_semantic_read_scope_requires_explicit_server_opt_in() -> None:
+    disabled = DorisOAuthScopePolicy()
+    enabled = DorisOAuthScopePolicy(semantic_read_enabled=True)
+
+    with pytest.raises(TokenEndpointError) as exc:
+        disabled.grant_client_scopes("semantic:read", explicit=True)
+
+    assert exc.value.error == "invalid_scope"
+    assert enabled.grant_client_scopes(
+        "semantic:read",
+        explicit=True,
+    ) == ("semantic:read",)
+
+
 @pytest.mark.parametrize("tool_name", sorted(P4_DORIS_OAUTH_METADATA_TOOLS))
 def test_doris_oauth_rejects_metadata_tools_when_db_gate_false(tool_name):
     with pytest.raises(OperationAuthorizationError) as exc:

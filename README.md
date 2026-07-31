@@ -362,6 +362,28 @@ cp .env.example .env
         `VARIANT_TYPE` without returning values (default: 20; range: 1-500)
     *   `LAKEHOUSE_MAX_VARIANT_PATHS`: Maximum returned Variant type-shape
         paths (default: 200; range: 1-2000)
+    *   `OSSIE_ENABLED`: Enable the experimental Apache Ossie Core semantic
+        grounding adapter (default: false)
+    *   `OSSIE_MODEL_DIRECTORY`: Local root containing reviewed Ossie YAML or
+        JSON models; remote URLs and paths outside this root are rejected
+    *   `OSSIE_BINDING_MANIFEST`: Local server-private manifest that maps exact
+        model references and logical datasets to Doris objects and routes
+    *   `OSSIE_MAX_FILE_BYTES` / `OSSIE_MAX_TOTAL_BYTES`: Per-file and aggregate
+        model-loading limits (defaults: 2097152 and 8388608)
+    *   `OSSIE_MAX_MODELS`: Maximum loaded bound models (default: 64)
+    *   `OSSIE_MAX_DEPTH` / `OSSIE_MAX_ALIASES`: YAML/JSON structural limits
+        (defaults: 32 and 32)
+    *   `OSSIE_MAX_STRING_BYTES` / `OSSIE_MAX_EXPRESSION_BYTES`: Maximum
+        metadata string and expression sizes (defaults: 16384 and 4096)
+    *   `OSSIE_CONTEXT_MAX_BYTES`: Default semantic context budget (default:
+        16384)
+    *   `OSSIE_CONTEXT_HARD_MAX_BYTES`: Absolute semantic context ceiling
+        (default: 65536)
+    *   `DORIS_OAUTH_SEMANTIC_TOOLS_ENABLED`: Explicitly expose semantic tools
+        to OAuth sessions (default: false; also requires `semantic:read`)
+    *   `DORIS_OAUTH_SEMANTIC_RESOURCES_ENABLED`: Explicitly expose semantic
+        resources to OAuth sessions (default: false; also requires
+        `semantic:read`)
     *   `MCP_STATE_HANDLE_SECRET`: Optional shared high-entropy key (at least
         32 bytes) used to authenticate explicit cross-call state handles
     *   `MCP_STATE_HANDLE_TTL_SECONDS`: Lifetime of an explicit state handle
@@ -442,6 +464,66 @@ sessions. Each child additionally requires its exact
 discovery grant are omitted, while authorized but unavailable children remain
 visible with `callable=false`. Doris RBAC remains the final data authorization
 backend for all Doris object access.
+
+#### Apache Ossie semantic grounding (experimental)
+
+The optional `doris_semantic` domain reads the Apache Ossie Core semantic model
+format pinned to `0.2.0.dev0` at commit
+`9ffc3be3886e82fddc9bbf28722440864644d371`. It is a semantic-grounding
+adapter, not a semantic query engine: it validates administrator-reviewed
+models, resolves their explicit Doris bindings through the active route, and
+returns permission-filtered metadata. It never compiles or executes model
+expressions, guesses a model, fetches remote model files, or bypasses Doris
+RBAC.
+
+Enable it only after placing reviewed local model files under one root and
+creating a server-private binding manifest:
+
+```bash
+OSSIE_ENABLED=true
+OSSIE_MODEL_DIRECTORY=/etc/doris-mcp/ossie
+OSSIE_BINDING_MANIFEST=/etc/doris-mcp/ossie-bindings.yaml
+```
+
+The binding manifest maps an opaque, exact `model_ref` to one model and every
+logical dataset it exposes:
+
+```yaml
+api_version: doris-mcp.apache.org/ossie-binding/v1alpha1
+model_sources:
+  retail/main:
+    model_file: retail.yaml
+    model_name: retail
+    namespace: commerce
+    tags: [certified]
+    route_profile: global
+    datasets:
+      orders:
+        catalog: internal
+        database: sales
+        object: orders
+        kind: table
+```
+
+See the non-secret examples in
+[`examples/ossie`](examples/ossie). Restart the server after changing a model
+or binding; the experimental adapter does not hot-reload them.
+
+Call `doris_semantic` with `{}` to discover its four children. Content
+operations require the exact `model_ref` returned by
+`list_semantic_models`; a missing, ambiguous, route-mismatched, or
+permission-hidden model fails closed. `get_semantic_context` accepts a bounded
+selection request and returns semantic metadata plus provenance, but no
+generated SQL. Authorized summaries are also available as revisioned
+resources:
+
+```text
+doris://semantic/models/{url-encoded-model-ref}/{revision}
+```
+
+Semantic tools and resources remain hidden in OAuth modes unless their
+respective `DORIS_OAUTH_SEMANTIC_*_ENABLED` switch is true. The caller must
+also hold `semantic:read` and the normal exact child or resource scopes.
 
 ### 4. Run the Service
 
