@@ -958,7 +958,7 @@ FEATURE_DEFINITIONS = (
     _feature(
         "doris_query",
         "execute_query",
-        A,
+        M,
         _variant(
             "mysql_read_only",
             probes=("read_only_sql_guard_ready", "query_execution_readable"),
@@ -967,7 +967,7 @@ FEATURE_DEFINITIONS = (
     _feature(
         "doris_query",
         "explain_query",
-        A,
+        M,
         _variant("base_explain", probes=("explain_output_readable",)),
         _variant(
             "search_plan_facets",
@@ -980,7 +980,7 @@ FEATURE_DEFINITIONS = (
     _feature(
         "doris_query",
         "get_query_profile",
-        A,
+        M,
         _variant(
             "query_profile",
             endpoints=("fe_profile_api",),

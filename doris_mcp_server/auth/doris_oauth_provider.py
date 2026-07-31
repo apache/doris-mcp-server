@@ -574,6 +574,20 @@ class DorisOAuthProvider:
             oauth_audiences=[updated.resource],
             pool_key=f"doris_user:{updated.doris_user}",
         )
+        auth_context.doris_oauth_child_tools_enabled = bool(
+            getattr(
+                self.security_config,
+                "doris_oauth_child_tools_enabled",
+                False,
+            )
+        )
+        auth_context.doris_oauth_child_tool_allowlist = tuple(
+            getattr(
+                self.security_config,
+                "doris_oauth_child_tool_allowlist",
+                (),
+            )
+        )
         auth_context.doris_oauth_db_tools_enabled = bool(
             getattr(self.security_config, "doris_oauth_db_tools_enabled", False)
         )

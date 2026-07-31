@@ -108,6 +108,12 @@ def authorization_fingerprint(auth_context: AuthContext | None) -> str:
             "oauthResource": auth_context.oauth_resource,
             "oauthAudiences": sorted(auth_context.oauth_audiences),
             "poolKey": auth_context.pool_key,
+            "dorisOAuthChildTools": {
+                "enabled": auth_context.doris_oauth_child_tools_enabled,
+                "allowlist": sorted(
+                    auth_context.doris_oauth_child_tool_allowlist
+                ),
+            },
             "dorisOAuthDatabaseTools": {
                 "enabled": auth_context.doris_oauth_db_tools_enabled,
                 "allowlist": sorted(auth_context.doris_oauth_db_tool_allowlist),

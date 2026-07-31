@@ -120,6 +120,16 @@ class DorisUserPoolMeta:
     generation: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class DorisRouteIdentity:
+    """Secret-free identity for one routed Doris connection pool."""
+
+    route_key: str
+    generation: int
+    endpoint_fingerprint: str
+    fingerprint: str
+
+
 class DorisUserPoolMissingError(RuntimeError):
     """Raised when a Doris OAuth request has no local Doris user pool."""
 
@@ -2344,6 +2354,66 @@ class DorisConnectionManager:
                 return token_config
         return self.config.database
 
+    def get_route_identity(
+        self,
+        auth_context: AuthContext | None = None,
+    ) -> DorisRouteIdentity:
+        """Return the current routed pool identity without exposing credentials."""
+        effective_context = self._get_effective_auth_context(auth_context)
+        route_key = "global"
+        generation = self._global_pool_generation
+
+        if (
+            effective_context is not None
+            and effective_context.auth_method == "doris_oauth"
+        ):
+            doris_user = self._validate_doris_user(
+                effective_context.doris_user
+            )
+            route_key = self._doris_user_route_key(doris_user)
+            meta = self.doris_user_pool_meta.get(doris_user)
+            generation = meta.generation if meta is not None else 0
+        elif effective_context is not None and effective_context.token:
+            token_hash = self._get_token_hash(effective_context.token)
+            route_key = f"static_token:{token_hash}"
+            generation = self._token_pool_generations.get(token_hash, 0)
+
+        database_config = self.get_database_config_for_auth_context(
+            effective_context
+        )
+
+        def config_value(name: str, default: Any = "") -> Any:
+            if isinstance(database_config, Mapping):
+                return database_config.get(name, default)
+            return getattr(database_config, name, default)
+
+        hosts = self._ordered_hosts(
+            str(config_value("host", "")),
+            config_value("hosts", ()),
+        )
+        endpoint_material = "\x1f".join(
+            (
+                *hosts,
+                str(config_value("port", "")),
+                str(config_value("user", "")),
+                str(config_value("database", "")),
+            )
+        )
+        endpoint_fingerprint = hashlib.sha256(
+            endpoint_material.encode("utf-8")
+        ).hexdigest()
+        route_material = (
+            f"{route_key}\x1f{generation}\x1f{endpoint_fingerprint}"
+        )
+        return DorisRouteIdentity(
+            route_key=route_key,
+            generation=generation,
+            endpoint_fingerprint=endpoint_fingerprint,
+            fingerprint=hashlib.sha256(
+                route_material.encode("utf-8")
+            ).hexdigest(),
+        )
+
     async def _get_connection_for_auth_context(
         self,
         session_id: str,
@@ -2697,9 +2767,25 @@ class DorisConnectionManager:
         session_id: str,
     ) -> AsyncIterator[DorisConnection]:
         """Get connection context manager - Simplified Strategy"""
+        async with self.get_connection_context_for_auth_context(
+            session_id,
+            self._get_effective_auth_context(),
+        ) as connection:
+            yield connection
+
+    @asynccontextmanager
+    async def get_connection_context_for_auth_context(
+        self,
+        session_id: str,
+        auth_context: AuthContext | None,
+    ) -> AsyncIterator[DorisConnection]:
+        """Acquire and release a connection for an explicit request route."""
         connection = None
         try:
-            connection = await self.get_connection(session_id)
+            connection = await self._get_connection_for_auth_context(
+                session_id,
+                auth_context,
+            )
             yield connection
         finally:
             if connection:

@@ -156,6 +156,10 @@ async def test_legacy_plaintext_file_is_atomically_migrated_without_expiry_exten
     monkeypatch,
 ):
     _clear_static_token_environment(monkeypatch)
+    monkeypatch.setattr(
+        "doris_mcp_server.auth.token_manager.utc_now",
+        lambda: datetime(2026, 7, 15, tzinfo=UTC),
+    )
     token_path = tmp_path / "tokens.json"
     token_path.write_text(
         json.dumps(

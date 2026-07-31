@@ -36,8 +36,9 @@ Doris MCP Server has two distinct authorization layers:
 2. Doris authorization decides which catalogs, databases, tables, columns, and
    rows the database identity may access.
 
-An OAuth scope such as `tool:call:exec_query` permits an MCP operation. It does
-not grant `SELECT_PRIV` in Doris and does not override a Doris row policy.
+An OAuth scope such as `child:call:doris_query:execute_query` permits one MCP
+child operation. It does not grant `SELECT_PRIV` in Doris and does not override
+a Doris row policy.
 Likewise, MCP security levels, SQL validation, and response masking are
 defense-in-depth controls rather than replacements for Doris RBAC.
 
@@ -235,20 +236,20 @@ has global/table-level privileges.
 
 With `ENABLE_DORIS_OAUTH_AUTH=true`, the user signs in with Doris credentials.
 The issued `doa_` token is associated with that user's dedicated Doris pool.
-Enable only reviewed MySQL-channel capabilities:
+Enable only reviewed formal child capabilities:
 
 ```bash
 ENABLE_DORIS_OAUTH_AUTH=true
 WORKERS=1
 
-DORIS_OAUTH_DB_TOOLS_ENABLED=true
-DORIS_OAUTH_QUERY_TOOLS_ENABLED=true
-DORIS_OAUTH_EXPLAIN_TOOLS_ENABLED=true
+DORIS_OAUTH_CHILD_TOOLS_ENABLED=true
+DORIS_OAUTH_CHILD_TOOL_ALLOWLIST=doris_catalog.list_databases,doris_query.execute_query,doris_query.explain_query
 ```
 
-`exec_query`, reviewed metadata tools, and SQL explain then reach Doris as the
-signed-in user. Doris-backed OAuth must fail closed if its per-user pool is
-missing; it must never use the global service account as a fallback.
+Only exact allowlisted children with exact child scopes then reach Doris as the
+signed-in user. Legacy flat names and `tool:call:<legacy-name>` scopes are not
+accepted. Doris-backed OAuth must fail closed if its per-user pool is missing;
+it must never use the global service account as a fallback.
 When multiple FE candidates are configured, sign-in tries them in order.
 If an established per-user pool later fails, the user must sign in again:
 the server intentionally does not retain the raw Doris password needed to
@@ -314,11 +315,11 @@ Both queries must fail authorization.
 Then repeat the checks through the MCP route:
 
 1. Authenticate using the token binding or Doris OAuth user.
-2. Call `exec_query` with the allowed-column query.
-3. Call `exec_query` for `customer_phone` and confirm a bounded permission
-   error, without backend credentials or exception text.
+2. Call `doris_query.execute_query` with the allowed-column query.
+3. Call `doris_query.execute_query` for `customer_phone` and confirm a bounded
+   permission error, without backend credentials or exception text.
 4. Query for another region and confirm no rows are returned.
-5. Run metadata tools and confirm they do not reveal inaccessible objects or
+5. Run catalog children and confirm they do not reveal inaccessible objects or
    columns beyond what the Doris version exposes to that user.
 6. Repeat over every supported transport used by the deployment.
 

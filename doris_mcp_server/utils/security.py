@@ -113,6 +113,10 @@ class AuthContext:
     oauth_resource: str = ""
     oauth_audiences: list[str] = field(default_factory=list)
     pool_key: str = ""
+    doris_oauth_child_tools_enabled: bool = False
+    doris_oauth_child_tool_allowlist: tuple[str, ...] = field(
+        default_factory=tuple
+    )
     doris_oauth_db_tools_enabled: bool = False
     doris_oauth_db_tool_allowlist: tuple[str, ...] = field(default_factory=tuple)
     doris_oauth_query_tools_enabled: bool = False

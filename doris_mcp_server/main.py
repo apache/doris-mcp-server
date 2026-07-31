@@ -92,6 +92,15 @@ def _multiworker_environment(
         "MCP_LIST_PAGE_SIZE": str(config.mcp_list_page_size),
         "MCP_TOOL_PROVIDERS": ",".join(config.mcp_tool_providers),
         "MCP_TOOL_EXPOSURE_MODE": config.tool_exposure.mode,
+        "CAPABILITY_SNAPSHOT_TTL_SECONDS": str(
+            config.capability.snapshot_ttl_seconds
+        ),
+        "CAPABILITY_PROBE_TIMEOUT_SECONDS": str(
+            config.capability.probe_timeout_seconds
+        ),
+        "CAPABILITY_STALE_GRACE_SECONDS": str(
+            config.capability.stale_grace_seconds
+        ),
         "MCP_STATE_HANDLE_SECRET": config.mcp_state_handle_secret,
         "MCP_STATE_HANDLE_TTL_SECONDS": str(config.mcp_state_handle_ttl_seconds),
         "SERVER_NAME": config.server_name,

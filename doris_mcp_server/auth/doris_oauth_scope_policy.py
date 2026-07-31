@@ -4,11 +4,7 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
-from ..tools.tool_registry import (
-    DORIS_OAUTH_EXPLAIN_TOOL_SET,
-    DORIS_OAUTH_METADATA_TOOL_NAMES,
-    DORIS_OAUTH_QUERY_TOOL_SET,
-)
+from ..tools.domain_catalog import FORMAL_CHILD_FEATURE_IDS
 from .doris_oauth_types import TokenEndpointError
 
 if TYPE_CHECKING:
@@ -17,29 +13,28 @@ if TYPE_CHECKING:
 BASE_DORIS_OAUTH_SCOPES = frozenset({"tool:list"})
 RESOURCE_SCOPES = frozenset({"resource:list", "resource:read"})
 
-DORIS_OAUTH_METADATA_TOOLS = DORIS_OAUTH_METADATA_TOOL_NAMES
 
-METADATA_DB_SCOPES = frozenset(
-    {
-        f"tool:call:{tool_name}" for tool_name in DORIS_OAUTH_METADATA_TOOLS
-    }
-)
+def child_call_scope(feature_id: str) -> str:
+    """Return the canonical execution scope for one formal child feature."""
+    domain, child = feature_id.split(".", 1)
+    return f"child:call:{domain}:{child}"
 
-QUERY_DB_SCOPES = frozenset(
-    f"tool:call:{tool_name}" for tool_name in DORIS_OAUTH_QUERY_TOOL_SET
+
+def child_discovery_scope(feature_id: str) -> str:
+    """Return the canonical discovery-only scope for one formal child feature."""
+    domain, child = feature_id.split(".", 1)
+    return f"child:discover:{domain}:{child}"
+
+
+CHILD_CALL_SCOPES = frozenset(
+    child_call_scope(feature_id)
+    for feature_id in FORMAL_CHILD_FEATURE_IDS
 )
-EXPLAIN_DB_SCOPES = frozenset(
-    f"tool:call:{tool_name}" for tool_name in DORIS_OAUTH_EXPLAIN_TOOL_SET
+CHILD_DISCOVERY_SCOPES = frozenset(
+    child_discovery_scope(feature_id)
+    for feature_id in FORMAL_CHILD_FEATURE_IDS
 )
-PENDING_DB_SCOPES = METADATA_DB_SCOPES | QUERY_DB_SCOPES | EXPLAIN_DB_SCOPES
-TOOL_SCOPE_ALIASES = {
-    tool_name: f"tool:call:{tool_name}"
-    for tool_name in (
-        *DORIS_OAUTH_METADATA_TOOLS,
-        *DORIS_OAUTH_QUERY_TOOL_SET,
-        *DORIS_OAUTH_EXPLAIN_TOOL_SET,
-    )
-}
+KNOWN_CHILD_SCOPES = CHILD_CALL_SCOPES | CHILD_DISCOVERY_SCOPES
 
 FORBIDDEN_DORIS_OAUTH_SCOPES = frozenset(
     {
@@ -76,12 +71,16 @@ class DorisOAuthScopePolicy:
             self.server_allowed_scopes = self._build_server_allowed_scopes(security_config)
         else:
             self.server_allowed_scopes = set(server_allowed_scopes)
-        self.server_default_scopes = set(self.server_allowed_scopes)
+        self.server_default_scopes = {
+            scope
+            for scope in self.server_allowed_scopes
+            if not scope.startswith("child:discover:")
+        }
         self.forbidden_scopes = set(FORBIDDEN_DORIS_OAUTH_SCOPES)
         self.known_scopes = (
             set(BASE_DORIS_OAUTH_SCOPES)
             | set(RESOURCE_SCOPES)
-            | set(PENDING_DB_SCOPES)
+            | set(KNOWN_CHILD_SCOPES)
             | set(FORBIDDEN_DORIS_OAUTH_SCOPES)
         )
 
@@ -91,56 +90,46 @@ class DorisOAuthScopePolicy:
         allowed = set(BASE_DORIS_OAUTH_SCOPES)
         allowed.update(RESOURCE_SCOPES)
 
-        if getattr(security_config, "doris_oauth_db_tools_enabled", False):
-            tool_names = self._configured_tool_names(
+        if getattr(
+            security_config,
+            "doris_oauth_child_tools_enabled",
+            False,
+        ):
+            feature_ids = self._configured_feature_ids(
                 getattr(
                     security_config,
-                    "doris_oauth_db_tool_allowlist",
-                    DORIS_OAUTH_METADATA_TOOLS,
+                    "doris_oauth_child_tool_allowlist",
+                    FORMAL_CHILD_FEATURE_IDS,
                 )
             )
-            metadata_tool_set = set(DORIS_OAUTH_METADATA_TOOLS)
-            allowed.update(f"tool:call:{tool_name}" for tool_name in tool_names if tool_name in metadata_tool_set)
-
-        if getattr(security_config, "doris_oauth_query_tools_enabled", False):
-            tool_names = self._configured_tool_names(
-                getattr(
-                    security_config,
-                    "doris_oauth_query_tool_allowlist",
-                    tuple(DORIS_OAUTH_QUERY_TOOL_SET),
-                )
-            )
-            if DORIS_OAUTH_QUERY_TOOL_SET.intersection(tool_names):
-                allowed.update(QUERY_DB_SCOPES)
-
-        if getattr(security_config, "doris_oauth_explain_tools_enabled", False):
-            tool_names = self._configured_tool_names(
-                getattr(
-                    security_config,
-                    "doris_oauth_explain_tool_allowlist",
-                    tuple(DORIS_OAUTH_EXPLAIN_TOOL_SET),
-                )
-            )
-            if DORIS_OAUTH_EXPLAIN_TOOL_SET.intersection(tool_names):
-                allowed.update(EXPLAIN_DB_SCOPES)
+            formal_features = set(FORMAL_CHILD_FEATURE_IDS)
+            for feature_id in feature_ids:
+                if feature_id not in formal_features:
+                    continue
+                allowed.add(child_call_scope(feature_id))
+                allowed.add(child_discovery_scope(feature_id))
 
         return allowed
 
-    def _configured_tool_names(
-        self, configured_tools: str | Iterable[object]
+    def _configured_feature_ids(
+        self, configured_features: str | Iterable[object]
     ) -> list[str]:
-        if isinstance(configured_tools, str):
-            return [part.strip() for part in configured_tools.split(",") if part.strip()]
-        return [str(tool).strip() for tool in configured_tools if str(tool).strip()]
+        if isinstance(configured_features, str):
+            return [
+                part.strip()
+                for part in configured_features.split(",")
+                if part.strip()
+            ]
+        return [
+            str(feature).strip()
+            for feature in configured_features
+            if str(feature).strip()
+        ]
 
     def parse_scope(self, scope: str | None) -> tuple[str, ...]:
         if scope is None:
             return ()
-        return tuple(
-            TOOL_SCOPE_ALIASES.get(part, part)
-            for part in str(scope).split()
-            if part
-        )
+        return tuple(part for part in str(scope).split() if part)
 
     def grant_client_scopes(self, requested_scope: str | None, *, explicit: bool) -> tuple[str, ...]:
         requested = self.parse_scope(requested_scope)

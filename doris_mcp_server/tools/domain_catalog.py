@@ -1956,12 +1956,18 @@ DORIS_DOMAIN_CATALOG = DorisDomainCatalog(
     domains=DOMAIN_DEFINITIONS,
     legacy_migrations=LEGACY_TOOL_MIGRATIONS,
 )
+FORMAL_CHILD_FEATURE_IDS = tuple(
+    f"{domain.name}.{child.name}"
+    for domain in DORIS_DOMAIN_CATALOG.domains
+    for child in domain.children
+)
 
 
 __all__ = [
     "CURRENT_FLAT_TOOL_NAMES",
     "DOMAIN_DEFINITIONS",
     "DORIS_DOMAIN_CATALOG",
+    "FORMAL_CHILD_FEATURE_IDS",
     "LEGACY_TOOL_MIGRATIONS",
     "DomainCatalogDomainSummary",
     "DomainCatalogError",

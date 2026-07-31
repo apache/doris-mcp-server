@@ -354,6 +354,52 @@ async def test_explicit_child_grants_hide_every_unauthorized_child() -> None:
 
 
 @pytest.mark.asyncio
+async def test_oauth_without_exact_child_scope_discovers_no_children() -> None:
+    context = AuthContext(
+        auth_method="external_oauth",
+        oauth_scopes=["tool:list"],
+    )
+
+    manifest = await _service().call("doris_catalog", {}, context)
+
+    assert manifest.children == ()
+
+
+@pytest.mark.asyncio
+async def test_doris_oauth_requires_gate_allowlist_and_exact_scope() -> None:
+    provider = StaticAvailabilityProvider(_availability())
+    scope = "child:call:doris_catalog:list_tables"
+    disabled = AuthContext(
+        auth_method="doris_oauth",
+        oauth_scopes=["tool:list", scope],
+    )
+    enabled = AuthContext(
+        auth_method="doris_oauth",
+        oauth_scopes=["tool:list", scope],
+        doris_oauth_child_tools_enabled=True,
+        doris_oauth_child_tool_allowlist=(
+            "doris_catalog.list_tables",
+        ),
+    )
+
+    disabled_manifest = await _service(provider).call(
+        "doris_catalog",
+        {},
+        disabled,
+    )
+    enabled_manifest = await _service(provider).call(
+        "doris_catalog",
+        {},
+        enabled,
+    )
+
+    assert disabled_manifest.children == ()
+    assert [child.name for child in enabled_manifest.children] == [
+        "list_tables"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_explicit_discovery_permission_is_accepted() -> None:
     context = AuthContext(
         permissions=["child:discover:doris_semantic:get_semantic_context"],

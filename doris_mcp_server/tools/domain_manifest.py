@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -211,6 +212,14 @@ class DomainAvailabilityProvider(Protocol):
         """Return authoritative availability for a single child."""
 
 
+@dataclass(frozen=True, slots=True)
+class DomainAvailabilityResolution:
+    """One coherent capability generation for a domain manifest."""
+
+    availabilities: Mapping[str, Availability]
+    generation_fingerprint: str = ""
+
+
 class PendingCapabilityProvider:
     """Fail-closed provider used until runtime capability snapshots are enabled."""
 
@@ -245,14 +254,20 @@ def authorized_child_discovery(
     domain: DomainDefinition,
     child: ChildToolDefinition,
 ) -> bool:
-    """Apply explicit child grants without changing legacy local-session access."""
-    del domain
+    """Require exact OAuth discovery grants and preserve local compatibility."""
     if auth_context is None:
         return True
 
+    auth_method = str(getattr(auth_context, "auth_method", ""))
+    is_oauth = auth_method in {"external_oauth", "doris_oauth"}
+    collection_names = (
+        ("oauth_scopes",)
+        if is_oauth
+        else ("permissions", "oauth_scopes")
+    )
     controls = {
         str(value)
-        for collection_name in ("permissions", "oauth_scopes")
+        for collection_name in collection_names
         for value in (getattr(auth_context, collection_name, None) or ())
     }
     child_controls = {
@@ -260,8 +275,32 @@ def authorized_child_discovery(
         for value in controls
         if value.startswith(("child:call:", "child:discover:"))
     }
-    if not child_controls:
+    if not is_oauth and not child_controls:
         return True
+
+    if auth_method == "doris_oauth":
+        feature_id = f"{domain.name}.{child.name}"
+        if not bool(
+            getattr(
+                auth_context,
+                "doris_oauth_child_tools_enabled",
+                False,
+            )
+        ):
+            return False
+        allowlist = {
+            str(value)
+            for value in (
+                getattr(
+                    auth_context,
+                    "doris_oauth_child_tool_allowlist",
+                    (),
+                )
+                or ()
+            )
+        }
+        if feature_id not in allowlist:
+            return False
 
     discover_policy = child.authorization_policy.replace(
         "child:call:",
@@ -280,20 +319,50 @@ def authorized_child_execution(
     child: ChildToolDefinition,
 ) -> bool:
     """Require an exact child call grant on OAuth execution paths."""
-    del domain
     if auth_context is None:
         return True
 
+    auth_method = str(getattr(auth_context, "auth_method", ""))
+    is_oauth = auth_method in {"external_oauth", "doris_oauth"}
+    collection_names = (
+        ("oauth_scopes",)
+        if is_oauth
+        else ("permissions", "oauth_scopes")
+    )
     controls = {
         str(value)
-        for collection_name in ("permissions", "oauth_scopes")
+        for collection_name in collection_names
         for value in (getattr(auth_context, collection_name, None) or ())
     }
+
+    if auth_method == "doris_oauth":
+        feature_id = f"{domain.name}.{child.name}"
+        if not bool(
+            getattr(
+                auth_context,
+                "doris_oauth_child_tools_enabled",
+                False,
+            )
+        ):
+            return False
+        allowlist = {
+            str(value)
+            for value in (
+                getattr(
+                    auth_context,
+                    "doris_oauth_child_tool_allowlist",
+                    (),
+                )
+                or ()
+            )
+        }
+        if feature_id not in allowlist:
+            return False
+
     if child.authorization_policy in controls:
         return True
 
-    auth_method = str(getattr(auth_context, "auth_method", ""))
-    if auth_method in {"external_oauth", "doris_oauth"}:
+    if is_oauth:
         return False
 
     child_controls = {
@@ -424,10 +493,47 @@ class DomainManifestService:
         auth_context: Any | None,
     ) -> DiscoveryEnvelope:
         """Build the current authorized manifest in stable catalog order."""
+        authorized_children = tuple(
+            child
+            for child in domain.children
+            if self._discovery_policy(auth_context, domain, child)
+        )
+        batch_resolver = getattr(
+            self._availability_provider,
+            "resolve_domain",
+            None,
+        )
+        if callable(batch_resolver):
+            resolution = await batch_resolver(
+                domain,
+                authorized_children,
+                auth_context,
+            )
+            if not isinstance(
+                resolution,
+                DomainAvailabilityResolution,
+            ):
+                raise TypeError(
+                    "domain availability resolver returned an invalid result"
+                )
+            batch_entries = [
+                _render_child(
+                    child,
+                    resolution.availabilities[child.name],
+                )
+                for child in authorized_children
+            ]
+            return _build_manifest(
+                domain,
+                tuple(batch_entries),
+                generated_at=self._clock(),
+                generation_fingerprint=(
+                    resolution.generation_fingerprint
+                ),
+            )
+
         entries: list[ChildManifestEntry] = []
-        for child in domain.children:
-            if not self._discovery_policy(auth_context, domain, child):
-                continue
+        for child in authorized_children:
             availability = await self._availability_provider.availability_for(
                 domain,
                 child,
@@ -435,10 +541,22 @@ class DomainManifestService:
             )
             entries.append(_render_child(child, availability))
 
+        generation_fingerprint = ""
+        resolve_generation = getattr(
+            self._availability_provider,
+            "manifest_generation",
+            None,
+        )
+        if callable(resolve_generation):
+            resolved = await resolve_generation(domain, auth_context)
+            if isinstance(resolved, str):
+                generation_fingerprint = resolved
+
         return _build_manifest(
             domain,
             tuple(entries),
             generated_at=self._clock(),
+            generation_fingerprint=generation_fingerprint,
         )
 
     def validate_default_manifest_budgets(self) -> None:
@@ -581,8 +699,13 @@ def _build_manifest(
     entries: tuple[ChildManifestEntry, ...],
     *,
     generated_at: datetime,
+    generation_fingerprint: str = "",
 ) -> DiscoveryEnvelope:
-    version = _manifest_version(domain, entries)
+    version = _manifest_version(
+        domain,
+        entries,
+        generation_fingerprint=generation_fingerprint,
+    )
     envelope = DiscoveryEnvelope(
         mode="manifest",
         domain=domain.name,
@@ -602,11 +725,14 @@ def _build_manifest(
 def _manifest_version(
     domain: DomainDefinition,
     entries: Sequence[ChildManifestEntry],
+    *,
+    generation_fingerprint: str = "",
 ) -> str:
     payload = {
         "format_version": MANIFEST_FORMAT_VERSION,
         "domain_contract": domain.to_wire(),
         "children": [entry.to_wire() for entry in entries],
+        "capability_generation": generation_fingerprint,
     }
     canonical = json.dumps(
         payload,
@@ -680,6 +806,7 @@ __all__ = [
     "MAX_SCHEMA_ENUM_VALUES",
     "ChildDiscoveryPolicy",
     "DomainAvailabilityProvider",
+    "DomainAvailabilityResolution",
     "DomainManifestBudgetError",
     "DomainManifestError",
     "DomainManifestManagerMixin",
