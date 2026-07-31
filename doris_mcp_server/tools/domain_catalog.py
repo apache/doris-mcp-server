@@ -492,6 +492,108 @@ def _array(description: str) -> dict[str, Any]:
     }
 
 
+def _search_filters() -> dict[str, Any]:
+    scalar = {"type": ["string", "number", "integer", "boolean", "null"]}
+    return {
+        "type": "object",
+        "description": (
+            "Structured filters keyed by column. A scalar means equality; an "
+            "object uses operator plus value or values. Supported operators: "
+            "eq, ne, gt, gte, lt, lte, in, not_in, is_null, is_not_null."
+        ),
+        "maxProperties": 32,
+        "propertyNames": {
+            "pattern": r"^[A-Za-z_\u4e00-\u9fff]"
+            r"[A-Za-z0-9_\u4e00-\u9fff]{0,63}$"
+        },
+        "additionalProperties": {
+            "oneOf": [
+                scalar,
+                {
+                    "type": "object",
+                    "properties": {
+                        "operator": _string(
+                            "Allowlisted filter operator.",
+                            enum=(
+                                "eq",
+                                "ne",
+                                "gt",
+                                "gte",
+                                "lt",
+                                "lte",
+                                "in",
+                                "not_in",
+                                "is_null",
+                                "is_not_null",
+                            ),
+                        ),
+                        "value": scalar,
+                        "values": {
+                            "type": "array",
+                            "items": scalar,
+                            "minItems": 1,
+                            "maxItems": 100,
+                        },
+                    },
+                    "required": ["operator"],
+                    "additionalProperties": False,
+                },
+            ]
+        },
+    }
+
+
+def _search_input_schema() -> dict[str, Any]:
+    return _input_schema(
+        {
+            "database": _string("Database name."),
+            "table": _string("Table name."),
+            "query": _string(
+                "Text query for text or hybrid mode.",
+                max_length=16_384,
+            ),
+            "mode": _string(
+                "Search mode.",
+                enum=("text", "vector", "hybrid"),
+            ),
+            "fields": {
+                **_string_array(
+                    "Inverted-indexed text fields.",
+                ),
+                "maxItems": 32,
+            },
+            "vector": {
+                "type": "array",
+                "description": (
+                    "Finite query-vector values. The length must match the "
+                    "selected ANN index dimension."
+                ),
+                "items": {"type": "number"},
+                "minItems": 1,
+                "maxItems": 4_096,
+            },
+            "vector_field": _string(
+                "ANN-indexed vector field; optional only when one is visible."
+            ),
+            "text_operator": _string(
+                "Token matching behavior.",
+                enum=("any", "all", "phrase", "phrase_prefix"),
+            ),
+            "top_k": _integer(
+                "Maximum matches.",
+                minimum=1,
+                maximum=1_000,
+            ),
+            "filters": _search_filters(),
+            "return_fields": {
+                **_string_array("Visible return fields."),
+                "maxItems": 64,
+            },
+        },
+        required=("database", "table", "mode"),
+    )
+
+
 def _input_schema(
     properties: dict[str, Any],
     *,
@@ -591,31 +693,31 @@ _COLLECTION_OUTPUT = _result_schema(
         "additionalProperties": False,
     }
 )
-_QUERY_OUTPUT = _result_schema(
-    {
-        "type": "object",
-        "properties": {
-            "columns": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": True,
-                },
+_QUERY_DATA_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "columns": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": True,
             },
-            "rows": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": True,
-                },
-            },
-            "row_count": {"type": "integer", "minimum": 0},
-            "truncated": {"type": "boolean"},
         },
-        "required": ["columns", "rows", "row_count", "truncated"],
-        "additionalProperties": False,
-    }
-)
+        "rows": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": True,
+            },
+        },
+        "row_count": {"type": "integer", "minimum": 0},
+        "truncated": {"type": "boolean"},
+    },
+    "required": ["columns", "rows", "row_count", "truncated"],
+    "additionalProperties": False,
+}
+_QUERY_OUTPUT = _result_schema(_QUERY_DATA_SCHEMA)
+_SEARCH_QUERY_OUTPUT = _result_schema(_QUERY_DATA_SCHEMA, evidence=True)
 _TABLE_CONTEXT_SECTION_OUTPUT = {
     "type": "object",
     "properties": {
@@ -1456,28 +1558,8 @@ DOMAIN_DEFINITIONS = (
                 "search_data",
                 "Search data",
                 "Run bounded structured text, vector, or hybrid retrieval.",
-                _input_schema(
-                    {
-                        "database": _string("Database name."),
-                        "table": _string("Table name."),
-                        "query": _string("Text query."),
-                        "mode": _string(
-                            "Search mode.",
-                            enum=("text", "vector", "hybrid"),
-                        ),
-                        "fields": _string_array("Searchable fields."),
-                        "vector": _array("Query vector."),
-                        "top_k": _integer(
-                            "Maximum matches.",
-                            minimum=1,
-                            maximum=1000,
-                        ),
-                        "filters": _object("Structured filters."),
-                        "return_fields": _string_array("Visible return fields."),
-                    },
-                    required=("database", "table", "mode"),
-                ),
-                _QUERY_OUTPUT,
+                _search_input_schema(),
+                _SEARCH_QUERY_OUTPUT,
             ),
             _child(
                 "doris_search",
@@ -1487,12 +1569,22 @@ DOMAIN_DEFINITIONS = (
                 _input_schema(
                     {
                         "text": _string("Input text."),
-                        "analyzer": _string("Analyzer name."),
-                        "tokenizer": _string("Tokenizer name."),
-                        "token_filters": _string_array("Token filters."),
+                        "analyzer": _string(
+                            "Existing built-in or custom analyzer name."
+                        ),
+                        "tokenizer": _string(
+                            "Built-in tokenizer or expected custom component."
+                        ),
+                        "token_filters": {
+                            **_string_array(
+                                "Expected filters on an existing custom analyzer."
+                            ),
+                            "maxItems": 16,
+                        },
                     },
                     required=("text",),
                 ),
+                _DIAGNOSTIC_OUTPUT,
             ),
             _child(
                 "doris_search",
@@ -1507,6 +1599,7 @@ DOMAIN_DEFINITIONS = (
                     },
                     required=("database", "table"),
                 ),
+                _DIAGNOSTIC_OUTPUT,
             ),
             _child(
                 "doris_search",
@@ -1516,7 +1609,7 @@ DOMAIN_DEFINITIONS = (
                 _input_schema(
                     {
                         "sql": _string("Read-only search SQL."),
-                        "search_request": _object("Structured search request."),
+                        "search_request": _search_input_schema(),
                         "include_profile": _boolean("Include query-profile evidence."),
                     },
                     any_of=(

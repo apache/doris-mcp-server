@@ -54,6 +54,9 @@ under **Unreleased** until a new version is selected and published.
 - A read-only Pipeline domain with five capability-gated children for
   ingestion status and diagnosis, materialized-view refresh state, recorded
   table freshness, and bounded upstream or downstream dependency evidence.
+- A read-only Search domain with four capability-gated children for
+  target-index-validated text, vector, and hybrid retrieval, Doris-native
+  tokenizer previews, search-index inspection, and evidence-based diagnosis.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
@@ -98,6 +101,14 @@ under **Unreleased** until a new version is selected and published.
 - Isolated Doris domain probe statements in independent route-aware connection
   contexts so one unsupported version-specific statement cannot poison later
   capability evidence.
+- Kept Search filters, identifiers, vectors, and result fields structured and
+  bounded, with caller values remaining driver-bound instead of accepting raw
+  search SQL or Doris `SEARCH` DSL through the structured retrieval child.
+- Classified missing Doris Search functions as unsupported capability evidence
+  and preserved analyzer terms without colliding with credential-token
+  redaction.
+- Bound hybrid Search vector, text, and structured-filter parameters in exact
+  SQL placeholder order.
 - Excluded explicitly dead Doris components from active version gating while
   preserving them in node inventory, and kept live runtime manifests within
   the 16 KiB domain budget.

@@ -91,6 +91,12 @@ PIPELINE_CHILD_NAMES = (
     "monitor_data_freshness",
     "analyze_data_dependencies",
 )
+SEARCH_CHILD_NAMES = (
+    "search_data",
+    "preview_text_analysis",
+    "inspect_search_indexes",
+    "diagnose_search_query",
+)
 
 
 @dataclass(frozen=True)
@@ -118,6 +124,17 @@ class DorisSandbox:
     def kill_connection(self, connection_id: int) -> None:
         with self.admin_connection.cursor() as cursor:
             cursor.execute(f"KILL CONNECTION {int(connection_id)}")
+
+
+@dataclass
+class DorisSearchSandbox:
+    settings: RealDorisSettings
+    admin_connection: pymysql.Connection
+    table: str
+
+    @property
+    def qualified_table(self) -> str:
+        return f"`{self.settings.database}`.`{self.table}`"
 
 
 def _real_doris_settings() -> RealDorisSettings:
@@ -194,6 +211,66 @@ def doris_sandbox() -> DorisSandbox:
     finally:
         with suppress(Exception), admin_connection.cursor() as cursor:
             cursor.execute(f"DROP USER IF EXISTS {user_identity}")
+        with suppress(Exception), admin_connection.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS {qualified_table}")
+        admin_connection.close()
+
+
+@pytest.fixture
+def doris_search_sandbox() -> DorisSearchSandbox:
+    settings = _real_doris_settings()
+    table = f"mcp_search_it_{secrets.token_hex(6)}"
+    qualified_table = f"`{settings.database}`.`{table}`"
+    admin_connection = pymysql.connect(
+        host=settings.host,
+        port=settings.port,
+        user=settings.user,
+        password=settings.password,
+        database=settings.database,
+        autocommit=True,
+    )
+
+    try:
+        with admin_connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                CREATE TABLE {qualified_table} (
+                    id BIGINT NOT NULL,
+                    title STRING NOT NULL,
+                    category VARCHAR(64) NOT NULL,
+                    embedding ARRAY<FLOAT> NOT NULL,
+                    INDEX idx_title (title) USING INVERTED
+                        PROPERTIES (
+                            "parser" = "english",
+                            "support_phrase" = "true"
+                        ),
+                    INDEX idx_embedding (embedding) USING ANN
+                        PROPERTIES (
+                            "index_type" = "hnsw",
+                            "metric_type" = "l2_distance",
+                            "dim" = "3"
+                        )
+                )
+                DUPLICATE KEY(id)
+                DISTRIBUTED BY HASH(id) BUCKETS 1
+                PROPERTIES ("replication_num" = "1")
+                """
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO {qualified_table} VALUES
+                    (1, 'Apache Doris search', 'database', [0.1, 0.2, 0.3]),
+                    (2, 'Hybrid retrieval', 'search', [0.2, 0.1, 0.4]),
+                    (3, 'Warehouse analytics', 'analytics', [0.8, 0.7, 0.6])
+                """
+            )
+
+        yield DorisSearchSandbox(
+            settings=settings,
+            admin_connection=admin_connection,
+            table=table,
+        )
+    finally:
         with suppress(Exception), admin_connection.cursor() as cursor:
             cursor.execute(f"DROP TABLE IF EXISTS {qualified_table}")
         admin_connection.close()
@@ -1308,6 +1385,170 @@ async def test_real_doris_hierarchical_pipeline_domain_is_read_only_and_live(
             )
             row = cursor.fetchone()
         assert row == (1,)
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_hierarchical_search_domain_is_read_only_and_live(
+    transport: str,
+    doris_search_sandbox: DorisSearchSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_search_sandbox.settings,
+        user=doris_search_sandbox.settings.user,
+        password=doris_search_sandbox.settings.password,
+    )
+    environment["MCP_TOOL_EXPOSURE_MODE"] = "hierarchical"
+    with doris_search_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {doris_search_sandbox.qualified_table}"
+        )
+        row_count_before = int(cursor.fetchone()[0])
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        search_result = await client.call_tool("doris_search", {})
+        assert search_result.is_error is False
+        assert isinstance(search_result.structured_content, dict)
+        manifest = search_result.structured_content
+        assert manifest["mode"] == "manifest"
+        assert manifest["domain"] == "doris_search"
+        children = {child["name"]: child for child in manifest["children"]}
+        assert tuple(children) == SEARCH_CHILD_NAMES
+        assert all(child["availability"]["callable"] for child in children.values())
+        manifest_version = manifest["manifest_version"]
+
+        indexes = await _call_domain_child(
+            client,
+            domain="doris_search",
+            child_tool="inspect_search_indexes",
+            arguments={
+                "database": doris_search_sandbox.settings.database,
+                "table": doris_search_sandbox.table,
+            },
+            manifest_version=manifest_version,
+        )
+        assert {
+            item["index_type"] for item in indexes["data"]["items"]
+        } == {"INVERTED", "ANN"}
+        assert indexes["data"]["capabilities"]["hybrid"] is True
+
+        analysis = await _call_domain_child(
+            client,
+            domain="doris_search",
+            child_tool="preview_text_analysis",
+            arguments={
+                "text": "Apache Doris search",
+                "analyzer": "english",
+            },
+            manifest_version=manifest_version,
+        )
+        terms = [item["term"] for item in analysis["data"]["tokens"]]
+        assert {"apache", "doris", "search"} <= set(terms)
+        assert "[REDACTED]" not in terms
+
+        text = await _call_domain_child(
+            client,
+            domain="doris_search",
+            child_tool="search_data",
+            arguments={
+                "database": doris_search_sandbox.settings.database,
+                "table": doris_search_sandbox.table,
+                "query": "Doris",
+                "mode": "text",
+                "fields": ["title"],
+                "top_k": 5,
+                "return_fields": ["id", "title", "category"],
+            },
+            manifest_version=manifest_version,
+        )
+        assert text["data"]["rows"][0]["id"] == 1
+        assert text["metadata"]["invented_scores"] is False
+
+        vector = await _call_domain_child(
+            client,
+            domain="doris_search",
+            child_tool="search_data",
+            arguments={
+                "database": doris_search_sandbox.settings.database,
+                "table": doris_search_sandbox.table,
+                "mode": "vector",
+                "vector": [0.1, 0.2, 0.3],
+                "vector_field": "embedding",
+                "top_k": 2,
+                "return_fields": ["id", "title", "category"],
+            },
+            manifest_version=manifest_version,
+        )
+        assert vector["data"]["rows"][0]["id"] == 1
+        assert vector["metadata"]["vector_metric"] == "l2_distance"
+
+        hybrid_request = {
+            "database": doris_search_sandbox.settings.database,
+            "table": doris_search_sandbox.table,
+            "query": "Doris",
+            "mode": "hybrid",
+            "fields": ["title"],
+            "vector": [0.1, 0.2, 0.3],
+            "vector_field": "embedding",
+            "top_k": 2,
+            "filters": {"category": "database"},
+            "return_fields": ["id", "title", "category"],
+        }
+        hybrid = await _call_domain_child(
+            client,
+            domain="doris_search",
+            child_tool="search_data",
+            arguments=hybrid_request,
+            manifest_version=manifest_version,
+        )
+        assert hybrid["data"]["rows"][0]["id"] == 1
+
+        diagnosis = await _call_domain_child(
+            client,
+            domain="doris_search",
+            child_tool="diagnose_search_query",
+            arguments={
+                "search_request": hybrid_request,
+                "include_profile": False,
+            },
+            manifest_version=manifest_version,
+        )
+        assert (
+            diagnosis["data"]["explain"]["facets"][
+                "ann_pushdown_observed"
+            ]
+            is True
+        )
+        assert diagnosis["metadata"]["invented_index_hits"] is False
+
+        injected_identifier = await client.call_tool(
+            "doris_search",
+            {
+                "child_tool": "search_data",
+                "arguments": {
+                    "database": doris_search_sandbox.settings.database,
+                    "table": doris_search_sandbox.table,
+                    "query": "Doris",
+                    "mode": "text",
+                    "fields": ["title"],
+                    "return_fields": [
+                        f"title; DROP TABLE {doris_search_sandbox.table}"
+                    ],
+                },
+                "manifest_version": manifest_version,
+            },
+        )
+        assert injected_identifier.is_error is True
+
+    with doris_search_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {doris_search_sandbox.qualified_table}"
+        )
+        row_count_after = int(cursor.fetchone()[0])
+    assert row_count_after == row_count_before
 
 
 @pytest.mark.skipif(

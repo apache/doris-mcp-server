@@ -65,6 +65,7 @@ from .domain_manifest import (
 from .doris_feature_matrix import DORIS_FEATURE_MATRIX
 from .pipeline_handlers import PipelineToolHandlersMixin
 from .query_handlers import QueryToolHandlersMixin
+from .search_handlers import SearchToolHandlersMixin
 from .tool_provider import CustomToolProvider, ToolProviderRuntime
 from .tool_registry import ToolRegistryError
 
@@ -76,6 +77,7 @@ class DorisToolsManager(
     CatalogToolHandlersMixin,
     ClusterToolHandlersMixin,
     PipelineToolHandlersMixin,
+    SearchToolHandlersMixin,
     DomainManifestManagerMixin,
 ):
     """Apache Doris Tools Manager"""
@@ -119,6 +121,10 @@ class DorisToolsManager(
         self._initialize_query_handlers(
             connection_manager,
             self.adbc_query_tools,
+        )
+        self._initialize_search_handlers(
+            connection_manager,
+            self.query_runtime,
         )
         self._capability_registry: CapabilityRegistry | None = None
         if domain_availability_provider is None:

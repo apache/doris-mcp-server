@@ -1255,15 +1255,20 @@ FEATURE_DEFINITIONS = (
         "search_data",
         A,
         _variant(
-            "inverted_text_search",
-            probes=("inverted_index_and_search_syntax_ready",),
-        ),
-        _variant(
             "vector_hybrid_search",
             ranges=(">=4.0.0",),
             features=("ann_index", "hybrid_search"),
-            probes=("ann_index_and_metric_compatible",),
+            probes=(
+                "ann_index_and_metric_compatible",
+                "inverted_index_and_search_syntax_ready",
+            ),
+            callable_when_degraded=True,
             sources=("DORIS_RELEASE_4_0_0",),
+        ),
+        _variant(
+            "inverted_text_search",
+            probes=("inverted_index_and_search_syntax_ready",),
+            callable_when_degraded=True,
         ),
     ),
     _feature(
@@ -1280,15 +1285,15 @@ FEATURE_DEFINITIONS = (
         "inspect_search_indexes",
         M,
         _variant(
-            "inverted_index_metadata",
-            probes=("inverted_index_metadata_readable",),
-        ),
-        _variant(
             "ann_index_metadata",
             ranges=(">=4.0.0",),
             features=("ann_index",),
             probes=("ann_index_metadata_readable",),
             sources=("DORIS_RELEASE_4_0_0",),
+        ),
+        _variant(
+            "inverted_index_metadata",
+            probes=("inverted_index_metadata_readable",),
         ),
     ),
     _feature(
