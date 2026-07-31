@@ -501,7 +501,7 @@ async def test_child_argument_violation_list_is_bounded_and_marked() -> None:
 
 
 @pytest.mark.asyncio
-async def test_manifest_version_unavailable_and_unbound_fail_closed() -> None:
+async def test_manifest_version_and_unavailable_child_fail_closed() -> None:
     callable_manager = _manager("doris_query.execute_query")
     stale = json.loads(
         await callable_manager.call_tool(
@@ -523,28 +523,75 @@ async def test_manifest_version_unavailable_and_unbound_fail_closed() -> None:
             },
         )
     )
-    unbound_manager = _manager("doris_search.search_data")
-    unbound = json.loads(
-        await unbound_manager.call_tool(
-            "doris_search",
-            {
-                "child_tool": "search_data",
-                "arguments": {
-                    "database": "analytics",
-                    "table": "events",
-                    "mode": "text",
-                },
-            },
-        )
-    )
-
     assert stale["error"]["code"] == DomainErrorCode.CHILD_MANIFEST_STALE
     assert stale["error"]["details"]["rediscover"] is True
     assert unavailable["error"]["code"] == (
         DomainErrorCode.CHILD_CAPABILITY_UNAVAILABLE
     )
     assert unavailable["error"]["details"]["reason_code"] == ("TEST_HANDLER_PENDING")
-    assert unbound["error"]["details"]["reason_code"] == "HANDLER_NOT_BOUND"
+
+
+def test_search_domain_binds_all_four_children() -> None:
+    manager = _manager()
+    bound = BoundHandlerAvailabilityProvider(manager)
+    search = DORIS_DOMAIN_CATALOG.resolve_domain("doris_search")
+
+    assert len(search.children) == 4
+    assert all(
+        bound.is_bound(search.name, child.name)
+        for child in search.children
+    )
+
+
+@pytest.mark.asyncio
+async def test_formal_search_handler_uses_strict_runtime() -> None:
+    manager = _manager("doris_search.search_data")
+    formal_result = {
+        "status": "success",
+        "data": {
+            "columns": [{"name": "id"}],
+            "rows": [{"id": 1}],
+            "row_count": 1,
+            "truncated": False,
+        },
+        "warnings": [],
+        "metadata": {"source": "doris_native_search"},
+        "evidence": [],
+    }
+    manager.search_runtime.search_data = AsyncMock(return_value=formal_result)
+
+    response = json.loads(
+        await manager.call_tool(
+            "doris_search",
+            {
+                "child_tool": "search_data",
+                "arguments": {
+                    "database": "analytics",
+                    "table": "documents",
+                    "query": "Doris",
+                    "mode": "text",
+                    "fields": ["title"],
+                    "filters": {"category": "database"},
+                },
+            },
+        )
+    )
+
+    assert response["mode"] == "result"
+    assert response["data"]["metadata"]["source"] == "doris_native_search"
+    manager.search_runtime.search_data.assert_awaited_once_with(
+        database="analytics",
+        table="documents",
+        query="Doris",
+        mode="text",
+        fields=["title"],
+        vector=None,
+        vector_field=None,
+        text_operator=None,
+        top_k=None,
+        filters={"category": "database"},
+        return_fields=None,
+    )
 
 
 @pytest.mark.asyncio

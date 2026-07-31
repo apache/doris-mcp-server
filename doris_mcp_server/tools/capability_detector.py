@@ -38,6 +38,11 @@ from ..utils.doris_http_client import (
     configured_fe_http_hosts,
     database_config_for_request,
 )
+from ..utils.sql_security_utils import (
+    SQLSecurityError,
+    quote_identifier,
+    validate_identifier,
+)
 from .doris_feature_matrix import DorisClusterVersionVector
 from .doris_version import (
     DorisVersion,
@@ -255,6 +260,34 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ),
         ),
     ),
+    "doris_search": (
+        (
+            "SHOW INDEX FROM information_schema.tables",
+            (
+                "inverted_index_metadata_readable",
+                "ann_index_metadata_readable",
+                "search_index_metadata_readable",
+            ),
+        ),
+        (
+            (
+                "SELECT TOKENIZE('Doris search', "
+                "'\"parser\"=\"english\"') AS tokens"
+            ),
+            ("tokenize_function_or_analyzer_ready",),
+        ),
+        (
+            (
+                "SELECT l2_distance_approximate([0.0], [0.0]) "
+                "AS distance"
+            ),
+            ("ann_distance_function_readable",),
+        ),
+        (
+            "EXPLAIN SELECT 1",
+            ("search_explain_readable",),
+        ),
+    ),
 }
 
 
@@ -381,6 +414,12 @@ class DorisCapabilityDetector:
                     probes.update(await self._safe_probe_cluster_services(auth_context))
                 elif domain_name == "doris_pipeline":
                     probes.update(_combine_pipeline_evidence_probes(probes))
+                elif domain_name == "doris_search":
+                    match_probe = await self._probe_search_match_syntax(
+                        auth_context
+                    )
+                    probes[match_probe.probe_id] = match_probe
+                    probes.update(_combine_search_evidence_probes(probes))
                 completed_route = self.route_identity(auth_context)
                 if completed_route.fingerprint != base.route.fingerprint:
                     raise CapabilityRouteChangedError(
@@ -590,6 +629,116 @@ class DorisCapabilityDetector:
             evidence_sources=profile.evidence_sources,
         )
         return probes
+
+    async def _probe_search_match_syntax(
+        self,
+        auth_context: Any | None,
+    ) -> CapabilityProbeEvidence:
+        """Probe MATCH against one visible OLAP string column without writes."""
+        discovery_sql = (
+            "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME "
+            "FROM information_schema.columns "
+            "WHERE DATA_TYPE IN ('char', 'varchar', 'string', 'text') "
+            "AND TABLE_SCHEMA NOT IN ('information_schema', 'mysql') "
+            "ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION LIMIT 8"
+        )
+        route = self.route_identity(auth_context)
+        try:
+            session_id = (
+                "capability-search:match-target:"
+                f"{route.fingerprint[:12]}"
+            )
+            async with (
+                self._connection_manager.get_connection_context_for_auth_context(
+                    session_id,
+                    auth_context,
+                ) as connection
+            ):
+                result = await connection.execute(
+                    discovery_sql,
+                    mask_result=False,
+                    max_rows=8,
+                    max_bytes=32 * 1024,
+                )
+                rows = tuple(
+                    row
+                    for row in (result.data or ())
+                    if isinstance(row, Mapping)
+                )
+        except Exception as exc:
+            status, reason = _classify_probe_error(exc)
+            return CapabilityProbeEvidence(
+                probe_id="text_match_syntax_readable",
+                status=status,
+                reason_code=reason,
+            )
+
+        if not rows:
+            return CapabilityProbeEvidence(
+                probe_id="text_match_syntax_readable",
+                status=CapabilityProbeStatus.DEGRADED,
+                reason_code="SEARCH_MATCH_PROBE_TARGET_NOT_VISIBLE",
+            )
+
+        last_evidence: CapabilityProbeEvidence | None = None
+        for offset, row in enumerate(rows):
+            try:
+                database = validate_identifier(
+                    str(_row_value(row, "TABLE_SCHEMA")),
+                    "database name",
+                )
+                table = validate_identifier(
+                    str(_row_value(row, "TABLE_NAME")),
+                    "table name",
+                )
+                column = validate_identifier(
+                    str(_row_value(row, "COLUMN_NAME")),
+                    "column name",
+                )
+            except SQLSecurityError:
+                continue
+            # SQL sink audit: all three metadata identifiers pass the strict
+            # identifier validator and are quoted before _probe_statement sends
+            # the read-only EXPLAIN to connection.execute.
+            statement = (
+                f"EXPLAIN SELECT {quote_identifier(column, 'column name')} "  # nosec B608
+                f"FROM {quote_identifier(database, 'database name')}."
+                f"{quote_identifier(table, 'table name')} "
+                f"WHERE {quote_identifier(column, 'column name')} "
+                "MATCH_ANY 'doris' LIMIT 1"
+            )
+            session_id = (
+                f"capability-search:match:{offset}:"
+                f"{route.fingerprint[:12]}"
+            )
+            try:
+                async with (
+                    self._connection_manager
+                    .get_connection_context_for_auth_context(
+                        session_id,
+                        auth_context,
+                    ) as connection
+                ):
+                    evidence = await self._probe_statement(
+                        connection,
+                        statement,
+                        ("text_match_syntax_readable",),
+                    )
+                last_evidence = evidence["text_match_syntax_readable"]
+            except Exception as exc:
+                status, reason = _classify_probe_error(exc)
+                last_evidence = CapabilityProbeEvidence(
+                    probe_id="text_match_syntax_readable",
+                    status=status,
+                    reason_code=reason,
+                )
+            if last_evidence.status is CapabilityProbeStatus.SUPPORTED:
+                return last_evidence
+        return last_evidence or CapabilityProbeEvidence(
+            probe_id="text_match_syntax_readable",
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="SEARCH_MATCH_PROBE_TARGET_INVALID",
+        )
 
     async def _safe_probe_profile_api(
         self,
@@ -923,7 +1072,7 @@ def _classify_probe_error(
             CapabilityProbeStatus.UNKNOWN,
             "PROBE_PERMISSION_DENIED",
         )
-    if error_code in {1064, 1109, 1146}:
+    if error_code in {1064, 1109, 1146, 1305}:
         return (
             CapabilityProbeStatus.UNSUPPORTED,
             "PROBE_OBJECT_OR_SYNTAX_UNSUPPORTED",
@@ -1385,6 +1534,121 @@ def _combine_pipeline_evidence_probes(
         freshness.probe_id: freshness,
         load_offset.probe_id: load_offset,
     }
+
+
+def _combine_search_evidence_probes(
+    probes: Mapping[str, CapabilityProbeEvidence],
+) -> dict[str, CapabilityProbeEvidence]:
+    text = _combine_all_runtime_probes(
+        "inverted_index_and_search_syntax_ready",
+        probes,
+        (
+            "inverted_index_metadata_readable",
+            "tokenize_function_or_analyzer_ready",
+            "text_match_syntax_readable",
+        ),
+        supported_reason="INVERTED_INDEX_AND_MATCH_READY",
+    )
+    ann = _combine_all_runtime_probes(
+        "ann_index_and_metric_compatible",
+        probes,
+        (
+            "ann_index_metadata_readable",
+            "ann_distance_function_readable",
+        ),
+        supported_reason="ANN_INDEX_AND_DISTANCE_READY",
+    )
+    hybrid = _combine_all_evidence(
+        "hybrid_search",
+        (text, ann),
+        supported_reason="TEXT_AND_ANN_SEARCH_READY",
+    )
+    diagnosis = _combine_all_runtime_probes(
+        "search_index_and_explain_readable",
+        probes,
+        (
+            "search_index_metadata_readable",
+            "search_explain_readable",
+        ),
+        supported_reason="SEARCH_INDEX_AND_EXPLAIN_READABLE",
+    )
+    plan = CapabilityProbeEvidence(
+        probe_id="search_plan_facets_readable",
+        status=diagnosis.status,
+        reason_code=diagnosis.reason_code,
+        evidence_sources=diagnosis.evidence_sources,
+    )
+    ann_feature = CapabilityProbeEvidence(
+        probe_id="ann_index",
+        status=ann.status,
+        reason_code=ann.reason_code,
+        evidence_sources=ann.evidence_sources,
+    )
+    return {
+        text.probe_id: text,
+        ann.probe_id: ann,
+        ann_feature.probe_id: ann_feature,
+        hybrid.probe_id: hybrid,
+        diagnosis.probe_id: diagnosis,
+        plan.probe_id: plan,
+    }
+
+
+def _combine_all_runtime_probes(
+    probe_id: str,
+    probes: Mapping[str, CapabilityProbeEvidence],
+    candidate_ids: Sequence[str],
+    *,
+    supported_reason: str,
+) -> CapabilityProbeEvidence:
+    candidates = tuple(
+        probe
+        for candidate_id in candidate_ids
+        if (probe := probes.get(candidate_id)) is not None
+    )
+    return _combine_all_evidence(
+        probe_id,
+        candidates,
+        supported_reason=supported_reason,
+    )
+
+
+def _combine_all_evidence(
+    probe_id: str,
+    candidates: Sequence[CapabilityProbeEvidence],
+    *,
+    supported_reason: str,
+) -> CapabilityProbeEvidence:
+    if candidates and all(
+        probe.status is CapabilityProbeStatus.SUPPORTED
+        for probe in candidates
+    ):
+        status = CapabilityProbeStatus.SUPPORTED
+        reason = supported_reason
+    else:
+        status = next(
+            (
+                candidate_status
+                for candidate_status in (
+                    CapabilityProbeStatus.MISCONFIGURED,
+                    CapabilityProbeStatus.UNSUPPORTED,
+                    CapabilityProbeStatus.UNKNOWN,
+                    CapabilityProbeStatus.DEGRADED,
+                )
+                if any(
+                    probe.status is candidate_status
+                    for probe in candidates
+                )
+            ),
+            CapabilityProbeStatus.UNKNOWN,
+        )
+        reason = f"{probe_id.upper()}_{status.value.upper()}"
+    return CapabilityProbeEvidence(
+        probe_id=probe_id,
+        status=status,
+        reason_code=reason,
+        evidence_sources=("runtime_probe",),
+    )
 
 
 def _combine_any_runtime_probe(

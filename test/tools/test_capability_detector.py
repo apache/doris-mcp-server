@@ -37,6 +37,14 @@ from doris_mcp_server.utils.db import DorisRouteIdentity
 from doris_mcp_server.utils.doris_http_client import DorisHTTPResponse
 from doris_mcp_server.utils.security import AuthContext
 
+_SEARCH_TARGET_DISCOVERY_SQL = (
+    "SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME "
+    "FROM information_schema.columns "
+    "WHERE DATA_TYPE IN ('char', 'varchar', 'string', 'text') "
+    "AND TABLE_SCHEMA NOT IN ('information_schema', 'mysql') "
+    "ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION LIMIT 8"
+)
+
 
 class _ProbeConnection:
     def __init__(self) -> None:
@@ -204,6 +212,111 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
         is CapabilityProbeStatus.SUPPORTED
     )
     assert connection.statements.count("SELECT @@version_comment;") == 1
+
+
+@pytest.mark.asyncio
+async def test_search_probes_use_visible_target_and_isolated_connections() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides[_SEARCH_TARGET_DISCOVERY_SQL] = [
+        {
+            "TABLE_SCHEMA": "analytics",
+            "TABLE_NAME": "documents",
+            "COLUMN_NAME": "title",
+        }
+    ]
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.search",
+    )
+    contexts_before = len(manager.context_sessions)
+
+    search = await detector.detect_domain(base, "doris_search", None)
+
+    assert (
+        search.probe("text_match_syntax_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        search.probe("inverted_index_and_search_syntax_ready").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        search.probe("ann_index_and_metric_compatible").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert search.probe("hybrid_search").status is CapabilityProbeStatus.SUPPORTED
+    assert (
+        "EXPLAIN SELECT `title` FROM `analytics`.`documents` "
+        "WHERE `title` MATCH_ANY 'doris' LIMIT 1"
+    ) in connection.statements
+    assert len(manager.context_sessions) - contexts_before == 6
+    assert len(set(manager.context_sessions[contexts_before:])) == 6
+
+
+@pytest.mark.asyncio
+async def test_search_probe_without_visible_target_is_degraded_not_unsupported() -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.search",
+    )
+
+    search = await detector.detect_domain(base, "doris_search", None)
+
+    assert (
+        search.probe("text_match_syntax_readable").status
+        is CapabilityProbeStatus.DEGRADED
+    )
+    assert (
+        search.probe("inverted_index_and_search_syntax_ready").status
+        is CapabilityProbeStatus.DEGRADED
+    )
+    assert search.probe("hybrid_search").status is CapabilityProbeStatus.DEGRADED
+
+
+@pytest.mark.asyncio
+async def test_search_probe_keeps_text_ready_when_ann_function_is_unsupported() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides[_SEARCH_TARGET_DISCOVERY_SQL] = [
+        {
+            "TABLE_SCHEMA": "analytics",
+            "TABLE_NAME": "documents",
+            "COLUMN_NAME": "title",
+        }
+    ]
+    ann_sql = (
+        "SELECT l2_distance_approximate([0.0], [0.0]) "
+        "AS distance"
+    )
+    connection.failures[ann_sql] = RuntimeError(
+        1305,
+        "Unknown function l2_distance_approximate",
+    )
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.search",
+    )
+
+    search = await detector.detect_domain(base, "doris_search", None)
+
+    assert (
+        search.probe("inverted_index_and_search_syntax_ready").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        search.probe("ann_index_and_metric_compatible").status
+        is CapabilityProbeStatus.UNSUPPORTED
+    )
+    assert search.probe("hybrid_search").status is CapabilityProbeStatus.UNSUPPORTED
 
 
 @pytest.mark.asyncio

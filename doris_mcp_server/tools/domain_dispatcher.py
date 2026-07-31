@@ -47,6 +47,7 @@ from ..utils.cluster_runtime import ClusterRuntimeFailure
 from ..utils.logger import get_audit_logger, get_logger
 from ..utils.pipeline_runtime import PipelineRuntimeFailure
 from ..utils.query_runtime import QueryRuntimeFailure
+from ..utils.search_runtime import SearchRuntimeFailure
 from . import domain_catalog as domain_catalog_module
 from .domain_catalog import (
     DorisDomainCatalog,
@@ -672,6 +673,31 @@ class DomainDispatcher:
                     in {
                         "PIPELINE_ARGUMENT_INVALID",
                         "PIPELINE_DATABASE_REQUIRED",
+                    }
+                    else DomainErrorCode.CHILD_EXECUTION_FAILED
+                ),
+                str(exc),
+                child_tool=child.name,
+                manifest_version=manifest.manifest_version,
+                retryable=exc.retryable,
+                details={
+                    "rediscover": False,
+                    "reason_code": exc.reason_code,
+                    "status_code": exc.status_code,
+                },
+            )
+        except SearchRuntimeFailure as exc:
+            self._audit(feature_id, arguments, "error", started)
+            return self._error(
+                domain.name,
+                (
+                    DomainErrorCode.CHILD_ARGUMENTS_INVALID
+                    if exc.reason_code
+                    in {
+                        "SEARCH_ARGUMENT_INVALID",
+                        "SEARCH_ANALYZER_NOT_FOUND",
+                        "SEARCH_INDEX_NOT_FOUND",
+                        "SEARCH_TABLE_NOT_FOUND",
                     }
                     else DomainErrorCode.CHILD_EXECUTION_FAILED
                 ),

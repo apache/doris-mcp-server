@@ -113,6 +113,31 @@ def test_adbc_is_inside_query_and_variant_is_inside_lakehouse() -> None:
     )
 
 
+def test_search_prefers_vector_hybrid_and_keeps_text_fallback() -> None:
+    search = DORIS_FEATURE_MATRIX.get_feature(
+        "doris_search",
+        "search_data",
+    )
+
+    assert tuple(
+        variant.name for variant in search.support_contract.variants
+    ) == (
+        "vector_hybrid_search",
+        "inverted_text_search",
+    )
+    vector, text = search.support_contract.variants
+    assert vector.supported_ranges == (">=4.0.0",)
+    assert vector.required_probes == (
+        "ann_index_and_metric_compatible",
+        "inverted_index_and_search_syntax_ready",
+    )
+    assert vector.callable_when_degraded is True
+    assert text.required_probes == (
+        "inverted_index_and_search_syntax_ready",
+    )
+    assert text.callable_when_degraded is True
+
+
 def test_every_contract_is_fail_closed_and_has_resolvable_sources() -> None:
     known_sources = {source.source_id for source in DORIS_FEATURE_MATRIX.sources}
 
