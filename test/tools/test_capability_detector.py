@@ -34,6 +34,7 @@ from doris_mcp_server.tools.capability_detector import (
 )
 from doris_mcp_server.tools.doris_feature_matrix import DORIS_FEATURE_MATRIX
 from doris_mcp_server.utils.db import DorisRouteIdentity
+from doris_mcp_server.utils.doris_http_client import DorisHTTPResponse
 from doris_mcp_server.utils.security import AuthContext
 
 
@@ -476,6 +477,42 @@ async def test_detector_retains_visible_backend_with_unknown_version() -> None:
 
 
 @pytest.mark.asyncio
+async def test_detector_ignores_explicitly_dead_backend_for_version_gating() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {
+            "BackendId": "1",
+            "Alive": "true",
+            "Version": "doris-4.0.5-rc01-59de8c4c524",
+        },
+        {
+            "BackendId": "2",
+            "Alive": "false",
+            "Version": "",
+        },
+    ]
+    detector = DorisCapabilityDetector(  # type: ignore[arg-type]
+        _ProbeConnectionManager(connection)
+    )
+
+    snapshot = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+    evaluation = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_cluster",
+        child_name="list_cluster_nodes",
+        versions=snapshot.version_vector,
+    )
+
+    assert tuple(
+        version.normalized for version in snapshot.version_vector.backends
+    ) == ("4.0.5rc1",)
+    assert evaluation.compatible is True
+
+
+@pytest.mark.asyncio
 async def test_detector_uses_fallback_for_unknown_master_and_retains_follower() -> None:
     connection = _ProbeConnection()
     connection.row_overrides["SHOW FRONTENDS"] = [
@@ -640,3 +677,105 @@ async def test_detector_wraps_domain_connection_failures() -> None:
         match="probe failed for doris_query",
     ):
         await detector.detect_domain(base, "doris_query", None)
+
+
+@pytest.mark.asyncio
+async def test_cluster_probe_keeps_405_compaction_on_real_legacy_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    database_config = SimpleNamespace(
+        user="root",
+        password="secret",
+        host="fe-1",
+        hosts=["fe-1"],
+        fe_http_host="fe-1",
+        fe_http_hosts=["fe-1"],
+        fe_http_port=8030,
+        be_hosts=["be-1"],
+        be_webserver_port=8040,
+    )
+    manager.config.database = database_config
+    manager.selected_database_config = database_config
+
+    native_compaction = (
+        "SELECT * "
+        "FROM information_schema.doris_be_compaction_tasks LIMIT 1"
+    )
+    connection.failures[native_compaction] = RuntimeError(
+        1146,
+        "table does not exist",
+    )
+    connection.row_overrides.update(
+        {
+            'SHOW PROC "/current_queries"': [],
+            (
+                "SELECT BE_ID, METRIC_NAME "
+                "FROM information_schema.file_cache_statistics LIMIT 1"
+            ): [{"BE_ID": 1, "METRIC_NAME": "hits_ratio"}],
+            "SHOW WORKLOAD GROUPS": [],
+            "SHOW COMPUTE GROUPS": [],
+            (
+                "SELECT `time` "
+                "FROM internal.__internal_schema.audit_log LIMIT 1"
+            ): [],
+        }
+    )
+
+    class _HTTPClient:
+        async def get_first_available(
+            self,
+            *,
+            role: str,
+            **_kwargs: Any,
+        ) -> DorisHTTPResponse:
+            metrics = (
+                "doris_fe_tablet_max_compaction_score 4\n"
+                if role == "fe"
+                else (
+                    "doris_be_memory_allocated_bytes 1024\n"
+                    "doris_be_file_cache_hits_ratio 0.8\n"
+                    "doris_be_tablet_base_max_compaction_score 7\n"
+                )
+            )
+            return DorisHTTPResponse(
+                status=200,
+                headers={},
+                body=metrics.encode(),
+                url=f"http://{role}/metrics",
+            )
+
+    monkeypatch.setattr(
+        "doris_mcp_server.tools.capability_detector."
+        "DorisHTTPClient.from_database_config",
+        lambda _config: _HTTPClient(),
+    )
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    snapshot = await detector.detect_domain(base, "doris_cluster", None)
+
+    assert snapshot.version_vector.master_fe.normalized == "4.0.5rc1"
+    assert (
+        snapshot.probe("information_schema.doris_be_compaction_tasks").status
+        is CapabilityProbeStatus.UNSUPPORTED
+    )
+    assert (
+        snapshot.probe("compaction_system_table_or_http_api").status
+        is CapabilityProbeStatus.UNSUPPORTED
+    )
+    legacy = snapshot.probe("legacy_compaction_status_readable")
+    assert legacy is not None
+    assert legacy.status is CapabilityProbeStatus.DEGRADED
+    assert legacy.reason_code == "LEGACY_COMPACTION_SUMMARY_READABLE"
+    assert snapshot.probe("fe_metrics").status is CapabilityProbeStatus.SUPPORTED
+    assert snapshot.probe("be_metrics").status is CapabilityProbeStatus.SUPPORTED
+    assert (
+        snapshot.probe("file_cache_metrics_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )

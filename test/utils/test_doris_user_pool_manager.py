@@ -455,7 +455,7 @@ async def test_release_routed_connection_force_closes_unhealthy_raw(manager):
 
     await manager.release_routed_connection(connection)
 
-    assert owner.release_calls == []
+    assert owner.release_calls == [raw_connection]
     assert raw_connection.ensure_closed_calls == 1
 
 

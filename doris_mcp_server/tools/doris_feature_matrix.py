@@ -1060,27 +1060,21 @@ FEATURE_DEFINITIONS = (
         "list_active_tasks",
         A,
         _variant(
+            "unified_task_progress",
+            ranges=(">=4.1.1",),
+            probes=("unified_task_progress_readable",),
+            sources=("DORIS_RELEASE_4_1_1",),
+        ),
+        _variant(
             "legacy_task_views",
             probes=("legacy_task_views_readable",),
             callable_when_degraded=True,
-        ),
-        _variant(
-            "unified_task_progress",
-            ranges=(">=4.1.1",),
-            system_objects=("information_schema.active_tasks",),
-            probes=("unified_task_progress_readable",),
-            sources=("DORIS_RELEASE_4_1_1",),
         ),
     ),
     _feature(
         "doris_cluster",
         "get_monitoring_metrics",
         A,
-        _variant(
-            "base_metrics",
-            endpoints=("fe_metrics", "be_metrics"),
-            probes=("metrics_endpoints_readable",),
-        ),
         _variant(
             "observability_4_0_7",
             ranges=(">=4.0.7,<4.1.0",),
@@ -1091,6 +1085,11 @@ FEATURE_DEFINITIONS = (
             ),
             probes=("enhanced_metrics_present",),
             sources=("DORIS_RELEASE_4_0_7",),
+        ),
+        _variant(
+            "base_metrics",
+            endpoints=("fe_metrics", "be_metrics"),
+            probes=("metrics_endpoints_readable",),
         ),
     ),
     _feature(
@@ -1109,9 +1108,11 @@ FEATURE_DEFINITIONS = (
         "get_cache_status",
         B,
         _variant(
-            "file_cache",
-            endpoints=("be_metrics",),
-            probes=("file_cache_metrics_readable",),
+            "advanced_cache_types",
+            ranges=(">=4.1.0",),
+            features=("condition_cache", "parquet_page_cache"),
+            probes=("advanced_cache_metrics_present",),
+            sources=("DORIS_RELEASE_4_1_0",),
         ),
         _variant(
             "file_cache_queue_metrics",
@@ -1120,11 +1121,9 @@ FEATURE_DEFINITIONS = (
             sources=("DORIS_RELEASE_4_0_7",),
         ),
         _variant(
-            "advanced_cache_types",
-            ranges=(">=4.1.0",),
-            features=("condition_cache", "parquet_page_cache"),
-            probes=("advanced_cache_metrics_present",),
-            sources=("DORIS_RELEASE_4_1_0",),
+            "file_cache",
+            system_objects=("information_schema.file_cache_statistics",),
+            probes=("file_cache_metrics_readable",),
         ),
     ),
     _feature(
@@ -1132,18 +1131,18 @@ FEATURE_DEFINITIONS = (
         "get_compaction_status",
         B,
         _variant(
+            "compaction_task_tracker",
+            ranges=(">=4.0.6,<4.1.0", ">=4.1.1"),
+            excluded_ranges=(">=4.1.0-alpha0,<4.1.1",),
+            system_objects=("information_schema.doris_be_compaction_tasks",),
+            probes=("compaction_system_table_or_http_api",),
+            sources=("DORIS_RELEASE_4_0_6", "DORIS_RELEASE_4_1_1"),
+        ),
+        _variant(
             "legacy_compaction_summary",
             probes=("legacy_compaction_status_readable",),
             evidence_quality="summary",
             callable_when_degraded=True,
-        ),
-        _variant(
-            "compaction_task_tracker",
-            ranges=(">=4.0.6,<4.1.0", ">=4.1.1"),
-            excluded_ranges=(">=4.1.0-alpha0,<4.1.1",),
-            endpoints=("be_compaction_api",),
-            probes=("compaction_system_table_or_http_api",),
-            sources=("DORIS_RELEASE_4_0_6", "DORIS_RELEASE_4_1_1"),
         ),
     ),
     _feature(

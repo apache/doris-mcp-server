@@ -31,6 +31,7 @@ from doris_mcp_server.tools.domain_catalog import (
     DORIS_DOMAIN_CATALOG,
 )
 from doris_mcp_server.tools.domain_dispatcher import (
+    BoundHandlerAvailabilityProvider,
     ChildArgumentsAdapterError,
     DomainDispatcher,
     ToolExposureMode,
@@ -135,6 +136,52 @@ def test_dispatcher_registers_exactly_47_formal_flat_names() -> None:
     assert not set(CURRENT_FLAT_TOOL_NAMES).intersection(names)
     assert manager.domain_dispatcher.handles_flat("doris_query_execute_query")
     assert not manager.domain_dispatcher.handles_flat("exec_query")
+
+
+def test_cluster_domain_binds_all_eleven_children() -> None:
+    manager = _manager()
+    bound = BoundHandlerAvailabilityProvider(manager)
+    cluster = DORIS_DOMAIN_CATALOG.resolve_domain("doris_cluster")
+
+    assert len(cluster.children) == 11
+    assert all(
+        bound.is_bound(cluster.name, child.name)
+        for child in cluster.children
+    )
+
+
+@pytest.mark.asyncio
+async def test_cluster_metric_filters_reach_strict_runtime_unchanged() -> None:
+    manager = _manager("doris_cluster.get_monitoring_metrics")
+    manager.cluster_runtime.get_monitoring_metrics = AsyncMock(
+        return_value={
+            "status": "success",
+            "data": {"nodes": []},
+            "warnings": [],
+            "metadata": {"source": "test_metrics"},
+        }
+    )
+
+    response = json.loads(
+        await manager.call_tool(
+            "doris_cluster",
+            {
+                "child_tool": "get_monitoring_metrics",
+                "arguments": {
+                    "metric_names": ["doris_be_cpu"],
+                    "node_ids": ["be-1"],
+                    "window": "instant",
+                },
+            },
+        )
+    )
+
+    assert response["mode"] == "result"
+    manager.cluster_runtime.get_monitoring_metrics.assert_awaited_once_with(
+        metric_names=["doris_be_cpu"],
+        node_ids=["be-1"],
+        window="instant",
+    )
 
 
 @pytest.mark.asyncio
@@ -476,12 +523,12 @@ async def test_manifest_version_unavailable_and_unbound_fail_closed() -> None:
             },
         )
     )
-    unbound_manager = _manager("doris_cluster.list_cluster_nodes")
+    unbound_manager = _manager("doris_pipeline.get_ingestion_status")
     unbound = json.loads(
         await unbound_manager.call_tool(
-            "doris_cluster",
+            "doris_pipeline",
             {
-                "child_tool": "list_cluster_nodes",
+                "child_tool": "get_ingestion_status",
                 "arguments": {},
             },
         )
@@ -1558,14 +1605,14 @@ def test_detail_result_normalization_adds_formal_evidence() -> None:
         (
             "adapt:monitoring_arguments",
             {"metric_names": ["qps"]},
-            {},
-            1,
+            {"metric_names": ["qps"]},
+            0,
         ),
         (
             "adapt:memory_arguments",
             {"detail": "trackers", "node_ids": ["be-1"]},
-            {"data_type": "realtime", "tracker_type": "all"},
-            1,
+            {"detail": "trackers", "node_ids": ["be-1"]},
+            0,
         ),
         (
             "adapt:audit_filters",
@@ -1683,15 +1730,16 @@ def test_detail_result_normalization_adds_formal_evidence() -> None:
         (
             "adapt:resource_growth_arguments",
             {
-                "resource": "memory",
+                "resource": "storage",
                 "window_days": 9,
                 "granularity": "day",
             },
             {
-                "days": 9,
-                "resource_types": ["memory"],
+                "resource": "storage",
+                "window_days": 9,
+                "granularity": "day",
             },
-            1,
+            0,
         ),
         (
             "adapt:adbc_query_arguments",

@@ -29,7 +29,7 @@ from mcp.types import Tool
 from ..auth.operation_policy import authorize_operation
 from ..state_handles import StateHandleCodec
 from ..utils.adbc_query_tools import DorisADBCQueryTools
-from ..utils.analysis_tools import MemoryTracker, SQLAnalyzer, TableAnalyzer
+from ..utils.analysis_tools import SQLAnalyzer, TableAnalyzer
 from ..utils.data_exploration_tools import DataExplorationTools
 from ..utils.data_governance_tools import DataGovernanceTools
 from ..utils.data_quality_tools import DataQualityTools
@@ -37,7 +37,6 @@ from ..utils.db import DorisConnectionManager
 from ..utils.dependency_analysis_tools import DependencyAnalysisTools
 from ..utils.logger import get_audit_logger, get_logger
 from ..utils.monitoring_tools import DorisMonitoringTools
-from ..utils.performance_analytics_tools import PerformanceAnalyticsTools
 from ..utils.query_executor import DorisQueryExecutor
 from ..utils.schema_extractor import MetadataExtractor
 from ..utils.security import get_current_auth_context
@@ -49,6 +48,7 @@ from .capability_registry import (
     CapabilityRegistry,
 )
 from .catalog_handlers import CatalogToolHandlersMixin
+from .cluster_handlers import ClusterToolHandlersMixin
 from .domain_catalog import CURRENT_FLAT_TOOL_NAMES
 from .domain_dispatcher import (
     BoundHandlerAvailabilityProvider,
@@ -73,6 +73,7 @@ logger = get_logger(__name__)
 class DorisToolsManager(
     QueryToolHandlersMixin,
     CatalogToolHandlersMixin,
+    ClusterToolHandlersMixin,
     DomainManifestManagerMixin,
 ):
     """Apache Doris Tools Manager"""
@@ -96,7 +97,10 @@ class DorisToolsManager(
         )
         self._initialize_catalog_handlers(connection_manager)
         self.monitoring_tools = DorisMonitoringTools(connection_manager)
-        self.memory_tracker = MemoryTracker(connection_manager)
+        self._initialize_cluster_handlers(
+            connection_manager,
+            self.monitoring_tools,
+        )
 
         # Initialize v0.5.0 advanced analytics tools
         self.data_governance_tools = DataGovernanceTools(connection_manager)
@@ -106,7 +110,6 @@ class DorisToolsManager(
         )
         self.security_analytics_tools = SecurityAnalyticsTools(connection_manager)
         self.dependency_analysis_tools = DependencyAnalysisTools(connection_manager)
-        self.performance_analytics_tools = PerformanceAnalyticsTools(connection_manager)
 
         # Initialize ADBC query tools
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
@@ -311,98 +314,26 @@ class DorisToolsManager(
     async def _get_monitoring_metrics_tool(
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """Unified monitoring metrics tool routing"""
-        content_type = arguments.get("content_type", "data")
-        role = arguments.get("role", "all")
-        monitor_type = arguments.get("monitor_type", "all")
-        priority = arguments.get("priority", "core")
-        include_raw_metrics = arguments.get("include_raw_metrics", False)
-
-        if content_type == "definitions":
-            # Only get definitions
-            return await self.monitoring_tools.get_monitoring_metrics(
-                role, monitor_type, priority, info_only=True, format_type="prometheus"
-            )
-        elif content_type == "data":
-            # Only get data
-            return await self.monitoring_tools.get_monitoring_metrics(
-                role,
-                monitor_type,
-                priority,
-                info_only=False,
-                format_type="prometheus",
-                include_raw_metrics=include_raw_metrics,
-            )
-        elif content_type == "both":
-            # Get both definitions and data
-            definitions = await self.monitoring_tools.get_monitoring_metrics(
-                role, monitor_type, priority, info_only=True, format_type="prometheus"
-            )
-            data = await self.monitoring_tools.get_monitoring_metrics(
-                role,
-                monitor_type,
-                priority,
-                info_only=False,
-                format_type="prometheus",
-                include_raw_metrics=include_raw_metrics,
-            )
-            return {
-                "content_type": "both",
-                "definitions": definitions,
-                "data": data,
-                "timestamp": data.get("timestamp"),
-                "_execution_info": {
-                    "combined_response": True,
-                    "definitions_available": definitions.get("success", False),
-                    "data_available": data.get("success", False),
-                },
-            }
-        else:
-            return {
-                "error": f"Invalid content_type: {content_type}. Must be 'definitions', 'data', or 'both'"
-            }
+        """Route the migrated metric child through the strict Cluster runtime."""
+        return await self.cluster_runtime.get_monitoring_metrics(
+            metric_names=arguments.get("metric_names"),
+            node_ids=arguments.get("node_ids"),
+            window=arguments.get("window"),
+        )
 
     async def _get_memory_stats_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Unified memory statistics tool routing"""
-        data_type = arguments.get("data_type", "realtime")
-        tracker_type = arguments.get("tracker_type", "overview")
-        tracker_names = arguments.get("tracker_names")
-        time_range = arguments.get("time_range", "1h")
-        include_details = arguments.get("include_details", True)
-
-        if data_type == "realtime":
-            # Only get real-time data
-            return await self.memory_tracker.get_realtime_memory_stats(
-                tracker_type, include_details
-            )
-        elif data_type == "historical":
-            # Only get historical data
-            return await self.memory_tracker.get_historical_memory_stats(
-                tracker_names, time_range
-            )
-        elif data_type == "both":
-            # Get both real-time and historical data
-            realtime = await self.memory_tracker.get_realtime_memory_stats(
-                tracker_type, include_details
-            )
-            historical = await self.memory_tracker.get_historical_memory_stats(
-                tracker_names, time_range
-            )
-            return {
-                "data_type": "both",
-                "realtime": realtime,
-                "historical": historical,
-                "timestamp": realtime.get("timestamp"),
-                "_execution_info": {
-                    "combined_response": True,
-                    "realtime_available": realtime.get("success", False),
-                    "historical_available": historical.get("success", False),
-                },
-            }
-        else:
-            return {
-                "error": f"Invalid data_type: {data_type}. Must be 'realtime', 'historical', or 'both'"
-            }
+        """Route the migrated memory child without placeholder values."""
+        detail = {
+            "overview": "summary",
+            "all": "trackers",
+        }.get(
+            str(arguments.get("tracker_type", "")),
+            arguments.get("detail", "summary"),
+        )
+        return await self.cluster_runtime.get_memory_stats(
+            node_ids=arguments.get("node_ids"),
+            detail=detail,
+        )
 
     # Legacy tool methods (for backward compatibility)
     async def _get_monitoring_metrics_info_tool(
@@ -618,15 +549,15 @@ class DorisToolsManager(
     async def _analyze_resource_growth_curves_tool(
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        """Resource growth curves analysis tool routing"""
-        days = arguments.get("days", 30)
-        resource_types = arguments.get(
-            "resource_types", ["storage", "query_volume", "user_activity"]
+        """Route the migrated growth child through recorded Doris evidence."""
+        resource_types = arguments.get("resource_types")
+        resource = (
+            resource_types[0]
+            if isinstance(resource_types, list) and len(resource_types) == 1
+            else arguments.get("resource")
         )
-        include_predictions = arguments.get("include_predictions", False)
-        detailed_response = arguments.get("detailed_response", False)
-
-        # Delegate to performance analytics tools for processing
-        return await self.performance_analytics_tools.analyze_resource_growth_curves(
-            days, resource_types, include_predictions, detailed_response
+        return await self.cluster_runtime.analyze_resource_growth(
+            resource=resource,
+            window_days=arguments.get("days", arguments.get("window_days")),
+            granularity=arguments.get("granularity"),
         )

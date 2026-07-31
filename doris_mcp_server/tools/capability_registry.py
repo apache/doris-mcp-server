@@ -287,16 +287,10 @@ class CapabilityEvaluator:
                     limitations=limitations,
                 )
 
-            if (
+            uncertified = (
                 version_result.certification_status
                 is not VersionCertificationStatus.CERTIFIED
-            ):
-                limitations = _ordered_unique(
-                    (
-                        *limitations,
-                        "The observed Doris patch is not certified by this project.",
-                    )
-                )
+            )
             if snapshot.stale:
                 degraded = True
                 limitations = _ordered_unique(
@@ -313,9 +307,17 @@ class CapabilityEvaluator:
                 ),
                 callable=True,
                 reason_code=(
-                    "CAPABILITY_VERIFIED_DEGRADED"
-                    if degraded
-                    else "CAPABILITY_VERIFIED"
+                    "CAPABILITY_VERIFIED_DEGRADED_UNCERTIFIED"
+                    if degraded and uncertified
+                    else (
+                        "CAPABILITY_VERIFIED_DEGRADED"
+                        if degraded
+                        else (
+                            "CAPABILITY_VERIFIED_UNCERTIFIED"
+                            if uncertified
+                            else "CAPABILITY_VERIFIED"
+                        )
+                    )
                 ),
                 detected_versions=detected_versions,
                 active_variant=variant.name,

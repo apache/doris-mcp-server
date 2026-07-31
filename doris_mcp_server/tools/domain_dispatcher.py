@@ -43,6 +43,7 @@ from ..schema_validation import (
 )
 from ..state_handles import StateHandleCodec, StateHandleError
 from ..utils.catalog_metadata import CatalogMetadataFailure
+from ..utils.cluster_runtime import ClusterRuntimeFailure
 from ..utils.logger import get_audit_logger, get_logger
 from ..utils.query_runtime import QueryRuntimeFailure
 from . import domain_catalog as domain_catalog_module
@@ -640,6 +641,25 @@ class DomainDispatcher:
                     "status_code": exc.status_code,
                 },
             )
+        except ClusterRuntimeFailure as exc:
+            self._audit(feature_id, arguments, "error", started)
+            return self._error(
+                domain.name,
+                (
+                    DomainErrorCode.CHILD_ARGUMENTS_INVALID
+                    if exc.reason_code == "CLUSTER_ARGUMENT_INVALID"
+                    else DomainErrorCode.CHILD_EXECUTION_FAILED
+                ),
+                str(exc),
+                child_tool=child.name,
+                manifest_version=manifest.manifest_version,
+                retryable=exc.retryable,
+                details={
+                    "rediscover": False,
+                    "reason_code": exc.reason_code,
+                    "status_code": exc.status_code,
+                },
+            )
         except ToolOutputValidationError:
             logger.exception("Formal child output validation failed for %s", feature_id)
             self._audit(
@@ -1131,24 +1151,9 @@ def _adapt_arguments(
         prepared["single_replica"] = False
         prepared["_formal_catalog"] = True
     elif adapter_name == "adapt:monitoring_arguments":
-        if prepared:
-            warnings.append(
-                "Metric and node filters are not supported by the active handler."
-            )
-        prepared = {}
+        pass
     elif adapter_name == "adapt:memory_arguments":
-        detail = prepared.pop("detail", None)
-        if prepared.pop("node_ids", None) is not None:
-            warnings.append(
-                "Memory node filtering is not supported by the active handler."
-            )
-        prepared["data_type"] = "realtime"
-        prepared["tracker_type"] = {
-            None: "overview",
-            "summary": "overview",
-            "trackers": "all",
-            "top_consumers": "all",
-        }.get(detail, "overview")
+        pass
     elif adapter_name == "adapt:audit_filters":
         window_minutes = prepared.pop("window_minutes", None)
         if window_minutes is not None:
@@ -1214,13 +1219,7 @@ def _adapt_arguments(
             1000,
         )
     elif adapter_name == "adapt:resource_growth_arguments":
-        resource = prepared.pop("resource", None)
-        prepared["days"] = prepared.pop("window_days", 30)
-        prepared["resource_types"] = [resource] if resource else []
-        if prepared.pop("granularity", None) is not None:
-            warnings.append(
-                "Growth granularity is not supported by the active handler."
-            )
+        pass
     elif adapter_name == "adapt:adbc_query_arguments":
         timeout_ms = prepared.pop("timeout_ms", None)
         if timeout_ms is not None:

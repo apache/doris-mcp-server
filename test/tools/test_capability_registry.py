@@ -184,6 +184,8 @@ def test_evaluator_requires_version_probes_handler_and_call_permission() -> None
     assert available.status is AvailabilityStatus.AVAILABLE
     assert available.callable is True
     assert available.active_variant == "mysql_read_only"
+    assert available.reason_code == "CAPABILITY_VERIFIED_UNCERTIFIED"
+    assert available.limitations == ()
     assert missing_probe.status is AvailabilityStatus.UNKNOWN
     assert missing_probe.reason_code == "CAPABILITY_PROBE_PENDING"
     assert mixed_backends.status is AvailabilityStatus.AVAILABLE
@@ -191,6 +193,74 @@ def test_evaluator_requires_version_probes_handler_and_call_permission() -> None
     assert denied.status is AvailabilityStatus.UNAVAILABLE
     assert denied.reason_code == "CHILD_CALL_PERMISSION_DENIED"
     assert allowed.callable is True
+
+
+def test_compaction_prefers_native_tracker_and_uses_legacy_on_405() -> None:
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(
+            "doris_cluster.get_compaction_status"
+        ),  # type: ignore[arg-type]
+    )
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_cluster")
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_cluster",
+        "get_compaction_status",
+    )
+    probes = {
+        "information_schema.doris_be_compaction_tasks": (
+            CapabilityProbeEvidence(
+                probe_id="information_schema.doris_be_compaction_tasks",
+                status=CapabilityProbeStatus.SUPPORTED,
+                reason_code="TEST_NATIVE_TRACKER",
+            )
+        ),
+        "compaction_system_table_or_http_api": CapabilityProbeEvidence(
+            probe_id="compaction_system_table_or_http_api",
+            status=CapabilityProbeStatus.SUPPORTED,
+            reason_code="TEST_NATIVE_TRACKER",
+        ),
+        "legacy_compaction_status_readable": CapabilityProbeEvidence(
+            probe_id="legacy_compaction_status_readable",
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="TEST_LEGACY_SUMMARY",
+        ),
+    }
+    providers = CapabilityProviderRegistry({}).snapshot()
+    snapshot_405 = _snapshot(probes=probes)
+    snapshot_406 = replace(
+        snapshot_405,
+        version_vector=DorisClusterVersionVector.from_comments(
+            master_fe="Doris version doris-4.0.6",
+            follower_fes=("Doris version doris-4.0.6",),
+            backends=("Doris version doris-4.0.6",),
+        ),
+    )
+
+    native = evaluator.evaluate(
+        snapshot=snapshot_406,
+        providers=providers,
+        domain=domain,
+        child=child,
+        auth_context=None,
+    )
+    legacy = evaluator.evaluate(
+        snapshot=snapshot_405,
+        providers=providers,
+        domain=domain,
+        child=child,
+        auth_context=None,
+    )
+
+    assert native.callable is True
+    assert native.status is AvailabilityStatus.AVAILABLE
+    assert native.active_variant == "compaction_task_tracker"
+    assert legacy.callable is True
+    assert legacy.status is AvailabilityStatus.DEGRADED
+    assert legacy.active_variant == "legacy_compaction_summary"
+    assert legacy.reason_code == (
+        "CAPABILITY_VERIFIED_DEGRADED_UNCERTIFIED"
+    )
 
 
 def test_evaluator_normalizes_system_object_probe_evidence_for_manifest() -> None:

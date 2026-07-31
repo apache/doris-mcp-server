@@ -48,6 +48,9 @@ under **Unreleased** until a new version is selected and published.
 - Bounded query result streaming with deployment and absolute ceilings for
   rows, serialized bytes, and execution time, plus cancellation-safe database
   connection disposal.
+- A read-only Cluster domain with eleven capability-gated children for node
+  inventory, active tasks, metrics, memory, cache, compaction, workload and
+  compute groups, recorded resource growth, and sanitized runtime evidence.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
@@ -87,6 +90,11 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Released failed capability-probe connections from their captured owner pools
+  so a single-connection route cannot starve subsequent domain calls.
+- Excluded explicitly dead Doris components from active version gating while
+  preserving them in node inventory, and kept live runtime manifests within
+  the 16 KiB domain budget.
 - Preserved service availability after malformed requests, unknown methods,
   header mismatches, unsupported versions, and missing capabilities.
 - Kept static-token Doris pools usable after repeated query timeouts, and

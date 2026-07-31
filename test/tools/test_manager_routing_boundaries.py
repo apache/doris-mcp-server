@@ -18,7 +18,7 @@
 """Branch coverage for the manager's thin routing helpers."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -35,15 +35,22 @@ def _manager() -> DorisToolsManager:
             ]
         )
     )
-    manager.memory_tracker = SimpleNamespace(
-        get_realtime_memory_stats=AsyncMock(
+    manager.cluster_runtime = SimpleNamespace(
+        get_monitoring_metrics=AsyncMock(
             return_value={
-                "success": True,
-                "timestamp": "2026-07-30T00:00:00Z",
+                "status": "success",
+                "data": {"nodes": []},
+                "warnings": [],
+                "metadata": {"source": "test"},
             }
         ),
-        get_historical_memory_stats=AsyncMock(
-            return_value={"success": True, "points": []}
+        get_memory_stats=AsyncMock(
+            return_value={
+                "status": "success",
+                "data": {"nodes": []},
+                "warnings": [],
+                "metadata": {"source": "test"},
+            }
         ),
     )
     manager.data_governance_tools = SimpleNamespace(
@@ -59,119 +66,41 @@ def _manager() -> DorisToolsManager:
 
 
 @pytest.mark.asyncio
-async def test_monitoring_metrics_routes_definitions_data_and_both():
-    definitions_manager = _manager()
-    definitions_manager.monitoring_tools.get_monitoring_metrics.side_effect = None
-    definitions_manager.monitoring_tools.get_monitoring_metrics.return_value = {
-        "success": True
-    }
-    definitions = await definitions_manager._get_monitoring_metrics_tool(
+async def test_monitoring_metrics_routes_formal_filters_to_cluster_runtime():
+    manager = _manager()
+
+    result = await manager._get_monitoring_metrics_tool(
         {
-            "content_type": "definitions",
-            "role": "fe",
-            "monitor_type": "system",
-            "priority": "all",
+            "metric_names": ["doris_be_cpu"],
+            "node_ids": ["be-1"],
+            "window": "instant",
         }
     )
 
-    data_manager = _manager()
-    data_manager.monitoring_tools.get_monitoring_metrics.side_effect = None
-    data_manager.monitoring_tools.get_monitoring_metrics.return_value = {
-        "success": True
-    }
-    data = await data_manager._get_monitoring_metrics_tool(
-        {
-            "content_type": "data",
-            "role": "be",
-            "monitor_type": "query",
-            "priority": "core",
-            "include_raw_metrics": True,
-        }
+    assert result["status"] == "success"
+    manager.cluster_runtime.get_monitoring_metrics.assert_awaited_once_with(
+        metric_names=["doris_be_cpu"],
+        node_ids=["be-1"],
+        window="instant",
     )
-
-    both_manager = _manager()
-    both = await both_manager._get_monitoring_metrics_tool({"content_type": "both"})
-
-    assert definitions == {"success": True}
-    definitions_manager.monitoring_tools.get_monitoring_metrics.assert_awaited_once_with(
-        "fe", "system", "all", info_only=True, format_type="prometheus"
-    )
-    assert data == {"success": True}
-    data_manager.monitoring_tools.get_monitoring_metrics.assert_awaited_once_with(
-        "be",
-        "query",
-        "core",
-        info_only=False,
-        format_type="prometheus",
-        include_raw_metrics=True,
-    )
-    assert both["content_type"] == "both"
-    assert both["timestamp"] == "2026-07-30T00:00:00Z"
-    assert both["_execution_info"] == {
-        "combined_response": True,
-        "definitions_available": True,
-        "data_available": True,
-    }
 
 
 @pytest.mark.asyncio
-async def test_monitoring_metrics_rejects_unknown_content_type():
+async def test_memory_stats_routes_formal_detail_to_cluster_runtime():
     manager = _manager()
 
-    result = await manager._get_monitoring_metrics_tool({"content_type": "unknown"})
-
-    assert "Invalid content_type" in result["error"]
-    manager.monitoring_tools.get_monitoring_metrics.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_memory_stats_routes_realtime_historical_and_both():
-    manager = _manager()
-
-    realtime = await manager._get_memory_stats_tool(
+    result = await manager._get_memory_stats_tool(
         {
-            "data_type": "realtime",
-            "tracker_type": "process",
-            "include_details": False,
+            "detail": "top_consumers",
+            "node_ids": ["be-1"],
         }
     )
-    historical = await manager._get_memory_stats_tool(
-        {
-            "data_type": "historical",
-            "tracker_names": ["query"],
-            "time_range": "24h",
-        }
+
+    assert result["status"] == "success"
+    manager.cluster_runtime.get_memory_stats.assert_awaited_once_with(
+        node_ids=["be-1"],
+        detail="top_consumers",
     )
-    both = await manager._get_memory_stats_tool({"data_type": "both"})
-
-    assert realtime["success"] is True
-    assert historical == {"success": True, "points": []}
-    assert both["data_type"] == "both"
-    assert both["timestamp"] == "2026-07-30T00:00:00Z"
-    assert both["_execution_info"] == {
-        "combined_response": True,
-        "realtime_available": True,
-        "historical_available": True,
-    }
-    assert manager.memory_tracker.get_realtime_memory_stats.await_args_list == [
-        call("process", False),
-        call("overview", True),
-    ]
-    assert manager.memory_tracker.get_historical_memory_stats.await_args_list == [
-        call(["query"], "24h"),
-        call(None, "1h"),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_memory_stats_rejects_unknown_data_type():
-    manager = _manager()
-
-    result = await manager._get_memory_stats_tool({"data_type": "unknown"})
-
-    assert "Invalid data_type" in result["error"]
-    manager.memory_tracker.get_realtime_memory_stats.assert_not_awaited()
-    manager.memory_tracker.get_historical_memory_stats.assert_not_awaited()
 
 
 @pytest.mark.asyncio

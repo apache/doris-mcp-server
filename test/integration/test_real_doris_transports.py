@@ -71,6 +71,19 @@ pytestmark = [
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+CLUSTER_CHILD_NAMES = (
+    "get_cluster_overview",
+    "list_cluster_nodes",
+    "list_active_tasks",
+    "get_monitoring_metrics",
+    "get_memory_stats",
+    "get_cache_status",
+    "get_compaction_status",
+    "get_workload_group_status",
+    "get_compute_group_status",
+    "analyze_resource_growth",
+    "get_runtime_capabilities",
+)
 
 
 @dataclass(frozen=True)
@@ -417,6 +430,35 @@ async def _exec_query(
     )
     assert isinstance(result.structured_content, dict)
     return result, result.structured_content
+
+
+async def _call_domain_child(
+    client: Client,
+    *,
+    domain: str,
+    child_tool: str,
+    arguments: dict[str, Any],
+    manifest_version: str,
+) -> dict[str, Any]:
+    result = await client.call_tool(
+        domain,
+        {
+            "child_tool": child_tool,
+            "arguments": arguments,
+            "manifest_version": manifest_version,
+        },
+    )
+    assert result.is_error is False, json.dumps(
+        result.model_dump(by_alias=True, mode="json"),
+        ensure_ascii=False,
+    )
+    assert isinstance(result.structured_content, dict)
+    payload = result.structured_content
+    assert payload["mode"] == "result"
+    assert payload["domain"] == domain
+    assert payload["child_tool"] == child_tool
+    assert isinstance(payload["data"], dict)
+    return payload["data"]
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio"])
@@ -1043,6 +1085,107 @@ async def test_real_doris_tool_regression_paths(
         assert recovered_result.is_error is False
         assert recovered_payload["success"] is True
         assert recovered_payload["data"][0]["recovered"] == 1
+
+
+@pytest.mark.skipif(
+    os.getenv("DORIS_REAL_HTTP_INTEGRATION") != "1",
+    reason="set DORIS_REAL_HTTP_INTEGRATION=1 with independent FE/BE HTTP endpoints",
+)
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_hierarchical_cluster_domain_is_read_only_and_live(
+    transport: str,
+) -> None:
+    settings = _real_doris_settings()
+    environment = _server_environment(
+        settings,
+        user=settings.user,
+        password=settings.password,
+    )
+    environment["MCP_TOOL_EXPOSURE_MODE"] = "hierarchical"
+    assert environment.get("DORIS_FE_HTTP_HOST")
+    assert environment.get("DORIS_BE_HOSTS")
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        tools = {
+            tool.name: tool
+            for tool in (await client.list_tools(cache_mode="bypass")).tools
+        }
+        assert "doris_catalog" in tools
+        assert "doris_cluster" in tools
+
+        catalog_result = await client.call_tool("doris_catalog", {})
+        assert catalog_result.is_error is False
+        assert isinstance(catalog_result.structured_content, dict)
+        assert catalog_result.structured_content["mode"] == "manifest"
+        assert catalog_result.structured_content["domain"] == "doris_catalog"
+
+        cluster_result = await client.call_tool("doris_cluster", {})
+        assert cluster_result.is_error is False, json.dumps(
+            cluster_result.model_dump(by_alias=True, mode="json"),
+            ensure_ascii=False,
+        )
+        assert isinstance(cluster_result.structured_content, dict)
+        cluster_manifest = cluster_result.structured_content
+        assert cluster_manifest["mode"] == "manifest"
+        assert cluster_manifest["domain"] == "doris_cluster"
+        children = {
+            child["name"]: child
+            for child in cluster_manifest["children"]
+        }
+        assert tuple(children) == CLUSTER_CHILD_NAMES
+        manifest_version = cluster_manifest["manifest_version"]
+
+        runtime = await _call_domain_child(
+            client,
+            domain="doris_cluster",
+            child_tool="get_runtime_capabilities",
+            arguments={"detail": "full"},
+            manifest_version=manifest_version,
+        )
+        master_fe_version = runtime["data"]["versions"]["master_fe"]
+        assert master_fe_version
+
+        nodes = await _call_domain_child(
+            client,
+            domain="doris_cluster",
+            child_tool="list_cluster_nodes",
+            arguments={"node_types": ["fe", "be"], "include_metrics": False},
+            manifest_version=manifest_version,
+        )
+        assert nodes["data"]["items"]
+        assert {"fe", "be"}.issubset(
+            {item["node_type"] for item in nodes["data"]["items"]}
+        )
+
+        memory = await _call_domain_child(
+            client,
+            domain="doris_cluster",
+            child_tool="get_memory_stats",
+            arguments={"detail": "summary"},
+            manifest_version=manifest_version,
+        )
+        assert memory["metadata"]["invented_values"] is False
+
+        compaction_availability = children["get_compaction_status"]["availability"]
+        if master_fe_version.startswith("4.0.5"):
+            assert compaction_availability["callable"] is True
+            assert (
+                compaction_availability["active_variant"]
+                == "legacy_compaction_summary"
+            )
+            compaction = await _call_domain_child(
+                client,
+                domain="doris_cluster",
+                child_tool="get_compaction_status",
+                arguments={"limit": 20},
+                manifest_version=manifest_version,
+            )
+            assert compaction["data"]["mode"] == "legacy_summary"
+            assert compaction["data"]["native_tracker"] is False
 
 
 @pytest.mark.skipif(
