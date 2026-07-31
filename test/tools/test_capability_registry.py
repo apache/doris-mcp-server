@@ -185,7 +185,7 @@ def test_evaluator_requires_version_probes_handler_and_call_permission() -> None
     assert available.status is AvailabilityStatus.AVAILABLE
     assert available.callable is True
     assert available.active_variant == "mysql_read_only"
-    assert available.reason_code == "CAPABILITY_VERIFIED_UNCERTIFIED"
+    assert available.reason_code == "CAPABILITY_VERIFIED"
     assert available.limitations == ()
     assert missing_probe.status is AvailabilityStatus.UNKNOWN
     assert missing_probe.reason_code == "CAPABILITY_PROBE_PENDING"
@@ -305,9 +305,7 @@ def test_compaction_prefers_native_tracker_and_uses_legacy_on_405() -> None:
     assert legacy.callable is True
     assert legacy.status is AvailabilityStatus.DEGRADED
     assert legacy.active_variant == "legacy_compaction_summary"
-    assert legacy.reason_code == (
-        "CAPABILITY_VERIFIED_DEGRADED_UNCERTIFIED"
-    )
+    assert legacy.reason_code == "CAPABILITY_VERIFIED_DEGRADED"
 
 
 def test_lakehouse_prefers_4_1_variants_and_falls_back_on_4_0() -> None:
@@ -724,7 +722,7 @@ def test_semantic_availability_keeps_call_time_validation_callable() -> None:
     assert listed.callable is True
     assert context.status is AvailabilityStatus.DEGRADED
     assert context.callable is True
-    assert context.reason_code == "CAPABILITY_VERIFIED_DEGRADED_UNCERTIFIED"
+    assert context.reason_code == "CAPABILITY_VERIFIED_DEGRADED"
     assert "Probe explicit_model_ref_valid is degraded." in context.limitations
     assert "Probe semantic_policy_ready is degraded." in context.limitations
 

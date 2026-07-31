@@ -25,6 +25,7 @@ from ..utils.db import DorisConnectionManager
 from ..utils.monitoring_tools import DorisMonitoringTools
 from ..utils.security import get_current_auth_context
 from .capability_registry import CapabilityRegistry
+from .doris_feature_matrix import DORIS_PATCH_CERTIFICATION_MATRIX
 
 
 class _ClusterHandlerOwner(Protocol):
@@ -153,6 +154,11 @@ class ClusterToolHandlersMixin:
         data: dict[str, Any] = {
             "detail": detail,
             "versions": versions,
+            "patch_certification": (
+                DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(
+                    snapshot.version_vector
+                ).model_dump(mode="json")
+            ),
             "deployment_mode": snapshot.deployment_mode,
             "mixed_versions": snapshot.mixed_versions,
             "stale": snapshot.stale,

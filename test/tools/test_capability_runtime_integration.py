@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -150,3 +151,39 @@ async def test_default_manager_detects_caches_and_dispatches() -> None:
         "EXPLAIN SELECT 1"
     ) == 1
     manager._exec_query_tool.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_runtime_capabilities_disclose_patch_certification() -> None:
+    connection_manager = _CapabilityConnectionManager()
+    manager = DorisToolsManager(connection_manager)  # type: ignore[arg-type]
+
+    manifest = await manager.domain_dispatcher.call_domain(
+        "doris_cluster",
+        {},
+        None,
+    )
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_cluster",
+        {
+            "child_tool": "get_runtime_capabilities",
+            "arguments": {"detail": "summary"},
+            "manifest_version": manifest.manifest_version,
+        },
+        None,
+    )
+
+    assert result.mode == "result"
+    assert isinstance(result.data, Mapping)
+    payload = result.data["data"]
+    assert isinstance(payload, Mapping)
+    certification = payload["patch_certification"]
+    assert isinstance(certification, Mapping)
+    assert certification["uniform_observed_version"] == "4.0.5"
+    assert certification["status"] == "certified"
+    assert certification["targeted"] is True
+    assert certification["certified"] is True
+    assert certification["certified_versions"] == ("4.0.5",)
+    assert certification["evidence_ids"] == (
+        "doris_4_0_5_linux_amd64",
+    )

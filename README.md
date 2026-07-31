@@ -488,6 +488,26 @@ that exposes the same 47 read-only children through collision-free formal
 names and the same handlers. It does not restore pre-1.0 names, and switching
 exposure modes requires the Host to reconnect.
 
+#### Doris patch certification
+
+Runtime certification is keyed by the normalized three-part Doris version
+(`major.minor.patch`). Prerelease labels, commit hashes, and deployment hints
+remain visible as evidence but do not create separate certification buckets.
+
+The 1.0 target set is `3.0.3`, `3.1.4`, `4.0.5`, `4.0.6`, `4.0.7`, `4.1.0`,
+`4.1.1`, `4.1.2`, and `4.1.3`. A target is reported as certified only after
+committed evidence proves the same core version across the observed FE and BE
+components, the exact eight-domain/47-child contract, a real read-only query,
+and all stdio/Streamable HTTP × hierarchical/Flat quadrants with zero write
+operations. Missing components, unparseable versions, and mixed core versions
+fail closed.
+
+`doris_cluster.get_runtime_capabilities` returns the observed component
+versions together with `patch_certification`, including the target set,
+certified set, current status, reason code, evidence IDs, and limitations.
+The current evidence-backed certified set is `4.0.5`; the other targets remain
+explicitly `target_uncertified` until the same gate is completed for them.
+
 #### Administration domain reservation
 
 The `doris_admin` name and its future discovery, preview, execute,
