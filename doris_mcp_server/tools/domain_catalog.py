@@ -1332,11 +1332,24 @@ DOMAIN_DEFINITIONS = (
                 "Read streaming and batch load job status.",
                 _input_schema(
                     {
-                        "job_types": _string_array("Load job types."),
+                        "job_types": _string_array(
+                            "Ingestion job types.",
+                            enum=(
+                                "batch_load",
+                                "stream_load",
+                                "routine_load",
+                                "insert_job",
+                                "continuous_load",
+                            ),
+                        ),
                         "database": _string("Database filter."),
                         "table": _string("Table filter."),
                         "states": _string_array("Job states."),
-                        "limit": _integer("Maximum results.", minimum=1),
+                        "limit": _integer(
+                            "Maximum results.",
+                            minimum=1,
+                            maximum=200,
+                        ),
                     }
                 ),
                 _COLLECTION_OUTPUT,
@@ -1355,6 +1368,7 @@ DOMAIN_DEFINITIONS = (
                         "window_minutes": _integer(
                             "Lookback window in minutes.",
                             minimum=1,
+                            maximum=43_200,
                         ),
                         "include_dependencies": _boolean(
                             "Include dependency evidence."
@@ -1397,6 +1411,7 @@ DOMAIN_DEFINITIONS = (
                         "threshold_seconds": _integer(
                             "Freshness threshold in seconds.",
                             minimum=1,
+                            maximum=31_536_000,
                         ),
                         "time_column": _string("Optional event-time column."),
                     },
@@ -1421,6 +1436,7 @@ DOMAIN_DEFINITIONS = (
                         "depth": _integer(
                             "Maximum traversal depth.",
                             minimum=1,
+                            maximum=5,
                         ),
                     },
                     required=("object",),

@@ -63,6 +63,7 @@ from .domain_manifest import (
     DomainManifestService,
 )
 from .doris_feature_matrix import DORIS_FEATURE_MATRIX
+from .pipeline_handlers import PipelineToolHandlersMixin
 from .query_handlers import QueryToolHandlersMixin
 from .tool_provider import CustomToolProvider, ToolProviderRuntime
 from .tool_registry import ToolRegistryError
@@ -74,6 +75,7 @@ class DorisToolsManager(
     QueryToolHandlersMixin,
     CatalogToolHandlersMixin,
     ClusterToolHandlersMixin,
+    PipelineToolHandlersMixin,
     DomainManifestManagerMixin,
 ):
     """Apache Doris Tools Manager"""
@@ -101,6 +103,7 @@ class DorisToolsManager(
             connection_manager,
             self.monitoring_tools,
         )
+        self._initialize_pipeline_handlers(connection_manager)
 
         # Initialize v0.5.0 advanced analytics tools
         self.data_governance_tools = DataGovernanceTools(connection_manager)

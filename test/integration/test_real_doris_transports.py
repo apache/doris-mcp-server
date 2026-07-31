@@ -84,6 +84,13 @@ CLUSTER_CHILD_NAMES = (
     "analyze_resource_growth",
     "get_runtime_capabilities",
 )
+PIPELINE_CHILD_NAMES = (
+    "get_ingestion_status",
+    "diagnose_ingestion",
+    "get_materialized_view_status",
+    "monitor_data_freshness",
+    "analyze_data_dependencies",
+)
 
 
 @dataclass(frozen=True)
@@ -1186,6 +1193,121 @@ async def test_real_doris_hierarchical_cluster_domain_is_read_only_and_live(
             )
             assert compaction["data"]["mode"] == "legacy_summary"
             assert compaction["data"]["native_tracker"] is False
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_hierarchical_pipeline_domain_is_read_only_and_live(
+    transport: str,
+    doris_sandbox: DorisSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.settings.user,
+        password=doris_sandbox.settings.password,
+    )
+    environment["MCP_TOOL_EXPOSURE_MODE"] = "hierarchical"
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"INSERT INTO {doris_sandbox.qualified_table} VALUES (1, %s)",
+            (doris_sandbox.marker,),
+        )
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        pipeline_result = await client.call_tool("doris_pipeline", {})
+        assert pipeline_result.is_error is False
+        assert isinstance(pipeline_result.structured_content, dict)
+        manifest = pipeline_result.structured_content
+        assert manifest["mode"] == "manifest"
+        assert manifest["domain"] == "doris_pipeline"
+        children = {child["name"]: child for child in manifest["children"]}
+        assert tuple(children) == PIPELINE_CHILD_NAMES
+        assert all(child["availability"]["callable"] for child in children.values())
+        manifest_version = manifest["manifest_version"]
+
+        ingestion = await _call_domain_child(
+            client,
+            domain="doris_pipeline",
+            child_tool="get_ingestion_status",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "limit": 20,
+            },
+            manifest_version=manifest_version,
+        )
+        assert ingestion["metadata"]["database"] == (
+            doris_sandbox.settings.database
+        )
+        assert ingestion["data"]["truncated"] is False
+
+        diagnosis = await _call_domain_child(
+            client,
+            domain="doris_pipeline",
+            child_tool="diagnose_ingestion",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "window_minutes": 60,
+                "include_dependencies": False,
+            },
+            manifest_version=manifest_version,
+        )
+        assert diagnosis["data"]["summary"]["matched_jobs"] >= 0
+        assert diagnosis["metadata"]["invented_evidence"] is False
+
+        freshness = await _call_domain_child(
+            client,
+            domain="doris_pipeline",
+            child_tool="monitor_data_freshness",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "table": doris_sandbox.table,
+                "threshold_seconds": 3600,
+            },
+            manifest_version=manifest_version,
+        )
+        assert freshness["data"]["status"] in {"fresh", "stale"}
+        assert freshness["data"]["method"] == "partition_visible_version"
+        assert freshness["metadata"]["invented_evidence"] is False
+
+        materialized_views = await _call_domain_child(
+            client,
+            domain="doris_pipeline",
+            child_tool="get_materialized_view_status",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "include_refresh_history": True,
+            },
+            manifest_version=manifest_version,
+        )
+        assert isinstance(materialized_views["data"]["items"], list)
+
+        dependencies = await _call_domain_child(
+            client,
+            domain="doris_pipeline",
+            child_tool="analyze_data_dependencies",
+            arguments={
+                "database": doris_sandbox.settings.database,
+                "object": doris_sandbox.table,
+                "direction": "both",
+                "depth": 2,
+            },
+            manifest_version=manifest_version,
+        )
+        assert dependencies["metadata"]["invented_evidence"] is False
+        assert "unknown_source" not in str(dependencies)
+
+        with doris_sandbox.admin_connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT COUNT(*) AS row_count "
+                f"FROM {doris_sandbox.qualified_table}"
+            )
+            row = cursor.fetchone()
+        assert row == (1,)
 
 
 @pytest.mark.skipif(

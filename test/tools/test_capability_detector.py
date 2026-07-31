@@ -125,6 +125,7 @@ class _ProbeConnectionManager:
             fingerprint="route-a",
         )
         self.context_error: Exception | None = None
+        self.context_sessions: list[str] = []
 
     def get_route_identity(self, _auth_context: Any) -> DorisRouteIdentity:
         return self.route
@@ -138,11 +139,12 @@ class _ProbeConnectionManager:
     @asynccontextmanager
     async def get_connection_context_for_auth_context(
         self,
-        _session_id: str,
+        session_id: str,
         _auth_context: Any,
     ):
         if self.context_error is not None:
             raise self.context_error
+        self.context_sessions.append(session_id)
         yield self.connection
 
 
@@ -202,6 +204,84 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
         is CapabilityProbeStatus.SUPPORTED
     )
     assert connection.statements.count("SELECT @@version_comment;") == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_probes_isolate_an_unsupported_source_connection() -> None:
+    base_connection = _ProbeConnection()
+
+    class _PoisoningConnection(_ProbeConnection):
+        def __init__(self, *, fail_load: bool) -> None:
+            super().__init__()
+            self.fail_load = fail_load
+            self.poisoned = False
+
+        async def execute(
+            self,
+            sql: str,
+            *_args: Any,
+            **_kwargs: Any,
+        ) -> SimpleNamespace:
+            if self.poisoned:
+                raise ConnectionError("connection was poisoned")
+            if self.fail_load and sql == "SHOW LOAD LIMIT 1":
+                self.poisoned = True
+                raise RuntimeError(1064, "unsupported statement")
+            return await super().execute(sql, *_args, **_kwargs)
+
+    class _IsolatingManager(_ProbeConnectionManager):
+        def __init__(self) -> None:
+            super().__init__(base_connection)
+            self.domain_connections: list[_PoisoningConnection] = []
+
+        @asynccontextmanager
+        async def get_connection_context_for_auth_context(
+            self,
+            session_id: str,
+            _auth_context: Any,
+        ):
+            self.context_sessions.append(session_id)
+            if not session_id.startswith("capability-domain:doris_pipeline:"):
+                yield self.connection
+                return
+            connection = _PoisoningConnection(
+                fail_load=":0:" in session_id,
+            )
+            self.domain_connections.append(connection)
+            yield connection
+
+    manager = _IsolatingManager()
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    pipeline = await detector.detect_domain(base, "doris_pipeline", None)
+
+    assert (
+        pipeline.probe("batch_load_metadata_readable").status
+        is CapabilityProbeStatus.UNSUPPORTED
+    )
+    assert (
+        pipeline.probe("stream_load_metadata_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        pipeline.probe("stream_broker_routine_load_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        pipeline.probe("ingestion_status_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        pipeline.probe("materialized_view_tasks_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert len(manager.domain_connections) == 7
+    assert len({id(connection) for connection in manager.domain_connections}) == 7
 
 
 @pytest.mark.asyncio

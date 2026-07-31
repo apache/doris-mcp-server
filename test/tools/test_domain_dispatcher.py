@@ -523,13 +523,17 @@ async def test_manifest_version_unavailable_and_unbound_fail_closed() -> None:
             },
         )
     )
-    unbound_manager = _manager("doris_pipeline.get_ingestion_status")
+    unbound_manager = _manager("doris_search.search_data")
     unbound = json.loads(
         await unbound_manager.call_tool(
-            "doris_pipeline",
+            "doris_search",
             {
-                "child_tool": "get_ingestion_status",
-                "arguments": {},
+                "child_tool": "search_data",
+                "arguments": {
+                    "database": "analytics",
+                    "table": "events",
+                    "mode": "text",
+                },
             },
         )
     )
@@ -541,6 +545,51 @@ async def test_manifest_version_unavailable_and_unbound_fail_closed() -> None:
     )
     assert unavailable["error"]["details"]["reason_code"] == ("TEST_HANDLER_PENDING")
     assert unbound["error"]["details"]["reason_code"] == "HANDLER_NOT_BOUND"
+
+
+@pytest.mark.asyncio
+async def test_formal_pipeline_handler_overrides_legacy_migration_binding() -> None:
+    manager = _manager("doris_pipeline.monitor_data_freshness")
+    formal_result = {
+        "status": "success",
+        "data": {
+            "database": "analytics",
+            "table": "orders",
+            "status": "fresh",
+        },
+        "warnings": [],
+        "metadata": {"source": "partition_visible_version"},
+        "evidence": [],
+    }
+    manager.pipeline_runtime.monitor_data_freshness = AsyncMock(
+        return_value=formal_result
+    )
+    manager.data_governance_tools.monitor_data_freshness = AsyncMock(
+        side_effect=AssertionError("legacy Pipeline handler must not run")
+    )
+
+    response = json.loads(
+        await manager.call_tool(
+            "doris_pipeline",
+            {
+                "child_tool": "monitor_data_freshness",
+                "arguments": {
+                    "database": "analytics",
+                    "table": "orders",
+                },
+            },
+        )
+    )
+
+    assert response["mode"] == "result"
+    assert response["data"] == formal_result
+    manager.pipeline_runtime.monitor_data_freshness.assert_awaited_once_with(
+        database="analytics",
+        table="orders",
+        threshold_seconds=None,
+        time_column=None,
+    )
+    manager.data_governance_tools.monitor_data_freshness.assert_not_awaited()
 
 
 @pytest.mark.asyncio

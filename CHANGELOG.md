@@ -51,6 +51,9 @@ under **Unreleased** until a new version is selected and published.
 - A read-only Cluster domain with eleven capability-gated children for node
   inventory, active tasks, metrics, memory, cache, compaction, workload and
   compute groups, recorded resource growth, and sanitized runtime evidence.
+- A read-only Pipeline domain with five capability-gated children for
+  ingestion status and diagnosis, materialized-view refresh state, recorded
+  table freshness, and bounded upstream or downstream dependency evidence.
 - Real Doris process tests covering Streamable HTTP and stdio.
 
 ### Changed
@@ -92,6 +95,9 @@ under **Unreleased** until a new version is selected and published.
 
 - Released failed capability-probe connections from their captured owner pools
   so a single-connection route cannot starve subsequent domain calls.
+- Isolated Doris domain probe statements in independent route-aware connection
+  contexts so one unsupported version-specific statement cannot poison later
+  capability evidence.
 - Excluded explicitly dead Doris components from active version gating while
   preserving them in node inventory, and kept live runtime manifests within
   the 16 KiB domain budget.
