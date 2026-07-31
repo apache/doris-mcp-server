@@ -215,6 +215,64 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
 
 
 @pytest.mark.asyncio
+async def test_lakehouse_probes_derive_target_sensitive_advanced_facets() -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.lakehouse",
+    )
+
+    lakehouse = await detector.detect_domain(base, "doris_lakehouse", None)
+
+    assert lakehouse.probed_domains == frozenset({"doris_lakehouse"})
+    for probe_id in (
+        "external_catalog_metadata_readable",
+        "lakehouse_table_metadata_readable",
+        "variant_column_type_readable",
+    ):
+        assert (
+            lakehouse.probe(probe_id).status
+            is CapabilityProbeStatus.SUPPORTED
+        )
+    for probe_id in (
+        "lakehouse_snapshot_features_readable",
+        "iceberg_deletion_vector",
+        "iceberg_row_lineage",
+    ):
+        evidence = lakehouse.probe(probe_id)
+        assert evidence.status is CapabilityProbeStatus.DEGRADED
+        assert (
+            evidence.reason_code
+            == "TARGET_LAKEHOUSE_FORMAT_REQUIRES_CALL_TIME_VALIDATION"
+        )
+    for probe_id in (
+        "variant_advanced_properties_readable",
+        "variant_sparse_sharding",
+        "variant_sparse_cache",
+        "variant_doc_mode",
+        "storage_v3",
+    ):
+        evidence = lakehouse.probe(probe_id)
+        assert evidence.status is CapabilityProbeStatus.DEGRADED
+        assert (
+            evidence.reason_code
+            == "TARGET_VARIANT_PROPERTIES_REQUIRE_CALL_TIME_VALIDATION"
+        )
+    assert "SHOW CATALOGS" in connection.statements
+    assert (
+        "SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME "
+        "FROM information_schema.tables LIMIT 1"
+    ) in connection.statements
+    assert (
+        "SELECT COLUMN_NAME, DATA_TYPE "
+        "FROM information_schema.columns LIMIT 1"
+    ) in connection.statements
+
+
+@pytest.mark.asyncio
 async def test_search_probes_use_visible_target_and_isolated_connections() -> None:
     connection = _ProbeConnection()
     connection.row_overrides[_SEARCH_TARGET_DISCOVERY_SQL] = [

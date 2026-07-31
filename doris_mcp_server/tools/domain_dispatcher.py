@@ -45,6 +45,7 @@ from ..state_handles import StateHandleCodec, StateHandleError
 from ..utils.catalog_metadata import CatalogMetadataFailure
 from ..utils.cluster_runtime import ClusterRuntimeFailure
 from ..utils.governance_runtime import GovernanceRuntimeFailure
+from ..utils.lakehouse_runtime import LakehouseRuntimeFailure
 from ..utils.logger import get_audit_logger, get_logger
 from ..utils.pipeline_runtime import PipelineRuntimeFailure
 from ..utils.query_runtime import QueryRuntimeFailure
@@ -723,6 +724,34 @@ class DomainDispatcher:
                         "GOVERNANCE_ARGUMENT_INVALID",
                         "GOVERNANCE_COLUMN_NOT_FOUND",
                         "GOVERNANCE_TABLE_NOT_FOUND",
+                    }
+                    else DomainErrorCode.CHILD_EXECUTION_FAILED
+                ),
+                str(exc),
+                child_tool=child.name,
+                manifest_version=manifest.manifest_version,
+                retryable=exc.retryable,
+                details={
+                    "rediscover": False,
+                    "reason_code": exc.reason_code,
+                    "status_code": exc.status_code,
+                },
+            )
+        except LakehouseRuntimeFailure as exc:
+            self._audit(feature_id, arguments, "error", started)
+            return self._error(
+                domain.name,
+                (
+                    DomainErrorCode.CHILD_ARGUMENTS_INVALID
+                    if exc.reason_code
+                    in {
+                        "LAKEHOUSE_ARGUMENT_INVALID",
+                        "LAKEHOUSE_CATALOG_NOT_FOUND",
+                        "LAKEHOUSE_CATALOG_NOT_EXTERNAL",
+                        "LAKEHOUSE_TABLE_NOT_FOUND",
+                        "LAKEHOUSE_TABLE_FORMAT_UNSUPPORTED",
+                        "LAKEHOUSE_VARIANT_COLUMN_NOT_FOUND",
+                        "LAKEHOUSE_COLUMN_NOT_VARIANT",
                     }
                     else DomainErrorCode.CHILD_EXECUTION_FAILED
                 ),

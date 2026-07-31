@@ -216,6 +216,71 @@ def test_governance_runtime_controls_load_serialize_and_validate(
     )
 
 
+def test_lakehouse_runtime_controls_load_serialize_and_validate(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("LAKEHOUSE_MAX_CATALOG_OBJECTS", "80")
+    monkeypatch.setenv("LAKEHOUSE_MAX_CATALOG_DATABASES", "30")
+    monkeypatch.setenv("LAKEHOUSE_MAX_SNAPSHOTS", "90")
+    monkeypatch.setenv("LAKEHOUSE_MAX_PARTITIONS", "150")
+    monkeypatch.setenv("LAKEHOUSE_MAX_VARIANT_SAMPLE_ROWS", "40")
+    monkeypatch.setenv("LAKEHOUSE_MAX_VARIANT_PATHS", "300")
+
+    configured = DorisConfig.from_env()
+
+    assert configured.to_dict()["lakehouse"] == {
+        "max_catalog_objects": 80,
+        "max_catalog_databases": 30,
+        "max_snapshots": 90,
+        "max_partitions": 150,
+        "max_variant_sample_rows": 40,
+        "max_variant_paths": 300,
+    }
+    assert configured.validate() == []
+
+    config_path = tmp_path / "doris-mcp.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "lakehouse": {
+                    "max_catalog_objects": 75,
+                    "max_catalog_databases": 25,
+                    "max_snapshots": 85,
+                    "max_partitions": 140,
+                    "max_variant_sample_rows": 35,
+                    "max_variant_paths": 250,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    from_file = DorisConfig.from_file(str(config_path))
+    assert from_file.lakehouse.max_catalog_objects == 75
+    assert from_file.lakehouse.max_catalog_databases == 25
+    assert from_file.lakehouse.max_snapshots == 85
+    assert from_file.lakehouse.max_partitions == 140
+    assert from_file.lakehouse.max_variant_sample_rows == 35
+    assert from_file.lakehouse.max_variant_paths == 250
+
+    from_file.lakehouse.max_catalog_objects = 0
+    from_file.lakehouse.max_catalog_databases = 101
+    from_file.lakehouse.max_snapshots = 501
+    from_file.lakehouse.max_partitions = 1001
+    from_file.lakehouse.max_variant_sample_rows = 501
+    from_file.lakehouse.max_variant_paths = 2001
+    errors = from_file.validate()
+    assert "Lakehouse catalog object limit must be in the range 1-500" in errors
+    assert (
+        "Lakehouse catalog database limit must be in the range 1-100"
+        in errors
+    )
+    assert "Lakehouse snapshot limit must be in the range 1-500" in errors
+    assert "Lakehouse partition limit must be in the range 1-1000" in errors
+    assert "Lakehouse Variant sample limit must be in the range 1-500" in errors
+    assert "Lakehouse Variant path limit must be in the range 1-2000" in errors
+
+
 def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
     monkeypatch,
 ):
@@ -264,6 +329,17 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.capability.snapshot_ttl_seconds = 120
     config.capability.probe_timeout_seconds = 7
     config.capability.stale_grace_seconds = 480
+    config.governance.max_sample_ratio = 0.15
+    config.governance.max_audit_window_days = 45
+    config.governance.max_lineage_edges = 750
+    config.governance.lineage_store_table = "governance.lineage_events"
+    config.governance.lineage_recent_event_minutes = 180
+    config.lakehouse.max_catalog_objects = 80
+    config.lakehouse.max_catalog_databases = 30
+    config.lakehouse.max_snapshots = 90
+    config.lakehouse.max_partitions = 150
+    config.lakehouse.max_variant_sample_rows = 40
+    config.lakehouse.max_variant_paths = 300
     config.mcp_state_handle_secret = "parent-shared-state-handle-secret-value"
     config.mcp_state_handle_ttl_seconds = 45
 
@@ -305,6 +381,20 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.capability.snapshot_ttl_seconds == 120
     assert child_config.capability.probe_timeout_seconds == 7
     assert child_config.capability.stale_grace_seconds == 480
+    assert child_config.governance.max_sample_ratio == 0.15
+    assert child_config.governance.max_audit_window_days == 45
+    assert child_config.governance.max_lineage_edges == 750
+    assert (
+        child_config.governance.lineage_store_table
+        == "governance.lineage_events"
+    )
+    assert child_config.governance.lineage_recent_event_minutes == 180
+    assert child_config.lakehouse.max_catalog_objects == 80
+    assert child_config.lakehouse.max_catalog_databases == 30
+    assert child_config.lakehouse.max_snapshots == 90
+    assert child_config.lakehouse.max_partitions == 150
+    assert child_config.lakehouse.max_variant_sample_rows == 40
+    assert child_config.lakehouse.max_variant_paths == 300
     assert (
         child_config.mcp_state_handle_secret
         == "parent-shared-state-handle-secret-value"

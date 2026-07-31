@@ -138,6 +138,51 @@ def test_search_prefers_vector_hybrid_and_keeps_text_fallback() -> None:
     assert text.callable_when_degraded is True
 
 
+def test_lakehouse_prefers_4_1_capabilities_and_keeps_baseline_fallbacks() -> None:
+    table_feature = DORIS_FEATURE_MATRIX.get_feature(
+        "doris_lakehouse",
+        "inspect_lakehouse_table",
+    )
+    variant_feature = DORIS_FEATURE_MATRIX.get_feature(
+        "doris_lakehouse",
+        "inspect_variant_column",
+    )
+
+    assert tuple(
+        variant.name for variant in table_feature.support_contract.variants
+    ) == (
+        "lakehouse_lifecycle_4_1",
+        "lakehouse_table_metadata",
+    )
+    table_advanced, table_baseline = table_feature.support_contract.variants
+    assert table_advanced.supported_ranges == (">=4.1.0",)
+    assert table_advanced.required_features == (
+        "iceberg_deletion_vector",
+        "iceberg_row_lineage",
+    )
+    assert table_advanced.callable_when_degraded is True
+    assert table_baseline.supported_ranges == (">=3.0.0",)
+
+    assert tuple(
+        variant.name for variant in variant_feature.support_contract.variants
+    ) == (
+        "variant_advanced_4_1",
+        "variant_type",
+    )
+    variant_advanced, variant_baseline = (
+        variant_feature.support_contract.variants
+    )
+    assert variant_advanced.supported_ranges == (">=4.1.0",)
+    assert variant_advanced.required_features == (
+        "variant_sparse_sharding",
+        "variant_sparse_cache",
+        "variant_doc_mode",
+        "storage_v3",
+    )
+    assert variant_advanced.callable_when_degraded is True
+    assert variant_baseline.supported_ranges == (">=3.0.0",)
+
+
 def test_every_contract_is_fail_closed_and_has_resolvable_sources() -> None:
     known_sources = {source.source_id for source in DORIS_FEATURE_MATRIX.sources}
 

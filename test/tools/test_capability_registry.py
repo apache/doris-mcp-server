@@ -263,6 +263,113 @@ def test_compaction_prefers_native_tracker_and_uses_legacy_on_405() -> None:
     )
 
 
+def test_lakehouse_prefers_4_1_variants_and_falls_back_on_4_0() -> None:
+    bound = _BoundHandlers(
+        "doris_lakehouse.inspect_lakehouse_table",
+        "doris_lakehouse.inspect_variant_column",
+    )
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=bound,  # type: ignore[arg-type]
+    )
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_lakehouse")
+    table_child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_lakehouse",
+        "inspect_lakehouse_table",
+    )
+    variant_child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_lakehouse",
+        "inspect_variant_column",
+    )
+    probes = {
+        "lakehouse_table_metadata_readable": CapabilityProbeEvidence(
+            probe_id="lakehouse_table_metadata_readable",
+            status=CapabilityProbeStatus.SUPPORTED,
+            reason_code="TEST_BASELINE_METADATA",
+        ),
+        "variant_column_type_readable": CapabilityProbeEvidence(
+            probe_id="variant_column_type_readable",
+            status=CapabilityProbeStatus.SUPPORTED,
+            reason_code="TEST_BASELINE_VARIANT",
+        ),
+        **{
+            probe_id: CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=CapabilityProbeStatus.DEGRADED,
+                reason_code="TEST_CALL_TIME_TARGET_VALIDATION",
+            )
+            for probe_id in (
+                "lakehouse_snapshot_features_readable",
+                "iceberg_deletion_vector",
+                "iceberg_row_lineage",
+                "variant_advanced_properties_readable",
+                "variant_sparse_sharding",
+                "variant_sparse_cache",
+                "variant_doc_mode",
+                "storage_v3",
+            )
+        },
+    }
+    providers = CapabilityProviderRegistry(
+        {
+            "external_catalog_provider": CapabilityProviderEvidence(
+                provider_id="external_catalog_provider",
+                status=CapabilityProbeStatus.SUPPORTED,
+                reason_code="PROVIDER_CONFIGURED",
+            )
+        }
+    ).snapshot()
+    snapshot_405 = _snapshot(probes=probes)
+    snapshot_410 = replace(
+        snapshot_405,
+        version_vector=DorisClusterVersionVector.from_comments(
+            master_fe="Doris version doris-4.1.0",
+            follower_fes=("Doris version doris-4.1.0",),
+            backends=("Doris version doris-4.1.0",),
+        ),
+    )
+
+    table_405 = evaluator.evaluate(
+        snapshot=snapshot_405,
+        providers=providers,
+        domain=domain,
+        child=table_child,
+        auth_context=None,
+    )
+    table_410 = evaluator.evaluate(
+        snapshot=snapshot_410,
+        providers=providers,
+        domain=domain,
+        child=table_child,
+        auth_context=None,
+    )
+    variant_405 = evaluator.evaluate(
+        snapshot=snapshot_405,
+        providers=providers,
+        domain=domain,
+        child=variant_child,
+        auth_context=None,
+    )
+    variant_410 = evaluator.evaluate(
+        snapshot=snapshot_410,
+        providers=providers,
+        domain=domain,
+        child=variant_child,
+        auth_context=None,
+    )
+
+    assert table_405.active_variant == "lakehouse_table_metadata"
+    assert table_405.status is AvailabilityStatus.AVAILABLE
+    assert table_410.active_variant == "lakehouse_lifecycle_4_1"
+    assert table_410.status is AvailabilityStatus.DEGRADED
+    assert table_410.callable is True
+    assert variant_405.active_variant == "variant_type"
+    assert variant_405.status is AvailabilityStatus.AVAILABLE
+    assert variant_410.active_variant == "variant_advanced_4_1"
+    assert variant_410.status is AvailabilityStatus.DEGRADED
+    assert variant_410.callable is True
+
+
 def test_evaluator_normalizes_system_object_probe_evidence_for_manifest() -> None:
     evaluator = CapabilityEvaluator(
         matrix=DORIS_FEATURE_MATRIX,
@@ -416,6 +523,32 @@ def test_builtin_query_evidence_providers_are_ready_when_bound() -> None:
     )
     assert providers["audit_log_provider"].status is CapabilityProbeStatus.SUPPORTED
     assert providers["query_evidence_provider"].reason_code == ("PROVIDER_CONFIGURED")
+
+
+def test_external_catalog_provider_is_ready_only_when_lakehouse_is_bound() -> None:
+    bound_registry = CapabilityProviderRegistry.from_runtime(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(  # type: ignore[arg-type]
+            "doris_lakehouse.inspect_external_catalog",
+            "doris_lakehouse.inspect_lakehouse_table",
+        ),
+        config=SimpleNamespace(adbc=SimpleNamespace(enabled=False)),
+    )
+    unbound_registry = CapabilityProviderRegistry.from_runtime(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(),  # type: ignore[arg-type]
+        config=SimpleNamespace(adbc=SimpleNamespace(enabled=False)),
+    )
+
+    bound = bound_registry.snapshot().providers["external_catalog_provider"]
+    unbound = unbound_registry.snapshot().providers[
+        "external_catalog_provider"
+    ]
+
+    assert bound.status is CapabilityProbeStatus.SUPPORTED
+    assert bound.reason_code == "PROVIDER_CONFIGURED"
+    assert unbound.status is CapabilityProbeStatus.MISCONFIGURED
+    assert unbound.reason_code == "PROVIDER_NOT_CONFIGURED"
 
 
 class _MutableClock:

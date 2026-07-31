@@ -107,6 +107,11 @@ GOVERNANCE_CHILD_NAMES = (
     "list_udfs",
     "get_auth_mapping_status",
 )
+LAKEHOUSE_CHILD_NAMES = (
+    "inspect_external_catalog",
+    "inspect_lakehouse_table",
+    "inspect_variant_column",
+)
 
 
 @dataclass(frozen=True)
@@ -141,6 +146,18 @@ class DorisSearchSandbox:
     settings: RealDorisSettings
     admin_connection: pymysql.Connection
     table: str
+
+    @property
+    def qualified_table(self) -> str:
+        return f"`{self.settings.database}`.`{self.table}`"
+
+
+@dataclass
+class DorisVariantSandbox:
+    settings: RealDorisSettings
+    admin_connection: pymysql.Connection
+    table: str
+    marker: str
 
     @property
     def qualified_table(self) -> str:
@@ -279,6 +296,70 @@ def doris_search_sandbox() -> DorisSearchSandbox:
             settings=settings,
             admin_connection=admin_connection,
             table=table,
+        )
+    finally:
+        with suppress(Exception), admin_connection.cursor() as cursor:
+            cursor.execute(f"DROP TABLE IF EXISTS {qualified_table}")
+        admin_connection.close()
+
+
+@pytest.fixture
+def doris_variant_sandbox() -> DorisVariantSandbox:
+    settings = _real_doris_settings()
+    table = f"mcp_variant_it_{secrets.token_hex(6)}"
+    marker = secrets.token_hex(12)
+    qualified_table = f"`{settings.database}`.`{table}`"
+    admin_connection = pymysql.connect(
+        host=settings.host,
+        port=settings.port,
+        user=settings.user,
+        password=settings.password,
+        database=settings.database,
+        autocommit=True,
+    )
+
+    try:
+        with admin_connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                CREATE TABLE {qualified_table} (
+                    id BIGINT,
+                    payload VARIANT
+                )
+                DUPLICATE KEY(id)
+                DISTRIBUTED BY HASH(id) BUCKETS 1
+                PROPERTIES ("replication_num" = "1")
+                """
+            )
+            cursor.executemany(
+                f"INSERT INTO {qualified_table} VALUES (%s, %s)",
+                [
+                    (
+                        1,
+                        json.dumps(
+                            {
+                                "profile": {"age": 42},
+                                "private_marker": marker,
+                            }
+                        ),
+                    ),
+                    (
+                        2,
+                        json.dumps(
+                            {
+                                "profile": {"age": 43},
+                                "private_marker": marker,
+                            }
+                        ),
+                    ),
+                ],
+            )
+
+        yield DorisVariantSandbox(
+            settings=settings,
+            admin_connection=admin_connection,
+            table=table,
+            marker=marker,
         )
     finally:
         with suppress(Exception), admin_connection.cursor() as cursor:
@@ -1709,6 +1790,98 @@ async def test_real_doris_hierarchical_governance_domain_is_read_only_and_live(
 
     with doris_sandbox.admin_connection.cursor() as cursor:
         cursor.execute(f"SELECT COUNT(*) FROM {doris_sandbox.qualified_table}")
+        row_count_after = int(cursor.fetchone()[0])
+    assert row_count_after == row_count_before
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_hierarchical_lakehouse_domain_is_read_only_and_live(
+    transport: str,
+    doris_variant_sandbox: DorisVariantSandbox,
+) -> None:
+    environment = _server_environment(
+        doris_variant_sandbox.settings,
+        user=doris_variant_sandbox.settings.user,
+        password=doris_variant_sandbox.settings.password,
+    )
+    environment["MCP_TOOL_EXPOSURE_MODE"] = "hierarchical"
+    with doris_variant_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {doris_variant_sandbox.qualified_table}"
+        )
+        row_count_before = int(cursor.fetchone()[0])
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        lakehouse_result = await client.call_tool("doris_lakehouse", {})
+        assert lakehouse_result.is_error is False
+        assert isinstance(lakehouse_result.structured_content, dict)
+        manifest = lakehouse_result.structured_content
+        assert manifest["mode"] == "manifest"
+        assert manifest["domain"] == "doris_lakehouse"
+        children = {child["name"]: child for child in manifest["children"]}
+        assert tuple(children) == LAKEHOUSE_CHILD_NAMES
+        assert all(
+            child["availability"]["callable"]
+            for child in children.values()
+        )
+        manifest_version = manifest["manifest_version"]
+
+        variant = await _call_domain_child(
+            client,
+            domain="doris_lakehouse",
+            child_tool="inspect_variant_column",
+            arguments={
+                "database": doris_variant_sandbox.settings.database,
+                "table": doris_variant_sandbox.table,
+                "column": "payload",
+                "path": "$.profile.age",
+                "sample_rows": 10,
+            },
+            manifest_version=manifest_version,
+        )
+        assert variant["data"]["shape_sample"]["rows_observed"] == 2
+        assert variant["data"]["shape_sample"]["paths"] == [
+            {
+                "path": "$.profile.age",
+                "types": [{"type": "BIGINT", "rows": 2}],
+                "rows_observed": 2,
+                "presence_ratio": 1.0,
+            }
+        ]
+        assert (
+            variant["data"]["advanced_capabilities"][
+                "storage_v3_supported"
+            ]
+            is False
+        )
+        assert variant["metadata"]["sampled_values_returned"] is False
+        assert doris_variant_sandbox.marker not in json.dumps(
+            variant,
+            ensure_ascii=False,
+        )
+
+        internal_catalog = await client.call_tool(
+            "doris_lakehouse",
+            {
+                "child_tool": "inspect_external_catalog",
+                "arguments": {"catalog": "internal"},
+                "manifest_version": manifest_version,
+            },
+        )
+        assert internal_catalog.is_error is True
+        assert doris_variant_sandbox.marker not in json.dumps(
+            internal_catalog.model_dump(by_alias=True, mode="json"),
+            ensure_ascii=False,
+        )
+
+    with doris_variant_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {doris_variant_sandbox.qualified_table}"
+        )
         row_count_after = int(cursor.fetchone()[0])
     assert row_count_after == row_count_before
 
