@@ -1262,6 +1262,45 @@ async def test_real_doris_tool_regression_paths(
         assert recovered_payload["data"][0]["recovered"] == 1
 
 
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_flat_tool_list_stays_bounded_and_callable(
+    transport: str,
+) -> None:
+    settings = _real_doris_settings()
+    environment = _server_environment(
+        settings,
+        user=settings.user,
+        password=settings.password,
+    )
+    environment["MCP_TOOL_EXPOSURE_MODE"] = "flat"
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        tools = {
+            tool.name: tool
+            for tool in (await client.list_tools(cache_mode="bypass")).tools
+        }
+        assert len(tools) == 47
+        assert "doris_query_execute_query" in tools
+
+        result = await client.call_tool(
+            "doris_query_execute_query",
+            {
+                "sql": "SELECT @@version_comment",
+                "max_rows": 1,
+            },
+        )
+        assert result.is_error is False
+        assert isinstance(result.structured_content, dict)
+        assert "4.0.5-rc01" in json.dumps(
+            result.structured_content,
+            ensure_ascii=False,
+        )
+
+
 @pytest.mark.skipif(
     os.getenv("DORIS_REAL_HTTP_INTEGRATION") != "1",
     reason="set DORIS_REAL_HTTP_INTEGRATION=1 with independent FE/BE HTTP endpoints",

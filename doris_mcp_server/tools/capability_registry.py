@@ -235,7 +235,11 @@ class CapabilityEvaluator:
         child: ChildToolDefinition,
         auth_context: Any | None,
     ) -> Availability:
-        detected_versions = _detected_versions(snapshot)
+        feature = self._matrix.get_feature(domain.name, child.name)
+        detected_versions = _detected_versions(
+            snapshot,
+            feature.version_scope,
+        )
         if not self._bound_handlers.is_bound(domain.name, child.name):
             return Availability(
                 status=AvailabilityStatus.UNKNOWN,
@@ -248,7 +252,6 @@ class CapabilityEvaluator:
                 ),
             )
 
-        feature = self._matrix.get_feature(domain.name, child.name)
         if (
             snapshot.mixed_versions
             and feature.version_scope
@@ -890,6 +893,7 @@ def _unknown_snapshot(
 
 def _detected_versions(
     snapshot: DorisCapabilitySnapshot,
+    scope: CapabilityVersionScope,
 ) -> dict[str, tuple[str, ...]]:
     def values(versions: tuple[Any, ...]) -> tuple[str, ...]:
         return tuple(
@@ -904,11 +908,25 @@ def _detected_versions(
     master = values((snapshot.version_vector.master_fe,))
     followers = values(snapshot.version_vector.follower_fes)
     backends = values(snapshot.version_vector.backends)
-    if master:
+    include_master = scope in {
+        CapabilityVersionScope.MASTER_FE,
+        CapabilityVersionScope.ALL_FE,
+        CapabilityVersionScope.ALL_COMPONENTS,
+        CapabilityVersionScope.PROVIDER_WITH_MASTER_FE_BASELINE,
+    }
+    include_followers = scope in {
+        CapabilityVersionScope.ALL_FE,
+        CapabilityVersionScope.ALL_COMPONENTS,
+    }
+    include_backends = scope in {
+        CapabilityVersionScope.ALL_BE,
+        CapabilityVersionScope.ALL_COMPONENTS,
+    }
+    if include_master and master:
         detected["master_fe"] = master
-    if followers:
+    if include_followers and followers:
         detected["follower_fe"] = followers
-    if backends:
+    if include_backends and backends:
         detected["be"] = backends
     return detected
 

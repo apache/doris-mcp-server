@@ -152,6 +152,9 @@ under **Unreleased** until a new version is selected and published.
 - Excluded explicitly dead Doris components from active version gating while
   preserving them in node inventory, and kept live runtime manifests within
   the 16 KiB domain budget.
+- Limited public detected-version evidence to each child's actual Doris
+  component scope, preventing real Cluster manifests from overflowing the
+  16 KiB budget and breaking Flat-mode `tools/list`.
 - Preserved service availability after malformed requests, unknown methods,
   header mismatches, unsupported versions, and missing capabilities.
 - Kept static-token Doris pools usable after repeated query timeouts, and
