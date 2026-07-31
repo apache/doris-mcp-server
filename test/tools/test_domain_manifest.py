@@ -332,6 +332,36 @@ async def test_realistic_runtime_evidence_stays_within_manifest_budget() -> None
 
 
 @pytest.mark.asyncio
+async def test_fully_available_semantic_manifest_stays_within_budget() -> None:
+    provider = StaticAvailabilityProvider(
+        _availability(
+            status=AvailabilityStatus.AVAILABLE,
+            reason_code="CAPABILITY_VERIFIED",
+            active_variant="metricflow_compile_mcp_execute",
+            detected_versions={
+                "master_fe": ("4.0.5",),
+                "be": ("4.0.5",),
+            },
+            evidence_sources=(
+                "version_probe",
+                "sql_probe",
+                "provider_config",
+                "metricflow_provider_protocol_ready",
+            ),
+        )
+    )
+
+    manifest = await _service(provider).call("doris_semantic", {}, None)
+
+    assert len(manifest.children) == 12
+    assert all(child.availability.callable for child in manifest.children)
+    assert (
+        len(manifest.to_canonical_json().encode("utf-8"))
+        <= MAX_DOMAIN_MANIFEST_BYTES
+    )
+
+
+@pytest.mark.asyncio
 async def test_explicit_child_grants_hide_every_unauthorized_child() -> None:
     provider = StaticAvailabilityProvider(_availability())
     context = AuthContext(
@@ -479,7 +509,7 @@ async def test_authorized_unavailable_children_remain_discoverable() -> None:
         None,
     )
 
-    assert len(manifest.children) == 4
+    assert len(manifest.children) == 12
     assert all(not child.availability.callable for child in manifest.children)
     assert all(
         child.description.startswith(
@@ -504,6 +534,29 @@ async def test_public_version_support_omits_internal_execution_contracts() -> No
     assert '"required_providers"' not in serialized
     assert '"handler_name"' not in serialized
     assert '"authorization_policy"' not in serialized
+
+
+@pytest.mark.asyncio
+async def test_public_manifest_compacts_prose_but_preserves_input_constraints() -> None:
+    manifest = await _service().call("doris_semantic", {}, None)
+    execute = next(
+        child for child in manifest.children if child.name == "execute_metricflow_query"
+    )
+    schema = execute.to_wire()["input_schema"]
+
+    assert "description" not in json.dumps(schema)
+    assert schema["required"] == ["model_ref", "request"]
+    assert schema["properties"]["model_ref"] == {"type": "string"}
+    assert schema["properties"]["request"]["oneOf"]
+    assert schema["properties"]["max_rows"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100_000,
+    }
+    assert execute.to_wire()["output_schema"] == {"type": "object"}
+    assert (
+        len(manifest.to_canonical_json().encode("utf-8")) <= MAX_DOMAIN_MANIFEST_BYTES
+    )
 
 
 @pytest.mark.asyncio

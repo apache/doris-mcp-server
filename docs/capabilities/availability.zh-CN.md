@@ -28,10 +28,10 @@ under the License.
 
 Availability 综合以下条件：
 
-1. **Catalog 合同**——Child 存在于经过审查的 8/47 目录。
+1. **Catalog 合同**——Child 存在于经过审查的 8/55 目录。
 2. **归一化版本**——相关活动 Doris 组件满足声明的 `major.minor.patch` 范围。
 3. **实时特性 Probe**——必需 SQL 元数据、系统表、函数或允许的 HTTP 端点可见。
-4. **Provider 就绪**——可选 ADBC、Ossie 或 Lineage Provider 已配置且健康。
+4. **Provider 就绪**——可选 ADBC、Ossie、MetricFlow 或 Lineage Provider 已配置且健康。
 5. **部署模式**——所需 Classic/Cloud/Compute 行为兼容。
 6. **路由一致性**——活动组件版本和请求路由可以安全评估；未知或混合证据可能
    Fail Closed。
@@ -110,6 +110,8 @@ Host 与应用必须读取结构化对象。
 - 必需系统表或函数不存在；
 - Provider 未启用或不健康；
 - Companion Lineage Store 不完整；
+- MetricFlow 未启用、Sidecar 不健康或无法编译 Doris SQL；
+- 虽然配置了 ADBC，但用户没有明确指定 ADBC；
 - 路由存在混合或未知组件版本；
 - Doris 身份看不到必需元数据；
 - 配置缺失或无效。
@@ -131,7 +133,7 @@ Host 与应用必须读取结构化对象。
 Hierarchical 模式在领域发现时解析 Availability。Flat 模式也会先从当前授权
 Manifest 获取每个正式 Child，再放入 `tools/list`。两者因此共用：
 
-- 同样的 47 个 Child；
+- 同样的 55 个 Child；
 - 同样的精确 Scope；
 - 同样的动态 Availability；
 - 同样的 Schema 与 Dispatcher；
@@ -144,10 +146,15 @@ Flat 是 Host 兼容回退，不是能力绕过。
 Release Certification 记录命名 Doris Patch 上收集的证据；Runtime Support 则
 针对实际连接路由判断。
 
-1.0 目标集合为 `3.0.3`、`3.1.4`、`4.0.5`、`4.0.6`、`4.0.7`、
-`4.1.0`、`4.1.1`、`4.1.2`、`4.1.3`。发布边界上，`4.0.5` 是首个
+项目基线为 Doris `2.0.0+`。1.0 目标集合为 `2.0.15`、`2.1.11`、
+`3.0.3`、`3.1.4`、`4.0.5`、`4.0.6`、`4.0.7`、`4.1.0`、`4.1.1`、
+`4.1.2`、`4.1.3`。发布边界上，`4.0.5` 是首个
 完整认证目标。`target_uncertified` 不等于必然不可用；运行时 Manifest 仍然是
 该连接集群上观察到的权威结果。
+
+基线不表示 2.0 可以调用所有 Child。后续版本才出现的功能仍然可发现，但会以
+`callable=false`、稳定 Reason Code 以及所需版本/Provider/Probe 证据说明原因。
+Release Note 映射见 [Doris 版本能力矩阵](doris-version-matrix.zh-CN.md)。
 
 ## 示例：血缘路径选择
 
@@ -162,6 +169,16 @@ Release Certification 记录命名 Doris Patch 上收集的证据；Runtime Supp
 
 这也是所有版本/Provider 相关 Child 的设计模式：说明实际证据路径，不根据版本
 单独推定成功，也不把一种证据静默冒充另一种证据。
+
+## 示例：ADBC 选择
+
+- Doris 2.0 路由仍能发现两个 ADBC Child，但不可调用；
+- Doris 2.1.0 引入 Arrow Flight SQL；2.1.0-2.1.4 会标为 Degraded，因为后续
+  2.1 Patch 修复了空结果与元数据行为；
+- 所有符合版本的路由仍必须通过 Provider 安装、Flight Endpoint 配置和实时探测；
+- 调用还必须传 `explicit_adbc=true`，表示终端用户明确指定了 ADBC 或 Arrow
+  Flight SQL；
+- 普通 SQL 请求始终使用 `doris_query.execute_query`。
 
 ## 操作人员检查清单
 

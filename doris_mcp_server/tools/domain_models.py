@@ -362,7 +362,10 @@ class DomainDefinition(ContractModel):
     title: NonEmptyText
     description: NonEmptyText
     annotations: ToolContractAnnotations
-    children: Annotated[tuple[ChildToolDefinition, ...], Field(min_length=1)]
+    children: Annotated[
+        tuple[ChildToolDefinition, ...],
+        Field(min_length=1, max_length=12),
+    ]
     enablement_policy: BindingName
     discovery_policy: BindingName
     max_manifest_bytes: Annotated[

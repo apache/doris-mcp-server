@@ -134,7 +134,10 @@ class DorisToolsManager(
         )
         self._initialize_governance_handlers(connection_manager)
         self._initialize_lakehouse_handlers(connection_manager)
-        self._initialize_semantic_handlers(connection_manager)
+        self._initialize_semantic_handlers(
+            connection_manager,
+            self.query_runtime,
+        )
         self._capability_registry: CapabilityRegistry | None = None
         if domain_availability_provider is None:
             bound_handlers = BoundHandlerAvailabilityProvider(self)

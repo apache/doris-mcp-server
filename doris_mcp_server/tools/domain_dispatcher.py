@@ -337,7 +337,7 @@ class DomainDispatcher:
 
     @property
     def formal_flat_names(self) -> tuple[str, ...]:
-        """Return all 47 formal flat names in catalog order."""
+        """Return all formal flat names in catalog order."""
         return tuple(self._flat_children)
 
     def handles_flat(self, name: str) -> bool:

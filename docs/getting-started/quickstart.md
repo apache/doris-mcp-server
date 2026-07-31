@@ -28,7 +28,7 @@ addresses and placeholder credentials.
 ## 1. Prerequisites
 
 - Python 3.12 or later.
-- Apache Doris 3.0.0 or later.
+- Apache Doris 2.0.0 or later. Later-version features are filtered dynamically.
 - FE MySQL endpoint access, normally port `9030`.
 - FE HTTP endpoint access, normally port `8030`, for profile and selected
   operational capabilities.
@@ -158,7 +158,7 @@ Hosts without progressive-disclosure support may set:
 export MCP_TOOL_EXPOSURE_MODE=flat
 ```
 
-Restart the Server and reconnect the Host. Flat mode exposes the same 47
+Restart the Server and reconnect the Host. Flat mode exposes the same 55
 children under formal names such as `doris_catalog_list_tables`.
 
 ## 7. Verify the installation

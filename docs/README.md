@@ -50,9 +50,11 @@ migration, and release concerns.
 
 ## Capabilities
 
-- [Tool domains](capabilities/tool-domains.md) — the 8-domain/47-child contract.
+- [Tool domains](capabilities/tool-domains.md) — the 8-domain/55-child contract.
 - [Capability availability](capabilities/availability.md) — version parsing,
   probes, providers, permissions, manifests, and fail-closed behavior.
+- [Doris version capability matrix](capabilities/doris-version-matrix.md) —
+  the 2.0+ baseline and release-aware feature gates.
 - [Generated tool registry](tool-registry.md) — authoritative generated names,
   handler bindings, authorization identifiers, variants, and migration inputs.
 
@@ -82,6 +84,7 @@ migration, and release concerns.
 
 - [Configuration reference](reference/configuration.md)
 - [Host integrations](integrations/hosts.md)
+- [MetricFlow integration](integrations/metricflow.md)
 - [Custom tool providers](custom-tool-providers.md)
 
 ## Development, migration, and releases

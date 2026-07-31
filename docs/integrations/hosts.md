@@ -90,7 +90,7 @@ After restart and reconnect, `tools/list` returns formal names such as:
 - `doris_query_execute_query`
 - `doris_cluster_get_cluster_overview`
 
-Flat mode exposes the same authorized 47-child catalog and availability. It
+Flat mode exposes the same authorized 55-child catalog and availability. It
 does not provide pre-1.0 aliases, dynamic registration, or a security bypass.
 The context cost is higher, so hierarchical mode is preferred.
 
@@ -194,17 +194,17 @@ Hosts should:
 | feed discovered child schemas to model | required | not required |
 | handle structured content | recommended | recommended |
 | handle stale-manifest rediscovery | required | not normally sent by flat call |
-| context budget for 47 tools | not required | required |
+| context budget for 55 tools | not required | required |
 | restart after exposure-mode change | required | required |
 
-If a Host cannot consume progressive manifests and also cannot accommodate 47
+If a Host cannot consume progressive manifests and also cannot accommodate 55
 bounded formal tools, it is not currently compatible with the full 1.0 tool
 surface. Do not solve this by probabilistic Server-side routing.
 
 ## Host test sequence
 
 1. Confirm `server/discover` identity/version.
-2. Confirm `tools/list` returns 8 domains (hierarchical) or 47 formal children
+2. Confirm `tools/list` returns 8 domains (hierarchical) or 55 formal children
    before authorization filtering (flat contract baseline).
 3. Discover Catalog and call `list_tables`.
 4. Switch to Cluster in the same conversation and call overview/capabilities.

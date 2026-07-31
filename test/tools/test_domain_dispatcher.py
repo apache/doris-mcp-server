@@ -129,12 +129,12 @@ def test_exposure_mode_and_flat_name_are_exact() -> None:
         ToolExposureMode.parse("legacy")
 
 
-def test_dispatcher_registers_exactly_47_formal_flat_names() -> None:
+def test_dispatcher_registers_exactly_55_formal_flat_names() -> None:
     manager = _manager()
     names = manager.domain_dispatcher.formal_flat_names
 
-    assert len(names) == 47
-    assert len(set(names)) == 47
+    assert len(names) == 55
+    assert len(set(names)) == 55
     assert "doris_query_execute_query" in names
     assert not set(CURRENT_FLAT_TOOL_NAMES).intersection(names)
     assert manager.domain_dispatcher.handles_flat("doris_query_execute_query")
@@ -177,12 +177,12 @@ def test_lakehouse_domain_binds_all_three_children() -> None:
     )
 
 
-def test_semantic_domain_binds_all_four_children() -> None:
+def test_semantic_domain_binds_all_twelve_children() -> None:
     manager = _manager()
     bound = BoundHandlerAvailabilityProvider(manager)
     semantic = DORIS_DOMAIN_CATALOG.resolve_domain("doris_semantic")
 
-    assert len(semantic.children) == 4
+    assert len(semantic.children) == 12
     assert all(
         bound.is_bound(semantic.name, child.name)
         for child in semantic.children
@@ -396,7 +396,7 @@ async def test_hierarchical_discovery_and_execution_use_one_exact_handler() -> N
 
 
 @pytest.mark.asyncio
-async def test_flat_mode_lists_47_formal_tools_and_uses_same_handler() -> None:
+async def test_flat_mode_lists_55_formal_tools_and_uses_same_handler() -> None:
     manager = _manager(
         "doris_query.execute_query",
         mode=ToolExposureMode.FLAT,
@@ -412,7 +412,7 @@ async def test_flat_mode_lists_47_formal_tools_and_uses_same_handler() -> None:
         )
     )
 
-    assert len(tools) == 47
+    assert len(tools) == 55
     assert tools[5].name == "doris_query_execute_query"
     assert tools[5].description.startswith("[AVAILABLE |")
     assert tools[5].input_schema["required"] == ["sql"]

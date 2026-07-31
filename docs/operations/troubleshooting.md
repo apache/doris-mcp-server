@@ -222,14 +222,23 @@ With independent replicas, configure the same
 ### ADBC unavailable
 
 Confirm `ADBC_ENABLED`, Arrow Flight SQL ports, provider installation, and live
-connectivity. ADBC execution intentionally fails closed on token-bound routes.
-Use the MySQL read-only query child when appropriate.
+connectivity. Confirm the end-user request explicitly selected ADBC and the
+call includes `explicit_adbc=true`. ADBC execution intentionally fails closed
+on token-bound routes. Use the MySQL read-only query child for ordinary SQL.
 
 ### Ossie model unavailable
 
 Confirm `OSSIE_ENABLED`, model directory, reviewed schema revision, exact
 `model_ref`, private binding manifest, semantic scopes, and Doris visibility.
 The Server never guesses a model.
+
+### MetricFlow model or compile unavailable
+
+Confirm `METRICFLOW_ENABLED`, the absolute provider command, project directory,
+sidecar protocol version, exact `model_ref`, Doris-dialect support, timeout and
+output bounds, semantic scopes, and Doris visibility. Provider stderr is
+intentionally hidden; inspect operator logs with secrets removed. The sidecar
+must compile only—Doris SQL execution belongs to the MCP Query runtime.
 
 ### Native lineage unavailable
 

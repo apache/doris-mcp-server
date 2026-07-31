@@ -76,7 +76,7 @@ def test_migration_catalog_remains_a_build_time_validation_artifact() -> None:
 
     assert not hasattr(manager, "tool_registry")
     assert len(migration_registry.advertised_names) == 25
-    assert len(manager.domain_dispatcher.formal_flat_names) == 47
+    assert len(manager.domain_dispatcher.formal_flat_names) == 55
     assert not set(migration_registry.advertised_names).intersection(
         manager.domain_dispatcher.formal_flat_names
     )

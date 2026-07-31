@@ -148,7 +148,7 @@ These are evidence/result bounds, not Doris permission grants.
 
 | Variable | Purpose |
 |---|---|
-| `ADBC_ENABLED` | enable optional ADBC provider |
+| `ADBC_ENABLED` | enable the optional advanced ADBC provider; default `false` |
 | `FE_ARROW_FLIGHT_SQL_PORT` | FE Flight SQL port |
 | `BE_ARROW_FLIGHT_SQL_PORT` | optional BE Flight port |
 | `ADBC_DEFAULT_MAX_ROWS` | default ADBC row limit |
@@ -157,7 +157,10 @@ These are evidence/result bounds, not Doris permission grants.
 | `ADBC_CONNECTION_TIMEOUT` | Flight connection timeout |
 
 ADBC remains subject to global result limits and fails closed on token-bound
-routes in 1.0.
+routes in 1.0. Enabling the provider does not authorize automatic selection:
+both ADBC child schemas and the runtime require `explicit_adbc=true`, which a
+Host should set only when the end user explicitly requests ADBC or Arrow
+Flight SQL. Ordinary queries use `doris_query.execute_query`.
 
 ## Apache Ossie semantic grounding
 
@@ -178,6 +181,22 @@ routes in 1.0.
 
 OAuth modes also require explicit semantic-channel enablement and
 `semantic:read`. Every model-specific call still needs exact `model_ref`.
+
+## MetricFlow semantic consumption
+
+| Variable | Purpose |
+|---|---|
+| `METRICFLOW_ENABLED` | enable the default-off MetricFlow consumer |
+| `METRICFLOW_PROVIDER_COMMAND_JSON` | absolute executable plus fixed arguments as a JSON string array |
+| `METRICFLOW_PROJECT_DIRECTORY` | optional absolute working directory for the provider |
+| `METRICFLOW_TIMEOUT_SECONDS` | provider process timeout, `1-120` seconds |
+| `METRICFLOW_MAX_OUTPUT_BYTES` | provider stdout limit, `1024-8388608` bytes |
+
+An enabled MetricFlow provider requires a non-empty command whose executable
+is absolute. The Server invokes it without a shell using protocol
+`doris-mcp-metricflow/v1`. The provider may inspect models and compile Doris
+SQL; all execution returns to the bounded MCP Query runtime. See
+[MetricFlow integration](../integrations/metricflow.md).
 
 ## Static token authentication
 

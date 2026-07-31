@@ -659,6 +659,106 @@ def test_ossie_provider_rejects_unstructured_mock_configuration() -> None:
     assert provider.reason_code == "PROVIDER_NOT_CONFIGURED"
 
 
+@pytest.mark.parametrize(
+    ("enabled", "command", "bound", "expected_status"),
+    [
+        (
+            False,
+            ["/usr/bin/metricflow-provider"],
+            True,
+            CapabilityProbeStatus.MISCONFIGURED,
+        ),
+        (True, [], True, CapabilityProbeStatus.MISCONFIGURED),
+        (
+            True,
+            ["/usr/bin/metricflow-provider"],
+            False,
+            CapabilityProbeStatus.MISCONFIGURED,
+        ),
+        (True, ["/usr/bin/metricflow-provider"], True, CapabilityProbeStatus.SUPPORTED),
+    ],
+)
+def test_metricflow_provider_requires_opt_in_command_and_bound_consumer(
+    enabled: bool,
+    command: list[str],
+    bound: bool,
+    expected_status: CapabilityProbeStatus,
+) -> None:
+    handlers = (
+        _BoundHandlers(
+            "doris_semantic.list_metricflow_models",
+            "doris_semantic.execute_metricflow_query",
+        )
+        if bound
+        else _BoundHandlers()
+    )
+    registry = CapabilityProviderRegistry.from_runtime(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=handlers,  # type: ignore[arg-type]
+        config=SimpleNamespace(
+            adbc=SimpleNamespace(enabled=False),
+            semantic=SimpleNamespace(
+                metricflow_enabled=enabled,
+                metricflow_provider_command=command,
+            ),
+        ),
+    )
+
+    provider = registry.snapshot().providers["metricflow_provider"]
+
+    assert provider.status is expected_status
+
+
+def test_metricflow_call_time_probes_remain_discoverable_and_callable() -> None:
+    feature_id = "doris_semantic.execute_metricflow_query"
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(feature_id),  # type: ignore[arg-type]
+    )
+    providers = CapabilityProviderRegistry(
+        {
+            "metricflow_provider": CapabilityProviderEvidence(
+                provider_id="metricflow_provider",
+                status=CapabilityProbeStatus.SUPPORTED,
+                reason_code="PROVIDER_CONFIGURED",
+            )
+        }
+    ).snapshot()
+    probe_ids = (
+        DORIS_FEATURE_MATRIX.get_feature(
+            "doris_semantic",
+            "execute_metricflow_query",
+        )
+        .support_contract.variants[0]
+        .required_probes
+    )
+    probes = {
+        probe_id: CapabilityProbeEvidence(
+            probe_id=probe_id,
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="METRICFLOW_REQUIRES_CALL_TIME_VALIDATION",
+        )
+        for probe_id in probe_ids
+    }
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_semantic")
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_semantic",
+        "execute_metricflow_query",
+    )
+
+    availability = evaluator.evaluate(
+        snapshot=_snapshot(probes=probes),
+        providers=providers,
+        domain=domain,
+        child=child,
+        auth_context=None,
+    )
+
+    assert availability.status is AvailabilityStatus.DEGRADED
+    assert availability.callable is True
+    assert availability.active_variant == "metricflow_compile_mcp_execute"
+
+
 def test_semantic_availability_keeps_call_time_validation_callable() -> None:
     bound = _BoundHandlers(
         "doris_semantic.list_semantic_models",
@@ -969,6 +1069,7 @@ async def test_provider_down_advances_generation_and_fails_closed() -> None:
                 "adbc_driver_ready",
                 "flight_sql",
                 "flight_sql_reachable",
+                "adbc_release_maturity",
                 "read_only_sql_guard_ready",
             )
         },
@@ -1035,6 +1136,7 @@ async def test_manifest_uses_one_provider_generation_during_refresh() -> None:
                 "adbc_driver_ready",
                 "flight_sql",
                 "flight_sql_reachable",
+                "adbc_release_maturity",
                 "read_only_sql_guard_ready",
             )
         },

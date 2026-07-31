@@ -47,9 +47,11 @@ under the License.
 
 ## 能力
 
-- [工具领域](capabilities/tool-domains.zh-CN.md)——8 领域 / 47 Child 合同。
+- [工具领域](capabilities/tool-domains.zh-CN.md)——8 领域 / 55 Child 合同。
 - [能力可用性](capabilities/availability.zh-CN.md)——版本解析、Probe、Provider、
   权限、Manifest 和 Fail Closed 行为。
+- [Doris 版本能力矩阵](capabilities/doris-version-matrix.zh-CN.md)——2.0+ 基线与
+  Release-aware 特性 Gate。
 - [自动生成工具目录](tool-registry.md)——正式名称、Handler 绑定、授权标识、
   Variant 和迁移输入的唯一事实源。
 
@@ -78,6 +80,7 @@ under the License.
 
 - [配置参考](reference/configuration.zh-CN.md)
 - [Host 集成](integrations/hosts.zh-CN.md)
+- [MetricFlow 接入](integrations/metricflow.zh-CN.md)
 - [自定义 Tool Provider](custom-tool-providers.zh-CN.md)
 
 ## 开发、迁移与发布

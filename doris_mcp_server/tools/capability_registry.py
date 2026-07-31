@@ -150,6 +150,28 @@ class CapabilityProviderRegistry:
                     and isinstance(binding_manifest, str)
                     and bool(binding_manifest.strip())
                 )
+            elif provider_id == "metricflow_provider":
+                semantic_config = getattr(config, "semantic", None)
+                metricflow_enabled = getattr(
+                    semantic_config,
+                    "metricflow_enabled",
+                    False,
+                )
+                provider_command = getattr(
+                    semantic_config,
+                    "metricflow_provider_command",
+                    (),
+                )
+                configured = (
+                    configured
+                    and metricflow_enabled is True
+                    and isinstance(provider_command, list | tuple)
+                    and bool(provider_command)
+                    and all(
+                        isinstance(part, str) and bool(part.strip())
+                        for part in provider_command
+                    )
+                )
             providers[provider_id] = CapabilityProviderEvidence(
                 provider_id=provider_id,
                 status=(

@@ -191,9 +191,12 @@ export MCP_TOOL_EXPOSURE_MODE=flat
 
 ## 可选 Provider
 
-- **ADBC：**显式启用并配置 Arrow Flight SQL 端口，上生产前测试路由隔离。
+- **ADBC：**启用默认关闭的高级 Provider 并配置 Arrow Flight SQL 端口；普通查询
+  继续使用 MySQL，ADBC 调用要求终端用户明确指定并传 `explicit_adbc=true`。
 - **Ossie：**设置 `OSSIE_ENABLED=true`，挂载已审查 Model 和私有 Doris Binding，
   并授权精确 Semantic Scope。
+- **MetricFlow：**配置绝对且经过审查的 Sidecar Command 与 Project；启用前验证
+  Doris Dialect 编译和真实 Doris 只读/负向写入行为。
 - **原生血缘：**配置规范可查询 Store/Provider，验证必需列和投递健康。
 - **自定义 Tool：**安装包，并把精确 Provider 名写入 `MCP_TOOL_PROVIDERS`。
 

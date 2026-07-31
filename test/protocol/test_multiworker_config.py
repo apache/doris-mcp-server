@@ -14,7 +14,7 @@ from doris_mcp_server.multiworker_app import (
     readiness_check,
     root_info,
 )
-from doris_mcp_server.utils.config import DorisConfig
+from doris_mcp_server.utils.config import AuthConfigError, DorisConfig
 
 
 def test_legacy_http_adapter_is_default_off_and_requires_explicit_env(monkeypatch):
@@ -301,6 +301,14 @@ def test_semantic_runtime_controls_load_serialize_and_validate(
     monkeypatch.setenv("OSSIE_CONTEXT_HARD_MAX_BYTES", "32768")
     monkeypatch.setenv("DORIS_OAUTH_SEMANTIC_TOOLS_ENABLED", "true")
     monkeypatch.setenv("DORIS_OAUTH_SEMANTIC_RESOURCES_ENABLED", "true")
+    monkeypatch.setenv("METRICFLOW_ENABLED", "true")
+    monkeypatch.setenv(
+        "METRICFLOW_PROVIDER_COMMAND_JSON",
+        '["/usr/local/bin/metricflow-provider", "--stdio"]',
+    )
+    monkeypatch.setenv("METRICFLOW_PROJECT_DIRECTORY", "/srv/dbt")
+    monkeypatch.setenv("METRICFLOW_TIMEOUT_SECONDS", "45")
+    monkeypatch.setenv("METRICFLOW_MAX_OUTPUT_BYTES", "1048576")
 
     configured = DorisConfig.from_env()
 
@@ -319,6 +327,11 @@ def test_semantic_runtime_controls_load_serialize_and_validate(
         "context_hard_max_bytes": 32768,
         "oauth_tools_enabled": True,
         "oauth_resources_enabled": True,
+        "metricflow_enabled": True,
+        "metricflow_provider_configured": True,
+        "metricflow_project_directory": "/srv/dbt",
+        "metricflow_timeout_seconds": 45,
+        "metricflow_max_output_bytes": 1048576,
     }
     assert configured.validate() == []
 
@@ -380,6 +393,27 @@ def test_semantic_runtime_controls_load_serialize_and_validate(
         "Enabled Ossie support requires model directory and binding manifest"
         in incomplete.validate()
     )
+    incomplete.semantic.enabled = False
+    incomplete.semantic.metricflow_enabled = True
+    assert (
+        "Enabled MetricFlow support requires a provider command"
+        in incomplete.validate()
+    )
+    incomplete.semantic.metricflow_provider_command = ["metricflow-provider"]
+    assert (
+        "MetricFlow provider executable must use an absolute path"
+        in incomplete.validate()
+    )
+
+
+def test_metricflow_provider_command_rejects_empty_or_invalid_json(monkeypatch):
+    monkeypatch.setenv("METRICFLOW_PROVIDER_COMMAND_JSON", "[]")
+    with pytest.raises(AuthConfigError, match="non-empty JSON array"):
+        DorisConfig.from_env()
+
+    monkeypatch.setenv("METRICFLOW_PROVIDER_COMMAND_JSON", "not-json")
+    with pytest.raises(AuthConfigError, match="valid JSON array"):
+        DorisConfig.from_env()
 
 
 def test_state_handle_secret_and_ttl_are_configurable_without_serializing_secret(
@@ -455,6 +489,14 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     config.semantic.context_hard_max_bytes = 32768
     config.semantic.oauth_tools_enabled = True
     config.semantic.oauth_resources_enabled = True
+    config.semantic.metricflow_enabled = True
+    config.semantic.metricflow_provider_command = [
+        "/usr/local/bin/metricflow-provider",
+        "--stdio",
+    ]
+    config.semantic.metricflow_project_directory = "/srv/dbt"
+    config.semantic.metricflow_timeout_seconds = 45
+    config.semantic.metricflow_max_output_bytes = 1048576
     config.mcp_state_handle_secret = "parent-shared-state-handle-secret-value"
     config.mcp_state_handle_ttl_seconds = 45
 
@@ -527,6 +569,14 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.semantic.context_hard_max_bytes == 32768
     assert child_config.semantic.oauth_tools_enabled is True
     assert child_config.semantic.oauth_resources_enabled is True
+    assert child_config.semantic.metricflow_enabled is True
+    assert child_config.semantic.metricflow_provider_command == [
+        "/usr/local/bin/metricflow-provider",
+        "--stdio",
+    ]
+    assert child_config.semantic.metricflow_project_directory == "/srv/dbt"
+    assert child_config.semantic.metricflow_timeout_seconds == 45
+    assert child_config.semantic.metricflow_max_output_bytes == 1048576
     assert (
         child_config.mcp_state_handle_secret
         == "parent-shared-state-handle-secret-value"
@@ -536,6 +586,18 @@ def test_multiworker_environment_preserves_resolved_parent_config(monkeypatch):
     assert child_config.server_version == __version__
     assert child_config.transport == "http"
     assert child_config.workers == 2
+
+
+def test_multiworker_environment_omits_disabled_metricflow_command() -> None:
+    worker_env = _multiworker_environment(
+        DorisConfig(),
+        host="127.0.0.1",
+        port=31133,
+        workers=2,
+    )
+
+    assert worker_env["METRICFLOW_ENABLED"] == "false"
+    assert "METRICFLOW_PROVIDER_COMMAND_JSON" not in worker_env
 
 
 @pytest.mark.asyncio

@@ -173,7 +173,7 @@ class DorisDomainCatalog(ContractModel):
         if actual != expected:
             raise DomainCatalogError(
                 "domain catalog must contain the exact ordered "
-                "8-domain/47-child contract"
+                "8-domain/55-child contract"
             )
 
         domain_names = tuple(domain.name for domain in self.domains)
@@ -473,6 +473,80 @@ def _string_array(
         "items": item_schema,
         "minItems": min_items,
         "uniqueItems": True,
+    }
+
+
+def _metricflow_name_array(description: str) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "description": description,
+        "items": {
+            "type": "string",
+            "pattern": r"^[A-Za-z_][A-Za-z0-9_.:-]{0,191}$",
+            "maxLength": 192,
+        },
+        "minItems": 1,
+        "maxItems": 64,
+        "uniqueItems": True,
+    }
+
+
+def _metricflow_order_by_array() -> dict[str, Any]:
+    schema = _metricflow_name_array(
+        "Output fields in priority order; prefix a field with '-' for descending."
+    )
+    schema["items"] = {
+        "type": "string",
+        "pattern": r"^-?[A-Za-z_][A-Za-z0-9_.:-]{0,191}$",
+        "maxLength": 193,
+    }
+    return schema
+
+
+def _metricflow_model_ref() -> dict[str, Any]:
+    return _string(
+        "Exact MetricFlow model reference returned by model discovery.",
+        pattern=r"^[A-Za-z0-9_.:/@-]+$",
+        max_length=192,
+    )
+
+
+def _metricflow_query_request() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": "Structured MetricFlow query request.",
+        "properties": {
+            "metrics": _metricflow_name_array("Metrics to query."),
+            "group_by": _metricflow_name_array(
+                "Dimensions or entities used to group results."
+            ),
+            "saved_query": _string(
+                "Exact saved-query name.",
+                pattern=r"^[A-Za-z_][A-Za-z0-9_.:-]{0,191}$",
+                max_length=192,
+            ),
+            "where": {
+                "type": "array",
+                "description": "MetricFlow filter expressions.",
+                "items": {"type": "string", "minLength": 1, "maxLength": 2048},
+                "maxItems": 16,
+            },
+            "start_time": _string("Inclusive ISO-8601 start time.", max_length=64),
+            "end_time": _string("Inclusive ISO-8601 end time.", max_length=64),
+            "order_by": _metricflow_order_by_array(),
+            "limit": _integer("Maximum result rows.", minimum=1, maximum=100_000),
+        },
+        "oneOf": [
+            {
+                "required": ["metrics"],
+                "not": {"required": ["saved_query"]},
+            },
+            {
+                "required": ["saved_query"],
+                "not": {"required": ["metrics"]},
+            },
+        ],
+        "additionalProperties": False,
     }
 
 
@@ -1030,7 +1104,8 @@ DOMAIN_DEFINITIONS = (
         "doris_query",
         "Doris Query",
         "Execute read-only Doris SQL, inspect plans and profiles, review slow "
-        "queries, and use the optional ADBC provider.",
+        "queries, and use advanced ADBC only when the end user explicitly "
+        "requests ADBC or Arrow Flight SQL.",
         (
             _child(
                 "doris_query",
@@ -1208,16 +1283,38 @@ DOMAIN_DEFINITIONS = (
                 "doris_query",
                 "get_adbc_connection_info",
                 "Get ADBC connection info",
-                "Report sanitized ADBC provider configuration and reachability.",
-                _input_schema({}),
+                "Advanced only: report ADBC configuration after an explicit "
+                "end-user request for ADBC or Arrow Flight SQL.",
+                _input_schema(
+                    {
+                        "explicit_adbc": {
+                            "type": "boolean",
+                            "const": True,
+                            "description": (
+                                "Caller attests that the end user explicitly "
+                                "requested ADBC or Arrow Flight SQL."
+                            ),
+                        }
+                    },
+                    required=("explicit_adbc",),
+                ),
             ),
             _child(
                 "doris_query",
                 "execute_adbc_query",
                 "Execute ADBC query",
-                "Execute one read-only SQL statement through Arrow Flight SQL.",
+                "Advanced only: execute through Arrow Flight SQL when the end "
+                "user explicitly requested ADBC; use execute_query otherwise.",
                 _input_schema(
                     {
+                        "explicit_adbc": {
+                            "type": "boolean",
+                            "const": True,
+                            "description": (
+                                "Caller attests that the end user explicitly "
+                                "requested ADBC or Arrow Flight SQL."
+                            ),
+                        },
                         "sql": _string(
                             "Read-only SQL statement.",
                             max_length=1024 * 1024,
@@ -1237,7 +1334,7 @@ DOMAIN_DEFINITIONS = (
                             enum=("arrow", "pandas", "dict"),
                         ),
                     },
-                    required=("sql",),
+                    required=("explicit_adbc", "sql"),
                 ),
                 _QUERY_OUTPUT,
             ),
@@ -1847,8 +1944,9 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_semantic",
         "Doris Semantic",
-        "Discover validated Ossie models bound to Doris and read permission-"
-        "filtered semantic summaries, context, and mapping status.",
+        "Discover and use validated Ossie or MetricFlow models bound to Doris. "
+        "MetricFlow compiles SQL only; MCP executes it through the guarded "
+        "Doris Query runtime.",
         (
             _child(
                 "doris_semantic",
@@ -2000,6 +2098,168 @@ DOMAIN_DEFINITIONS = (
                     required=("model_ref",),
                 ),
                 _DIAGNOSTIC_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "list_metricflow_models",
+                "List MetricFlow models",
+                "List exact MetricFlow model references exposed by the provider.",
+                _input_schema({}),
+                _COLLECTION_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "get_metricflow_status",
+                "Get MetricFlow status",
+                "Validate one exact MetricFlow model, provider, and Doris dialect.",
+                _input_schema(
+                    {"model_ref": _metricflow_model_ref()},
+                    required=("model_ref",),
+                ),
+                _DETAIL_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "list_metricflow_metrics",
+                "List MetricFlow metrics",
+                "List metrics for one exact MetricFlow model reference.",
+                _input_schema(
+                    {
+                        "model_ref": _metricflow_model_ref(),
+                        "search": _string(
+                            "Optional metric-name search term.",
+                            max_length=192,
+                        ),
+                        "include_dimensions": _boolean(
+                            "Include the dimensions reported for each metric."
+                        ),
+                        "limit": _integer(
+                            "Maximum metrics.",
+                            minimum=1,
+                            maximum=1000,
+                        ),
+                    },
+                    required=("model_ref",),
+                ),
+                _COLLECTION_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "get_metricflow_group_bys",
+                "Get MetricFlow group-bys",
+                "List common MetricFlow dimensions and entities for metrics.",
+                _input_schema(
+                    {
+                        "model_ref": _metricflow_model_ref(),
+                        "metrics": _metricflow_name_array(
+                            "Exact MetricFlow metric names."
+                        ),
+                    },
+                    required=("model_ref", "metrics"),
+                ),
+                _DETAIL_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "list_metricflow_saved_queries",
+                "List MetricFlow saved queries",
+                "List saved queries for one exact MetricFlow model reference.",
+                _input_schema(
+                    {
+                        "model_ref": _metricflow_model_ref(),
+                        "search": _string(
+                            "Optional saved-query search term.",
+                            max_length=192,
+                        ),
+                        "limit": _integer(
+                            "Maximum saved queries.",
+                            minimum=1,
+                            maximum=1000,
+                        ),
+                    },
+                    required=("model_ref",),
+                ),
+                _COLLECTION_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "get_metricflow_dimension_values",
+                "Get MetricFlow dimension values",
+                "Compile a MetricFlow dimension-value query and execute it "
+                "through the guarded Doris Query runtime.",
+                _input_schema(
+                    {
+                        "model_ref": _metricflow_model_ref(),
+                        "metrics": _metricflow_name_array(
+                            "Metrics associated with the dimension."
+                        ),
+                        "dimension": _string(
+                            "Exact MetricFlow dimension name.",
+                            pattern=r"^[A-Za-z_][A-Za-z0-9_.:-]{0,191}$",
+                            max_length=192,
+                        ),
+                        "start_time": _string(
+                            "Inclusive ISO-8601 start time.",
+                            max_length=64,
+                        ),
+                        "end_time": _string(
+                            "Inclusive ISO-8601 end time.",
+                            max_length=64,
+                        ),
+                        "limit": _integer(
+                            "Maximum returned values.",
+                            minimum=1,
+                            maximum=10_000,
+                        ),
+                        "timeout_ms": _integer(
+                            "Execution timeout in milliseconds.",
+                            minimum=1,
+                            maximum=300_000,
+                        ),
+                    },
+                    required=("model_ref", "metrics", "dimension"),
+                ),
+                _QUERY_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "compile_metricflow_query",
+                "Compile MetricFlow query",
+                "Compile a structured MetricFlow request to guarded Doris SQL "
+                "without executing it.",
+                _input_schema(
+                    {
+                        "model_ref": _metricflow_model_ref(),
+                        "request": _metricflow_query_request(),
+                    },
+                    required=("model_ref", "request"),
+                ),
+                _DETAIL_OUTPUT,
+            ),
+            _child(
+                "doris_semantic",
+                "execute_metricflow_query",
+                "Execute MetricFlow query",
+                "Compile a structured MetricFlow request, then execute the "
+                "read-only SQL through the guarded Doris Query runtime.",
+                _input_schema(
+                    {
+                        "model_ref": _metricflow_model_ref(),
+                        "request": _metricflow_query_request(),
+                        "max_rows": _integer(
+                            "Maximum returned rows.",
+                            minimum=1,
+                            maximum=100_000,
+                        ),
+                        "timeout_ms": _integer(
+                            "Execution timeout in milliseconds.",
+                            minimum=1,
+                            maximum=300_000,
+                        ),
+                    },
+                    required=("model_ref", "request"),
+                ),
+                _QUERY_OUTPUT,
             ),
         ),
     ),

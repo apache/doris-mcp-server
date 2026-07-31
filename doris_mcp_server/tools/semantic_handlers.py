@@ -15,19 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-"""Formal Semantic-domain handlers backed by the Ossie adapter runtime."""
+"""Formal Semantic-domain handlers backed by Ossie and MetricFlow runtimes."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, Protocol, cast
 
+from ..semantic.metricflow import MetricFlowSemanticRuntime
 from ..semantic.runtime import DorisSemanticRuntime
 from ..utils.db import DorisConnectionManager
+from ..utils.query_runtime import DorisQueryRuntime
 
 
 class _SemanticHandlerOwner(Protocol):
     semantic_runtime: DorisSemanticRuntime
+    metricflow_runtime: MetricFlowSemanticRuntime
 
 
 class SemanticToolHandlersMixin:
@@ -36,8 +39,14 @@ class SemanticToolHandlersMixin:
     def _initialize_semantic_handlers(
         self: _SemanticHandlerOwner,
         connection_manager: DorisConnectionManager,
+        query_runtime: DorisQueryRuntime,
     ) -> None:
         self.semantic_runtime = DorisSemanticRuntime(connection_manager)
+        config = getattr(connection_manager, "config", None)
+        self.metricflow_runtime = MetricFlowSemanticRuntime.from_config(
+            query_runtime,
+            getattr(config, "semantic", None),
+        )
 
     async def _formal_doris_semantic_list_semantic_models_tool(
         self: _SemanticHandlerOwner,
@@ -74,6 +83,85 @@ class SemanticToolHandlersMixin:
         return await self.semantic_runtime.get_semantic_mapping_status(
             model_ref=cast(str, arguments.get("model_ref")),
             datasource=cast(str | None, arguments.get("datasource")),
+        )
+
+    async def _formal_doris_semantic_list_metricflow_models_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        del arguments
+        return await self.metricflow_runtime.list_models()
+
+    async def _formal_doris_semantic_get_metricflow_status_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.metricflow_runtime.get_status(
+            model_ref=cast(str, arguments.get("model_ref")),
+        )
+
+    async def _formal_doris_semantic_list_metricflow_metrics_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.metricflow_runtime.list_metrics(
+            model_ref=cast(str, arguments.get("model_ref")),
+            search=cast(str | None, arguments.get("search")),
+            include_dimensions=bool(arguments.get("include_dimensions", True)),
+            limit=cast(int | None, arguments.get("limit")),
+        )
+
+    async def _formal_doris_semantic_get_metricflow_group_bys_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.metricflow_runtime.get_group_bys(
+            model_ref=cast(str, arguments.get("model_ref")),
+            metrics=cast(list[str], arguments.get("metrics")),
+        )
+
+    async def _formal_doris_semantic_list_metricflow_saved_queries_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.metricflow_runtime.list_saved_queries(
+            model_ref=cast(str, arguments.get("model_ref")),
+            search=cast(str | None, arguments.get("search")),
+            limit=cast(int | None, arguments.get("limit")),
+        )
+
+    async def _formal_doris_semantic_get_metricflow_dimension_values_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.metricflow_runtime.get_dimension_values(
+            model_ref=cast(str, arguments.get("model_ref")),
+            metrics=cast(list[str], arguments.get("metrics")),
+            dimension=cast(str, arguments.get("dimension")),
+            start_time=cast(str | None, arguments.get("start_time")),
+            end_time=cast(str | None, arguments.get("end_time")),
+            limit=cast(int | None, arguments.get("limit")),
+            timeout_ms=cast(int | None, arguments.get("timeout_ms")),
+        )
+
+    async def _formal_doris_semantic_compile_metricflow_query_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.metricflow_runtime.compile_query(
+            model_ref=cast(str, arguments.get("model_ref")),
+            request=cast(Mapping[str, Any], arguments.get("request")),
+        )
+
+    async def _formal_doris_semantic_execute_metricflow_query_tool(
+        self: _SemanticHandlerOwner,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await self.metricflow_runtime.execute_query(
+            model_ref=cast(str, arguments.get("model_ref")),
+            request=cast(Mapping[str, Any], arguments.get("request")),
+            max_rows=cast(int | None, arguments.get("max_rows")),
+            timeout_ms=cast(int | None, arguments.get("timeout_ms")),
         )
 
 

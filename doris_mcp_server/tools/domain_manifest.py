@@ -679,14 +679,37 @@ def _render_child(
         name=child.name,
         title=child.title,
         description=description,
-        input_schema=child.input_schema,
-        output_schema=child.output_schema,
+        input_schema=_compact_manifest_input_schema(child.input_schema),
+        output_schema={"type": "object"},
         version_support=ManifestVersionSupport.from_contract(
             child.support_contract
         ),
         availability=availability,
         annotations=child.annotations,
     )
+
+
+def _compact_manifest_input_schema(value: Any) -> Any:
+    """Expose the call signature while keeping full validation server-side."""
+    if isinstance(value, Mapping):
+        return {
+            str(key): _compact_manifest_input_schema(item)
+            for key, item in value.items()
+            if key
+            not in {
+                "description",
+                "examples",
+                "maxItems",
+                "maxLength",
+                "minItems",
+                "pattern",
+                "title",
+                "uniqueItems",
+            }
+        }
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return [_compact_manifest_input_schema(item) for item in value]
+    return value
 
 
 def _dynamic_description(

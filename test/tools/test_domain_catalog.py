@@ -98,11 +98,11 @@ def _wire_output(child: ChildToolDefinition) -> dict[str, Any]:
     return cast(dict[str, Any], child.to_wire()["output_schema"])
 
 
-def test_catalog_has_exact_ordered_eight_domain_forty_seven_child_shape() -> None:
+def test_catalog_has_exact_ordered_eight_domain_fifty_five_child_shape() -> None:
     summary = DORIS_DOMAIN_CATALOG.summary()
 
     assert summary.domain_count == 8
-    assert summary.child_count == 47
+    assert summary.child_count == 55
     assert summary.migrated_flat_tool_count == 25
     assert tuple(domain.name for domain in summary.domains) == tuple(
         EXPECTED_DOMAIN_CHILDREN
@@ -118,7 +118,7 @@ def test_catalog_has_exact_ordered_eight_domain_forty_seven_child_shape() -> Non
         4,
         8,
         3,
-        4,
+        12,
     )
 
 
@@ -208,7 +208,11 @@ def test_query_schemas_publish_bounded_execution_limits() -> None:
         ("doris_catalog", "list_tables", {"database"}),
         ("doris_catalog", "get_table_context", {"database", "table"}),
         ("doris_query", "execute_query", {"sql"}),
-        ("doris_query", "execute_adbc_query", {"sql"}),
+        (
+            "doris_query",
+            "execute_adbc_query",
+            {"explicit_adbc", "sql"},
+        ),
         ("doris_pipeline", "monitor_data_freshness", {"database", "table"}),
         (
             "doris_lakehouse",
@@ -247,6 +251,13 @@ def test_semantic_content_children_require_explicit_model_ref() -> None:
         "get_semantic_model_summary",
         "get_semantic_context",
         "get_semantic_mapping_status",
+        "get_metricflow_status",
+        "list_metricflow_metrics",
+        "get_metricflow_group_bys",
+        "list_metricflow_saved_queries",
+        "get_metricflow_dimension_values",
+        "compile_metricflow_query",
+        "execute_metricflow_query",
     ):
         assert "model_ref" in schemas[name]["required"]
         assert "model_ref" in schemas[name]["properties"]
@@ -440,7 +451,7 @@ def test_catalog_markdown_is_deterministic_and_complete() -> None:
 
     assert first == second
     assert first.startswith("# Doris MCP Hierarchical Domain Catalog")
-    assert first.count("| `doris_") >= 47 + 8
+    assert first.count("| `doris_") >= 55 + 8
     assert "`doris_query.execute_adbc_query`" in first
     assert "`get_table_schema`" in first
     assert "`doris_catalog.get_table_context`" in first

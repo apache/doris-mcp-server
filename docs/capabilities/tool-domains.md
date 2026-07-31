@@ -22,7 +22,7 @@ under the License.
 [English](tool-domains.md) | [简体中文](tool-domains.zh-CN.md)
 
 Version 1.0 has one built-in read-only catalog: eight top-level domains and
-forty-seven exact children. This page explains product intent. The generated
+fifty-five exact children. This page explains product intent. The generated
 [tool registry](../tool-registry.md) is authoritative for formal feature IDs,
 handler bindings, authorization identifiers, variants, and migration inputs.
 
@@ -71,10 +71,13 @@ one ambiguous object.
 | `get_query_profile` | Retrieve a bounded FE query profile. | Requires FE HTTP/profile evidence and never returns credentials. |
 | `diagnose_query_performance` | Produce deterministic findings from plan/profile/query evidence. | Evidence-based rules; no invented confidence score. |
 | `list_slow_queries` | List bounded slow-query evidence. | Requires readable audit history; raw sensitive SQL fields are sanitized. |
-| `get_adbc_connection_info` | Report Arrow Flight SQL/ADBC readiness. | Sanitized provider/endpoint evidence only. |
-| `execute_adbc_query` | Execute a bounded read-only query through ADBC. | Optional provider; fail-closed on token-bound routes in 1.0. |
+| `get_adbc_connection_info` | Report Arrow Flight SQL/ADBC readiness. | Advanced, default-off, and valid only after explicit user intent selects ADBC. |
+| `execute_adbc_query` | Execute a bounded read-only query through ADBC. | Requires `explicit_adbc=true`; never substitutes for ordinary `execute_query`; fail-closed on token-bound routes. |
 
-The query domain accepts SQL because SQL is the native Doris query interface,
+Ordinary SQL always uses `execute_query`. The two ADBC children are an
+advanced path for requests that explicitly name ADBC or Arrow Flight SQL;
+their schemas require `explicit_adbc=true`, and the runtime independently
+enforces the same condition. The query domain accepts SQL because SQL is the native Doris query interface,
 but it does not expose DDL, DML, administrative SQL, arbitrary stacked
 statements, or an unbounded result channel.
 
@@ -141,7 +144,7 @@ companion store. Version `4.0.6+` alone does not make it callable.
 | `inspect_lakehouse_table` | Inspect table format, snapshots, partitions, lifecycle, and pushdown evidence. | 4.1 lifecycle facets are reported separately from base metadata. |
 | `inspect_variant_column` | Inspect Variant type and bounded shape evidence. | Sample values and sensitive paths are excluded; advanced 4.1 facets are capability-gated. |
 
-## `doris_semantic` — optional Apache Ossie consumer
+## `doris_semantic` — optional semantic consumers
 
 | Child | Purpose | Important behavior |
 |---|---|---|
@@ -149,15 +152,24 @@ companion store. Version `4.0.6+` alone does not make it callable.
 | `get_semantic_model_summary` | Return a bounded summary for one exact `model_ref`. | No prompt-based model guessing. |
 | `get_semantic_context` | Build deterministic read-only grounding context. | Requires exact model, route-aware mapping, and Doris visibility. |
 | `get_semantic_mapping_status` | Explain private Doris binding readiness. | Reports status/reasons without exposing the private binding manifest. |
+| `list_metricflow_models` | List configured MetricFlow model references. | Provider is default-off; model selection never uses prompt guessing. |
+| `get_metricflow_status` | Return provider/model validation status. | Requires one exact `model_ref`. |
+| `list_metricflow_metrics` | List bounded metrics and optional dimensions. | Requires one exact `model_ref`; supports bounded filtering. |
+| `get_metricflow_group_bys` | Return valid group-by dimensions for selected metrics. | Provider validates the metric set against the exact model. |
+| `list_metricflow_saved_queries` | List bounded saved-query metadata. | Does not execute saved queries. |
+| `get_metricflow_dimension_values` | Compile and execute a bounded dimension-value query. | Provider compiles Doris SQL; MCP SQL guard and Query runtime execute it. |
+| `compile_metricflow_query` | Compile a structured MetricFlow request to Doris SQL. | Compile-only; returns no query result and does not bypass the SQL guard. |
+| `execute_metricflow_query` | Compile and execute a bounded MetricFlow request. | Execution always returns to `DorisQueryRuntime` for routing, RBAC, limits, audit, and redaction. |
 
-Ossie owns semantic definitions. The MCP Server consumes them and maps them to
-Doris evidence; it does not become the semantic model authoring or execution
-engine.
+Ossie owns semantic definitions. MetricFlow owns metric semantics and query
+compilation. The MCP Server is a governed consumer: it does not author either
+model, does not guess a model, and does not permit a provider to execute Doris
+SQL outside the MCP Query runtime. See [MetricFlow integration](../integrations/metricflow.md).
 
 ## Reserved and extension surfaces
 
 - `doris_admin` is intentionally not registered.
-- Custom providers are explicit extensions and not counted in 8/47.
+- Custom providers are explicit extensions and not counted in 8/55.
 - MCP resources and prompts remain separate protocol surfaces; they are not
   hidden child tools.
 - Pre-1.0 tool names are not callable aliases.

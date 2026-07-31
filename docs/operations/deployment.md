@@ -204,10 +204,14 @@ contract, not a per-request switch.
 
 ## Optional providers
 
-- **ADBC:** enable explicitly and configure Arrow Flight SQL ports; test route
-  isolation before production.
+- **ADBC:** enable the default-off advanced provider and configure Arrow Flight
+  SQL ports; ordinary queries still use MySQL, and ADBC calls require explicit
+  end-user intent plus `explicit_adbc=true`.
 - **Ossie:** set `OSSIE_ENABLED=true`, mount reviewed models and private Doris
   bindings, and grant explicit semantic scopes.
+- **MetricFlow:** configure an absolute reviewed sidecar command and project;
+  validate Doris-dialect compilation and real Doris read-only/negative-write
+  behavior before enabling it.
 - **Native lineage:** configure the canonical queryable store/provider and
   verify required columns and delivery health.
 - **Custom tools:** install the package and list its exact provider name in

@@ -1404,7 +1404,7 @@ async def test_true_subprocess_stdio_formal_flat_mode_executes_and_recovers():
             tool.name: tool
             for tool in (await modern.list_tools(cache_mode="bypass")).tools
         }
-        assert len(tools) == 47
+        assert len(tools) == 55
         assert "doris_query_execute_query" in tools
         assert not set(EXPECTED_DOMAIN_CHILDREN).intersection(tools)
         assert "exec_query" not in tools

@@ -98,7 +98,7 @@ OAuth Token 的受保护数据调用不能静默回退到全局服务账号。
 2. **领域发现：** 身份是否有权知道某个 Child。
 3. **Child 执行：** 例如精确策略
    `child:call:doris_query:execute_query`。
-4. **Channel/Provider：** Doris OAuth、Semantic、ADBC 或自定义 Provider 是否
+4. **Channel/Provider：** Doris OAuth、Semantic、ADBC、MetricFlow 或自定义 Provider 是否
    启用且 Allowlist 允许。
 5. **Doris RBAC：** 所选 Doris 身份是否能执行真实语句或读取真实元数据。
 
@@ -169,8 +169,9 @@ Fail Closed，不会落到更高权限连接池。Query、Metadata、FE HTTP 与
 - 日志使用已脱敏 Credential DTO 和安全 `repr`。
 - Reverse Proxy 或 Process Supervisor 不能开启会序列化请求 Header/环境 Secret
   的 Debug 日志。
-- `.env`、Token File、OAuth Client File、JWT Key 和私有 Ossie Binding
-  Manifest 应为 Owner-only，且不能提交。
+- `.env`、Token File、OAuth Client File、JWT Key、私有 Ossie Binding Manifest
+  和包含私有定义的 MetricFlow Project/Provider Command 应为 Owner-only，且不能
+  提交。
 
 ## 自定义 Provider
 
@@ -185,7 +186,10 @@ Fail Closed，不会落到更高权限连接池。Query、Metadata、FE HTTP 与
 
 - Doris OAuth 仅单 Worker，状态在进程内。
 - 自定义 Provider 的进程内限流不是分布式 Quota。
-- ADBC 因 Flight Client 为进程全局，在 Token 绑定路由上 Fail Closed。
+- ADBC 默认关闭，每次调用都要求明确用户意图；因 Flight Client 为进程全局，
+  在 Token 绑定路由上 Fail Closed。
+- MetricFlow Sidecar 接收模型请求但不接收 Doris 凭据，只编译 SQL；MCP 只读
+  Guard、请求路由、Doris RBAC 与结果限额仍然强制执行。
 - 原生血缘异步 Best-effort，仅作为证据，不是事务授权源。
 - 应用层 SQL Guard 不能替代 Doris Grant 与 Row Policy。
 - Public Reverse Proxy 的 Host/Origin 形态必须显式验证，绑定 `0.0.0.0` 本身不会

@@ -90,7 +90,7 @@ Before adding or changing a child:
 8. Regenerate the catalog and update English/Chinese documentation.
 9. Update `CHANGELOG.md` in the same pull request.
 
-The current release contract is eight domains and forty-seven children. A
+The current release contract is eight domains and fifty-five children. A
 change to those counts is intentional API work, not an incidental handler edit.
 
 ## Custom providers
@@ -200,7 +200,7 @@ without exposing credentials or private endpoints.
 
 - Product version, CLI identity, package metadata, release docs, and Changelog
   agree.
-- Generated 8/47 registry matches runtime exactly.
+- Generated 8/55 registry matches runtime exactly.
 - English/Chinese documentation links are valid.
 - Target Doris patch certification claims match collected evidence.
 - Known limitations remain explicit.

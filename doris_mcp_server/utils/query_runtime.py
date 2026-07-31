@@ -604,8 +604,13 @@ class DorisQueryRuntime:
             },
         )
 
-    async def get_adbc_connection_info(self) -> dict[str, Any]:
+    async def get_adbc_connection_info(
+        self,
+        *,
+        explicit_adbc: bool,
+    ) -> dict[str, Any]:
         """Return a secret-free summary of the optional ADBC provider."""
+        _require_explicit_adbc_intent(explicit_adbc)
         raw = await self._adbc_query_tools.get_adbc_connection_info()
         if not isinstance(raw, Mapping):
             raise QueryRuntimeFailure(
@@ -654,12 +659,14 @@ class DorisQueryRuntime:
     async def execute_adbc_query(
         self,
         *,
+        explicit_adbc: bool,
         sql: str,
         max_rows: int | None = None,
         timeout_ms: int | None = None,
         result_format: str | None = None,
     ) -> dict[str, Any]:
         """Execute one strict read-only query through Arrow Flight SQL."""
+        _require_explicit_adbc_intent(explicit_adbc)
         statement = ReadOnlySQLGuard.validate(sql)
         ReadOnlySQLGuard.validate_parameters(statement.sql, None)
         if result_format not in {None, "arrow", "pandas", "dict"}:
@@ -1721,6 +1728,16 @@ def _profile_http_failure(status: int) -> QueryRuntimeFailure:
         status_code=503,
         retryable=True,
     )
+
+
+def _require_explicit_adbc_intent(explicit_adbc: bool) -> None:
+    if explicit_adbc is not True:
+        raise QueryRuntimeFailure(
+            "ADBC requires an explicit end-user request for ADBC or Arrow "
+            "Flight SQL; use doris_query.execute_query for normal queries.",
+            reason_code="ADBC_EXPLICIT_USER_INTENT_REQUIRED",
+            status_code=400,
+        )
 
 
 def _classify_adbc_failure(raw: Any) -> QueryRuntimeFailure:

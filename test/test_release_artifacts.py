@@ -75,9 +75,9 @@ def test_generated_tool_catalog_matches_the_runtime_source() -> None:
 
     assert catalog == DORIS_DOMAIN_CATALOG.render_markdown()
     assert summary.domain_count == 8
-    assert summary.child_count == 47
+    assert summary.child_count == 55
     assert summary.migrated_flat_tool_count == 25
-    assert len(FORMAL_CHILD_FEATURE_IDS) == 47
+    assert len(FORMAL_CHILD_FEATURE_IDS) == 55
     assert all(f"`{feature_id}`" in catalog for feature_id in FORMAL_CHILD_FEATURE_IDS)
 
 

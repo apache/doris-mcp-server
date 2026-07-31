@@ -23,7 +23,7 @@ under the License.
 
 Apache Doris MCP Server 通过 MCP `2026-07-28`，向 MCP Host 和 AI Agent
 提供只读的 Apache Doris 能力。1.0 版本把过去庞大的扁平工具集合重构为 8 个
-稳定一级领域和 47 个渐进披露的二级能力，同时明确表达运行时可用性、权限、输入
+稳定一级领域和 55 个渐进披露的二级能力，同时明确表达运行时可用性、权限、输入
 Schema、输出 Schema 与失败行为。
 
 ## 发布状态
@@ -34,7 +34,7 @@ Python 包分类仍为 **Beta**，已记录的部署限制仍然有效。
 
 升级前请阅读 [1.0 发布说明](docs/releases/1.0.0.zh-CN.md)、
 [1.0 迁移指南](docs/migration/1.0.0.zh-CN.md)和自动生成的
-[8 领域 / 47 子能力目录](docs/tool-registry.md)。详细发布记录见
+[8 领域 / 55 子能力目录](docs/tool-registry.md)。详细发布记录见
 [Issue #189](https://github.com/apache/doris-mcp-server/issues/189)。
 
 ## 架构概览
@@ -56,18 +56,18 @@ MCP Host
 | 领域 | Child 数量 | 职责 |
 |---|---:|---|
 | `doris_catalog` | 5 | Catalog、数据库、表、表上下文、大小 |
-| `doris_query` | 7 | 查询、Explain、Profile、诊断、慢查询、ADBC |
+| `doris_query` | 7 | 查询、Explain、Profile、诊断、慢查询、显式 ADBC |
 | `doris_cluster` | 11 | 节点、任务、指标、内存、缓存、Compaction、工作负载 |
 | `doris_pipeline` | 5 | 导入、物化视图、新鲜度、依赖关系 |
 | `doris_search` | 4 | 文本/向量/混合检索、分词、索引、诊断 |
 | `doris_governance` | 8 | 质量、存储、血缘、审计、UDF、认证映射 |
 | `doris_lakehouse` | 3 | 外部 Catalog、湖仓表、Variant |
-| `doris_semantic` | 4 | 可选的只读 Apache Ossie 语义接入 |
+| `doris_semantic` | 12 | 可选 Apache Ossie Grounding 与 MetricFlow 消费 |
 
 使用 `{}` 调用一级领域，可以获得当前身份有权发现的 Child 和精确 Schema；
 随后用 `child_tool`、`arguments` 和返回的 `manifest_version` 调用同一个领域。
 无法使用渐进披露的 Host 可以在启动前设置 `MCP_TOOL_EXPOSURE_MODE=flat`，
-以无冲突正式名称公开同样的 47 个 Child；该模式不会恢复 1.0 以前的旧名称。
+以无冲突正式名称公开同样的 55 个 Child；该模式不会恢复 1.0 以前的旧名称。
 
 详见[总体架构](docs/architecture/overview.zh-CN.md)、
 [请求与数据链路](docs/architecture/request-lifecycle.zh-CN.md)和
@@ -78,7 +78,7 @@ MCP Host
 运行要求：
 
 - Python 3.12 或更高版本；
-- Apache Doris 3.0.0 或更高版本；
+- Apache Doris 2.0.0 或更高版本；
 - 可以访问 Doris FE MySQL 端口，通常为 `9030`。
 
 安装固定版本：
@@ -145,9 +145,11 @@ Server 使用确定性 Manifest 与错误模型、签名并带有效期的游标
 Schema 校验以及清洗后的 Trace 传播。未支持或配置错误的 Child 仍可在有权限时
 以 `callable=false` 被发现，真正调用时按 Fail Closed 处理。
 
-当前限制包括：Doris OAuth 状态只存在于单进程、Token 路由上的 ADBC
-Fail Closed、Ossie 只做可选只读 Grounding，以及原生血缘事件采用异步
-Best-effort 投递。详见[可靠性与限制](docs/operations/reliability.zh-CN.md)。
+当前限制包括：Doris OAuth 状态只存在于单进程；ADBC 默认关闭，只有用户明确
+指定 ADBC/Arrow Flight SQL 时才能调用，并在 Token 路由上 Fail Closed；Ossie
+只做可选只读 Grounding；MetricFlow 依赖可选编译 Sidecar，编译后的 SQL 必须
+回到 MCP 有界查询运行时执行；原生血缘事件采用异步 Best-effort 投递。详见
+[可靠性与限制](docs/operations/reliability.zh-CN.md)。
 
 ## 文档体系
 
@@ -162,6 +164,8 @@ Best-effort 投递。详见[可靠性与限制](docs/operations/reliability.zh-C
 - [请求与数据链路](docs/architecture/request-lifecycle.zh-CN.md)
 - [工具领域](docs/capabilities/tool-domains.zh-CN.md)
 - [能力可用性](docs/capabilities/availability.zh-CN.md)
+- [Doris 版本能力矩阵](docs/capabilities/doris-version-matrix.zh-CN.md)
+- [MetricFlow 接入](docs/integrations/metricflow.zh-CN.md)
 - [MCP 2026-07-28 合同](docs/protocol/mcp-2026-07-28.zh-CN.md)
 - [安全模型](docs/security/security-model.zh-CN.md)
 - [部署](docs/operations/deployment.zh-CN.md)

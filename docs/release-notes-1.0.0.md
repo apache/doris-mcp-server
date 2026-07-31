@@ -13,7 +13,7 @@ distributed deployment shapes remain intentionally constrained.
 ## Highlights
 
 - Eight stable, read-only top-level domains with progressive child discovery.
-- Forty-seven collision-free child capabilities across catalog, query,
+- Fifty-five collision-free child capabilities across catalog, query,
   cluster, pipeline, search, governance, lakehouse, and semantic concerns.
 - A startup-time `flat` fallback for Hosts that cannot use progressive
   disclosure.
@@ -22,12 +22,14 @@ distributed deployment shapes remain intentionally constrained.
 - Native Doris lineage integration for 4.0.6 and later when the companion
   provider is available, with explicit audit-based fallback behavior.
 - Optional Apache Ossie semantic grounding with exact `model_ref` selection.
+- Optional MetricFlow consumption with exact `model_ref`, a compile-only
+  sidecar, and MCP-governed Doris execution.
 - MCP `2026-07-28` stateless request handling, bounded schemas and results,
   trace propagation, and deterministic product identity.
 - Static token, JWT, external OAuth/OIDC, and Doris-backed OAuth boundaries.
 
 The generated [tool catalog](tool-registry.md) contains the exact 8-domain and
-47-child release surface.
+55-child release surface.
 
 ## Breaking changes
 
@@ -45,8 +47,10 @@ configuration, and old-to-new mappings.
 
 ## Doris compatibility
 
-The project minimum is Doris `3.0.0`. The 1.0 target patch set is:
+The project minimum is Doris `2.0.0`. The 1.0 target patch set is:
 
+- `2.0.15`
+- `2.1.11`
 - `3.0.3`
 - `3.1.4`
 - `4.0.5`
@@ -74,7 +78,7 @@ The release gate covers:
 - official MCP `2026-07-28` stateless conformance;
 - stdio and Streamable HTTP;
 - hierarchical and Flat exposure;
-- stable 8-domain and 47-child contracts across processes;
+- stable 8-domain and 55-child contracts across processes;
 - real read-only Doris calls with zero management writes.
 
 ## Known limits
@@ -82,9 +86,12 @@ The release gate covers:
 - `doris_admin` is reserved but not registered.
 - Doris-backed OAuth uses process-local state and is not a multi-worker or
   multi-node mode.
-- ADBC execution is fail-closed on token-bound routes because the current
-  Arrow Flight client is process-global.
+- ADBC is default-off and requires explicit user intent plus
+  `explicit_adbc=true`; execution is fail-closed on token-bound routes because
+  the current Arrow Flight client is process-global.
 - Ossie semantic grounding is optional, read-only, and does not compile or
   execute semantic model expressions.
+- MetricFlow support requires an operator-supplied Doris-capable compiler
+  provider; the provider cannot bypass MCP-governed query execution.
 - Native lineage requires a queryable companion provider; audit inference is
   the primary path before Doris 4.0.6 and a degraded fallback afterward.

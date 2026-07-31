@@ -21,7 +21,7 @@ under the License.
 
 [English](tool-domains.md) | 简体中文
 
-1.0 只有一套内置只读目录：8 个顶级领域、47 个精确 Child。本文解释产品语义；
+1.0 只有一套内置只读目录：8 个顶级领域、55 个精确 Child。本文解释产品语义；
 自动生成的[工具目录](../tool-registry.md)才是 Feature ID、Handler Binding、授权
 标识、Variant 和迁移输入的权威事实源。
 
@@ -68,9 +68,11 @@ Warning，不会把部分可用的元数据压成一个含义不清的对象。
 | `get_query_profile` | 获取有界 FE Query Profile。 | 依赖 FE HTTP/Profile 证据，绝不返回凭据。 |
 | `diagnose_query_performance` | 根据 Plan/Profile/Query 证据生成确定性结论。 | 基于规则与证据，不编造置信度。 |
 | `list_slow_queries` | 列出有界慢查询证据。 | 需要可读审计历史，敏感 SQL 字段会清洗。 |
-| `get_adbc_connection_info` | 报告 Arrow Flight SQL/ADBC 就绪状态。 | 只返回清洗后的 Provider/Endpoint 证据。 |
-| `execute_adbc_query` | 通过 ADBC 执行有界只读查询。 | 可选 Provider；1.0 在 Token 绑定路由上 Fail Closed。 |
+| `get_adbc_connection_info` | 报告 Arrow Flight SQL/ADBC 就绪状态。 | 高级能力，默认关闭；只有用户明确指定 ADBC 后才可使用。 |
+| `execute_adbc_query` | 通过 ADBC 执行有界只读查询。 | 必须传 `explicit_adbc=true`；绝不替代普通 `execute_query`；Token 绑定路由 Fail Closed。 |
 
+普通 SQL 始终使用 `execute_query`。两个 ADBC Child 只服务于用户明确点名 ADBC
+或 Arrow Flight SQL 的高级请求；Schema 与运行时都会强制 `explicit_adbc=true`。
 Query 领域允许 SQL，因为 SQL 是 Doris 原生查询接口；但不会公开 DDL、DML、
 管理 SQL、任意堆叠语句或无界结果通道。
 
@@ -136,7 +138,7 @@ DSL 片段或任意 Filter SQL。
 | `inspect_lakehouse_table` | 查看表格式、Snapshot、分区、Lifecycle 和 Pushdown 证据。 | 4.1 Lifecycle 特征与基础元数据分开报告。 |
 | `inspect_variant_column` | 查看 Variant 类型与有界 Shape 证据。 | 不返回 Sample Value/敏感 Path；高级 4.1 特征受能力 Gate。 |
 
-## `doris_semantic`——可选 Apache Ossie Consumer
+## `doris_semantic`——可选语义消费者
 
 | Child | 用途 | 重要行为 |
 |---|---|---|
@@ -144,14 +146,23 @@ DSL 片段或任意 Filter SQL。
 | `get_semantic_model_summary` | 为一个精确 `model_ref` 返回有界摘要。 | 不根据 Prompt 猜模型。 |
 | `get_semantic_context` | 构建确定性的只读 Grounding Context。 | 需要精确模型、路由级映射与 Doris 可见性。 |
 | `get_semantic_mapping_status` | 解释私有 Doris Binding 就绪状态。 | 返回状态/原因，不公开私有 Binding Manifest。 |
+| `list_metricflow_models` | 列出已配置的 MetricFlow Model Reference。 | Provider 默认关闭；不根据 Prompt 猜模型。 |
+| `get_metricflow_status` | 返回 Provider/Model 校验状态。 | 需要一个精确 `model_ref`。 |
+| `list_metricflow_metrics` | 列出有界 Metric 和可选 Dimension。 | 需要精确 `model_ref`，支持有界过滤。 |
+| `get_metricflow_group_bys` | 返回所选 Metric 可用的 Group-by Dimension。 | Provider 在精确模型内验证 Metric 集合。 |
+| `list_metricflow_saved_queries` | 列出有界 Saved Query 元数据。 | 不执行 Saved Query。 |
+| `get_metricflow_dimension_values` | 编译并执行有界 Dimension Value 查询。 | Provider 编译 Doris SQL，MCP SQL Guard 与 Query Runtime 执行。 |
+| `compile_metricflow_query` | 把结构化 MetricFlow 请求编译为 Doris SQL。 | 只编译，不返回查询结果，也不能绕过 SQL Guard。 |
+| `execute_metricflow_query` | 编译并执行有界 MetricFlow 请求。 | 执行必须回到 `DorisQueryRuntime`，统一处理路由、RBAC、限额、审计与脱敏。 |
 
-Ossie 拥有语义定义；MCP Server 消费它并映射到 Doris 证据，不会成为语义模型
-创作或执行引擎。
+Ossie 拥有语义定义；MetricFlow 拥有指标语义与查询编译。MCP Server 是受治理
+消费者：不创作模型、不猜模型，也不允许 Provider 绕过 MCP Query Runtime 直接
+执行 Doris SQL。详见 [MetricFlow 接入](../integrations/metricflow.zh-CN.md)。
 
 ## 预留与扩展面
 
 - `doris_admin` 故意不注册。
-- 自定义 Provider 是显式扩展，不计入 8/47。
+- 自定义 Provider 是显式扩展，不计入 8/55。
 - MCP Resource 与 Prompt 是独立协议面，不是隐藏 Child。
 - 1.0 以前的 Tool 名称不是可调用 Alias。
 
