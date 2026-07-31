@@ -19,7 +19,6 @@ def session_cache():
 
 
 class TestDorisSessionCache:
-
     def test_initialization(self, session_cache):
         cache, _ = session_cache
         assert cache.cache_system_session is True
@@ -141,15 +140,13 @@ def _make_doris_connection(cursor_description, fetchall_rows, rowcount=0):
     cursor = MagicMock()
     cursor.execute = AsyncMock(return_value=None)
     cursor.fetchall = AsyncMock(return_value=fetchall_rows)
+    cursor.close = AsyncMock(return_value=None)
     cursor.description = cursor_description
     cursor.rowcount = rowcount
 
-    cursor_ctx = MagicMock()
-    cursor_ctx.__aenter__ = AsyncMock(return_value=cursor)
-    cursor_ctx.__aexit__ = AsyncMock(return_value=None)
-
     raw_connection = MagicMock()
-    raw_connection.cursor = MagicMock(return_value=cursor_ctx)
+    raw_connection.cursor = AsyncMock(return_value=cursor)
+    raw_connection.ensure_closed = AsyncMock()
 
     return DorisConnection(connection=raw_connection, session_id="test")
 
@@ -158,15 +155,12 @@ def _make_bounded_doris_connection(cursor_description, fetchmany_rows):
     cursor = MagicMock()
     cursor.execute = AsyncMock(return_value=None)
     cursor.fetchmany = AsyncMock(side_effect=fetchmany_rows)
+    cursor.close = AsyncMock(return_value=None)
     cursor.description = cursor_description
     cursor.rowcount = 0
 
-    cursor_ctx = MagicMock()
-    cursor_ctx.__aenter__ = AsyncMock(return_value=cursor)
-    cursor_ctx.__aexit__ = AsyncMock(return_value=None)
-
     raw_connection = MagicMock()
-    raw_connection.cursor = MagicMock(return_value=cursor_ctx)
+    raw_connection.cursor = AsyncMock(return_value=cursor)
     raw_connection.ensure_closed = AsyncMock()
 
     return (
@@ -314,11 +308,12 @@ class TestBoundedResultFetch:
         assert result.metadata["truncation_reason"] == "row_limit"
         assert result.metadata["result_bytes"] <= 4096
         cursor.fetchall.assert_not_called()
+        cursor.close.assert_not_awaited()
         raw_connection.ensure_closed.assert_awaited_once()
         assert conn.is_healthy is False
 
     async def test_byte_limit_is_measured_after_masking(self):
-        conn, _, raw_connection = _make_bounded_doris_connection(
+        conn, cursor, raw_connection = _make_bounded_doris_connection(
             [("secret", None, None, None, None, None, None)],
             [[{"secret": "x"}], []],
         )
@@ -347,6 +342,7 @@ class TestBoundedResultFetch:
         assert result.metadata["truncation_reason"] == "byte_limit"
         assert result.metadata["result_bytes"] == 2
         security_manager.apply_data_masking.assert_awaited_once()
+        cursor.close.assert_not_awaited()
         raw_connection.ensure_closed.assert_awaited_once()
 
     async def test_task_cancellation_closes_connection_and_propagates(self):
@@ -354,6 +350,7 @@ class TestBoundedResultFetch:
             [("id", None, None, None, None, None, None)],
             [],
         )
+
         async def never_returns(*args, **kwargs):
             del args, kwargs
             await asyncio.Event().wait()
@@ -372,5 +369,24 @@ class TestBoundedResultFetch:
         with pytest.raises(asyncio.CancelledError):
             await task
 
+        raw_connection.ensure_closed.assert_awaited_once()
+        cursor.close.assert_not_awaited()
+        assert conn.is_healthy is False
+
+    async def test_bounded_fetch_failure_closes_physical_connection(self):
+        conn, cursor, raw_connection = _make_bounded_doris_connection(
+            [("id", None, None, None, None, None, None)],
+            [],
+        )
+        cursor.fetchmany.side_effect = RuntimeError("stream failed")
+
+        with pytest.raises(RuntimeError, match="stream failed"):
+            await conn.execute(
+                "SELECT id FROM data",
+                max_rows=10,
+                max_bytes=4096,
+            )
+
+        cursor.close.assert_not_awaited()
         raw_connection.ensure_closed.assert_awaited_once()
         assert conn.is_healthy is False

@@ -35,8 +35,14 @@ from doris_mcp_server.utils.doris_http_client import (
     DorisHTTPPolicyError,
     DorisHTTPRequestError,
     DorisHTTPResponseTooLarge,
+    database_config_for_request,
 )
 from doris_mcp_server.utils.monitoring_tools import DorisMonitoringTools
+from doris_mcp_server.utils.security import (
+    AuthContext,
+    reset_auth_context,
+    set_current_auth_context,
+)
 
 
 def _database_config(
@@ -141,6 +147,29 @@ def _http_client(
         total_timeout_seconds=total_timeout,
         max_response_bytes=max_response_bytes,
     )
+
+
+def test_http_config_fails_closed_for_doris_oauth_route() -> None:
+    manager = _manager(
+        _database_config(
+            host="127.0.0.1",
+            fe_http_port=8030,
+        )
+    )
+    context_token = set_current_auth_context(
+        AuthContext(
+            auth_method="doris_oauth",
+            doris_user="analyst",
+        )
+    )
+    try:
+        with pytest.raises(
+            DorisHTTPPolicyError,
+            match="credentials are unavailable",
+        ):
+            database_config_for_request(manager)
+    finally:
+        reset_auth_context(context_token)
 
 
 @pytest.mark.parametrize(

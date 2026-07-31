@@ -102,6 +102,15 @@ def test_adbc_is_inside_query_and_variant_is_inside_lakehouse() -> None:
     assert "execute_adbc_query" in query_children
     assert "inspect_variant_column" in lakehouse_children
     assert "doris_adbc" not in EXPECTED_DOMAIN_CHILDREN
+    execute_adbc = DORIS_FEATURE_MATRIX.get_feature(
+        "doris_query",
+        "execute_adbc_query",
+    )
+    assert execute_adbc.support_contract.variants[0].required_probes == (
+        "adbc_driver_ready",
+        "flight_sql_reachable",
+        "read_only_sql_guard_ready",
+    )
 
 
 def test_every_contract_is_fail_closed_and_has_resolvable_sources() -> None:
@@ -425,6 +434,20 @@ def test_table_size_uses_master_fe_metadata_with_unknown_backend_version() -> No
     )
 
     assert result.version_scope is CapabilityVersionScope.MASTER_FE
+    assert result.effective_version == "4.0.5"
+    assert result.compatible is True
+
+
+def test_query_diagnosis_uses_provider_with_master_fe_baseline() -> None:
+    result = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_query",
+        child_name="diagnose_query_performance",
+        versions=_vector("4.0.5"),
+    )
+
+    assert result.version_scope is (
+        CapabilityVersionScope.PROVIDER_WITH_MASTER_FE_BASELINE
+    )
     assert result.effective_version == "4.0.5"
     assert result.compatible is True
 

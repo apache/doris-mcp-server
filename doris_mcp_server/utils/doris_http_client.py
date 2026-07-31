@@ -210,9 +210,7 @@ def configured_fe_http_hosts(database_config: Any) -> tuple[str, ...]:
             ):
                 raise DorisHTTPPolicyError("Configured Doris FE SQL hosts are invalid")
             if len(sql_hosts) > MAX_CONFIGURED_HOSTS:
-                raise DorisHTTPPolicyError(
-                    "Too many Doris FE SQL hosts are configured"
-                )
+                raise DorisHTTPPolicyError("Too many Doris FE SQL hosts are configured")
             candidates = sql_hosts or [database_config.host]
 
     return tuple(dict.fromkeys(_normalize_host(host) for host in candidates))
@@ -220,6 +218,13 @@ def configured_fe_http_hosts(database_config: Any) -> tuple[str, ...]:
 
 def database_config_for_request(connection_manager: Any) -> Any:
     """Resolve a token-bound endpoint config with legacy-manager fallback."""
+    from .security import get_current_auth_context
+
+    auth_context = get_current_auth_context()
+    if auth_context is not None and auth_context.auth_method == "doris_oauth":
+        raise DorisHTTPPolicyError(
+            "Doris OAuth credentials are unavailable for HTTP Basic requests"
+        )
     resolver = getattr(
         connection_manager,
         "get_database_config_for_auth_context",

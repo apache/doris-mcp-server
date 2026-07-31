@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -21,6 +22,7 @@ from doris_mcp_server.tools.doris_feature_matrix import (
     EXPECTED_DOMAIN_CHILDREN,
 )
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
+from doris_mcp_server.utils.adbc_query_tools import DorisADBCQueryTools
 from doris_mcp_server.utils.analysis_tools import SQLAnalyzer
 from doris_mcp_server.utils.data_governance_tools import DataGovernanceTools
 from doris_mcp_server.utils.db import QueryResult
@@ -48,7 +50,9 @@ class FakeRoutedConnection:
         *,
         max_rows=None,
         max_bytes=None,
+        mask_result=True,
     ):
+        del mask_result
         return await self.manager.execute_query(
             self.session_id,
             sql,
@@ -98,6 +102,21 @@ class FakeRoutedConnectionManager:
 
     async def release_connection(self, session_id, connection):
         self.connection_releases += 1
+
+    @asynccontextmanager
+    async def get_connection_context_for_auth_context(
+        self,
+        session_id,
+        auth_context,
+    ):
+        connection = await self._get_connection_for_auth_context(
+            session_id,
+            auth_context,
+        )
+        try:
+            yield connection
+        finally:
+            await self.release_connection(session_id, connection)
 
     async def execute_query(
         self,
@@ -253,6 +272,11 @@ def _real_tool_manager_for_routing(tmp_path):
     manager.sql_analyzer = SQLAnalyzer(connection_manager)
     manager._tool_exposure_mode = ToolExposureMode.HIERARCHICAL
     manager._domain_manifest_service = DomainManifestService()
+    manager.adbc_query_tools = DorisADBCQueryTools(connection_manager)
+    manager._initialize_query_handlers(
+        connection_manager,
+        manager.adbc_query_tools,
+    )
     return manager, connection_manager
 
 
@@ -359,13 +383,14 @@ async def test_doris_oauth_exec_query_real_tool_path_uses_doris_user_route(tmp_p
     finally:
         reset_auth_context(token)
 
-    assert result["success"] is True
-    assert result["data"] == [{"one": 1}]
+    assert result["status"] == "success"
+    assert result["data"]["rows"] == [{"one": 1}]
     assert connection_manager.global_calls == 0
     assert connection_manager.token_calls == 0
     assert len(connection_manager.routed_calls) == 1
     assert connection_manager.routed_calls[0]["doris_user"] == "alice"
-    assert connection_manager.routed_calls[0]["sql"] == "SELECT 1 LIMIT 5"
+    assert connection_manager.routed_calls[0]["sql"] == "SELECT 1"
+    assert connection_manager.routed_calls[0]["max_rows"] == 5
 
 
 @pytest.mark.asyncio
@@ -397,14 +422,15 @@ async def test_doris_oauth_exec_query_with_db_catalog_uses_one_routed_connection
     finally:
         reset_auth_context(token)
 
-    assert result["success"] is True
+    assert result["status"] == "success"
     assert connection_manager.connection_acquires == 1
     assert connection_manager.connection_releases == 1
     assert [call["sql"] for call in connection_manager.routed_calls] == [
-        "USE CATALOG `ctl1`",
+        "SWITCH `ctl1`",
         "USE `db1`",
-        "SELECT * FROM orders LIMIT 5",
+        "SELECT * FROM orders",
     ]
+    assert connection_manager.routed_calls[-1]["max_rows"] == 5
     assert {call["doris_user"] for call in connection_manager.routed_calls} == {"alice"}
 
 
@@ -428,8 +454,8 @@ async def test_doris_oauth_sql_explain_real_tool_path_uses_doris_user_route(tmp_
     finally:
         reset_auth_context(token)
 
-    assert result["success"] is True
-    assert "EXPLAIN SELECT 1" in result["content"]
+    assert result["status"] == "success"
+    assert result["data"]["plan_text"] == "SCAN"
     assert connection_manager.global_calls == 0
     assert connection_manager.token_calls == 0
     assert len(connection_manager.routed_calls) == 1
@@ -463,11 +489,11 @@ async def test_doris_oauth_sql_explain_with_db_catalog_uses_one_routed_connectio
     finally:
         reset_auth_context(token)
 
-    assert result["success"] is True
+    assert result["status"] == "success"
     assert connection_manager.connection_acquires == 1
     assert connection_manager.connection_releases == 1
     assert [call["sql"] for call in connection_manager.routed_calls] == [
-        "USE CATALOG `ctl1`",
+        "SWITCH `ctl1`",
         "USE `db1`",
         "EXPLAIN SELECT * FROM orders",
     ]

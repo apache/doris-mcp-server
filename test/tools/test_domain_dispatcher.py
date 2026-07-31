@@ -51,6 +51,7 @@ from doris_mcp_server.tools.domain_models import (
 )
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
+from doris_mcp_server.utils.query_runtime import QueryRuntimeFailure
 from doris_mcp_server.utils.security import AuthContext
 
 
@@ -153,7 +154,7 @@ async def test_default_manager_fails_closed_without_capability_snapshot() -> Non
     assert children["diagnose_query_performance"].availability.callable is False
     assert (
         children["diagnose_query_performance"].availability.reason_code
-        == "HANDLER_NOT_BOUND"
+        == "DORIS_VERSION_UNKNOWN"
     )
 
     manager._exec_query_tool.assert_not_awaited()
@@ -665,17 +666,42 @@ async def test_flat_dispatch_cannot_bypass_discovery_only_grant() -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_adapter_rejections_are_child_argument_errors() -> None:
+async def test_query_adapters_support_formal_query_capabilities() -> None:
     manager = _manager(
         "doris_query.execute_query",
         "doris_query.explain_query",
         "doris_query.get_query_profile",
     )
+    manager._exec_query_tool = AsyncMock(
+        return_value={
+            "status": "success",
+            "data": {
+                "columns": [{"name": "value"}],
+                "rows": [{"value": 1}],
+                "row_count": 1,
+                "truncated": False,
+            },
+            "warnings": [],
+            "metadata": {},
+        }
+    )
+    diagnostic = {
+        "status": "success",
+        "data": {},
+        "warnings": [],
+        "metadata": {},
+        "evidence": [],
+    }
+    manager._get_sql_explain_tool = AsyncMock(return_value=diagnostic)
+    manager._get_sql_profile_tool = AsyncMock(return_value=diagnostic)
 
     cases = (
         (
             "execute_query",
-            {"sql": "SELECT ?", "parameters": {"value": 1}},
+            {
+                "sql": "SELECT %(value)s",
+                "parameters": {"value": 1},
+            },
         ),
         (
             "explain_query",
@@ -692,11 +718,104 @@ async def test_active_adapter_rejections_are_child_argument_errors() -> None:
             {"child_tool": child_name, "arguments": arguments},
             None,
         )
-        assert result.mode == "error"
-        assert result.error.code is DomainErrorCode.CHILD_ARGUMENTS_INVALID
-        assert result.to_wire()["error"]["details"]["violations"] == [
-            {"instancePath": "/", "keyword": "activeHandler"},
-        ]
+        assert result.mode == "result"
+
+    manager._exec_query_tool.assert_awaited_once_with(
+        {
+            "sql": "SELECT %(value)s",
+            "parameters": {"value": 1},
+        }
+    )
+    manager._get_sql_explain_tool.assert_awaited_once_with(
+        {"sql": "SELECT 1", "level": "costs"}
+    )
+    manager._get_sql_profile_tool.assert_awaited_once_with(
+        {"query_id": "query-1"}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason_code", "expected_code"),
+    [
+        (
+            "QUERY_READ_ONLY_VIOLATION",
+            DomainErrorCode.CHILD_ARGUMENTS_INVALID,
+        ),
+        ("QUERY_TIMEOUT", DomainErrorCode.CHILD_EXECUTION_TIMEOUT),
+        (
+            "QUERY_BACKEND_UNAVAILABLE",
+            DomainErrorCode.CHILD_EXECUTION_FAILED,
+        ),
+    ],
+)
+async def test_query_runtime_failures_map_to_stable_domain_errors(
+    reason_code: str,
+    expected_code: DomainErrorCode,
+) -> None:
+    manager = _manager("doris_query.execute_query")
+    manager._exec_query_tool = AsyncMock(
+        side_effect=QueryRuntimeFailure(
+            "Sanitized query failure.",
+            reason_code=reason_code,
+            status_code=504 if reason_code == "QUERY_TIMEOUT" else 400,
+            retryable=reason_code != "QUERY_READ_ONLY_VIOLATION",
+        )
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_query",
+        {
+            "child_tool": "execute_query",
+            "arguments": {"sql": "SELECT 1"},
+        },
+        None,
+    )
+
+    assert result.mode == "error"
+    assert result.error.code is expected_code
+    assert result.error.message == "Sanitized query failure."
+    assert result.error.details["reason_code"] == reason_code
+
+
+@pytest.mark.asyncio
+async def test_new_query_diagnosis_uses_formal_direct_binding() -> None:
+    manager = _manager("doris_query.diagnose_query_performance")
+    manager.query_runtime.diagnose_query_performance = AsyncMock(
+        return_value={
+            "status": "partial",
+            "data": {
+                "query_id": None,
+                "steps": {"cluster_context": {"status": "not_requested"}},
+                "findings": [],
+                "recommendations": [],
+            },
+            "warnings": ["No matching audit-log evidence was found."],
+            "metadata": {
+                "source": "deterministic_query_diagnosis",
+                "rule_version": "query-diagnosis-v1",
+            },
+            "evidence": [],
+        }
+    )
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_query",
+        {
+            "child_tool": "diagnose_query_performance",
+            "arguments": {"sql": "SELECT 1"},
+        },
+        None,
+    )
+
+    assert result.mode == "result"
+    assert result.to_wire()["data"]["status"] == "partial"
+    manager.query_runtime.diagnose_query_performance.assert_awaited_once_with(
+        query_id=None,
+        sql="SELECT 1",
+        database=None,
+        include_cluster_context=False,
+    )
 
 
 @pytest.mark.asyncio
@@ -1557,8 +1676,9 @@ def test_detail_result_normalization_adds_formal_evidence() -> None:
                 "days": 1,
                 "top_n": 8,
                 "min_execution_time_ms": 500,
+                "db_name": "db",
             },
-            1,
+            0,
         ),
         (
             "adapt:resource_growth_arguments",

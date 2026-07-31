@@ -80,6 +80,16 @@ class DorisADBCQueryTools:
         self._query_lock = asyncio.Lock()
 
     def _token_bound_route_error(self) -> dict[str, Any] | None:
+        auth_context = get_auth_context()
+        if auth_context is not None and auth_context.auth_method == "doris_oauth":
+            return {
+                "success": False,
+                "error": (
+                    "ADBC is unavailable for token-bound database routes; use "
+                    "doris_query.execute_query or a separately configured MCP process"
+                ),
+                "error_type": "token_bound_adbc_unsupported",
+            }
         global_database_config = getattr(
             self.connection_manager.config,
             "database",
@@ -136,9 +146,7 @@ class DorisADBCQueryTools:
                     ),
                     max_bytes=max_bytes,
                     timeout_seconds=(
-                        timeout
-                        if timeout is not None
-                        else adbc_config.default_timeout
+                        timeout if timeout is not None else adbc_config.default_timeout
                     ),
                 )
             except ResultLimitError as exc:
@@ -196,7 +204,7 @@ class DorisADBCQueryTools:
                 "success": False,
                 "error": f"ADBC query execution failed: {str(e)}",
                 "error_type": "execution_error",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
     async def _close_adbc_client(self) -> None:
@@ -209,7 +217,11 @@ class DorisADBCQueryTools:
         except Exception as exc:
             logger.debug(f"Failed to close ADBC client: {exc}")
 
-    async def _check_arrow_flight_ports(self) -> dict[str, Any]:
+    async def _check_arrow_flight_ports(
+        self,
+        *,
+        connectivity_timeout: float | None = None,
+    ) -> dict[str, Any]:
         """Check Arrow Flight SQL port configuration and availability"""
         try:
             # Check environment variables
@@ -220,14 +232,14 @@ class DorisADBCQueryTools:
                 return {
                     "success": False,
                     "error": "Missing environment variable FE_ARROW_FLIGHT_SQL_PORT, please configure Arrow Flight SQL FE port in .env file",
-                    "error_type": "missing_fe_port_config"
+                    "error_type": "missing_fe_port_config",
                 }
 
             if not be_port_raw:
                 return {
                     "success": False,
                     "error": "Missing environment variable BE_ARROW_FLIGHT_SQL_PORT, please configure Arrow Flight SQL BE port in .env file",
-                    "error_type": "missing_be_port_config"
+                    "error_type": "missing_be_port_config",
                 }
 
             # Convert to integer and validate
@@ -238,21 +250,26 @@ class DorisADBCQueryTools:
                 return {
                     "success": False,
                     "error": "Invalid Arrow Flight SQL port configuration, please ensure FE_ARROW_FLIGHT_SQL_PORT and BE_ARROW_FLIGHT_SQL_PORT are valid numbers",
-                    "error_type": "invalid_port_format"
+                    "error_type": "invalid_port_format",
                 }
 
             # Get host address
             fe_host = self.connection_manager.host
 
             # Check FE Arrow Flight SQL port availability
-            fe_available = self._check_port_connectivity(fe_host, fe_port)
+            fe_available = await asyncio.to_thread(
+                self._check_port_connectivity,
+                fe_host,
+                fe_port,
+                connectivity_timeout,
+            )
             if not fe_available:
                 return {
                     "success": False,
                     "error": f"Cannot connect to FE Arrow Flight SQL port {fe_host}:{fe_port}, please check if service is running",
                     "error_type": "fe_port_unavailable",
                     "fe_host": fe_host,
-                    "fe_port": fe_port
+                    "fe_port": fe_port,
                 }
 
             # Get BE host list
@@ -261,7 +278,7 @@ class DorisADBCQueryTools:
                 return {
                     "success": False,
                     "error": "Cannot get BE node information, please check cluster status",
-                    "error_type": "no_be_hosts"
+                    "error_type": "no_be_hosts",
                 }
 
             # Check at least one BE Arrow Flight SQL port availability
@@ -269,12 +286,15 @@ class DorisADBCQueryTools:
             be_check_results = []
 
             for be_host in be_hosts[:3]:  # Check first 3 BE nodes
-                be_available = self._check_port_connectivity(be_host, be_port)
-                be_check_results.append({
-                    "host": be_host,
-                    "port": be_port,
-                    "available": be_available
-                })
+                be_available = await asyncio.to_thread(
+                    self._check_port_connectivity,
+                    be_host,
+                    be_port,
+                    connectivity_timeout,
+                )
+                be_check_results.append(
+                    {"host": be_host, "port": be_port, "available": be_available}
+                )
                 if be_available:
                     be_available_count += 1
 
@@ -283,7 +303,7 @@ class DorisADBCQueryTools:
                     "success": False,
                     "error": f"Cannot connect to any BE Arrow Flight SQL port (port: {be_port}), please check if BE services are running",
                     "error_type": "no_be_ports_available",
-                    "be_check_results": be_check_results
+                    "be_check_results": be_check_results,
                 }
 
             return {
@@ -293,7 +313,7 @@ class DorisADBCQueryTools:
                 "be_port": be_port,
                 "be_hosts": be_hosts,
                 "be_available_count": be_available_count,
-                "be_check_results": be_check_results
+                "be_check_results": be_check_results,
             }
 
         except Exception as e:
@@ -301,10 +321,15 @@ class DorisADBCQueryTools:
             return {
                 "success": False,
                 "error": f"Arrow Flight port check failed: {str(e)}",
-                "error_type": "port_check_error"
+                "error_type": "port_check_error",
             }
 
-    def _check_port_connectivity(self, host: str, port: int, timeout: int | None = None) -> bool:
+    def _check_port_connectivity(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+    ) -> bool:
         """Check port connectivity"""
         try:
             # Use config timeout if not specified
@@ -328,10 +353,14 @@ class DorisADBCQueryTools:
                 return db_config.be_hosts
 
             # Get BE nodes via SHOW BACKENDS
-            logger.info("No BE hosts configured, getting BE node information via SHOW BACKENDS")
+            logger.info(
+                "No BE hosts configured, getting BE node information via SHOW BACKENDS"
+            )
             connection = await self.connection_manager.get_connection("query")
             auth_context = get_auth_context()
-            result = await connection.execute("SHOW BACKENDS", auth_context=auth_context)
+            result = await connection.execute(
+                "SHOW BACKENDS", auth_context=auth_context
+            )
 
             be_hosts = []
             for row in result.data:
@@ -359,29 +388,33 @@ class DorisADBCQueryTools:
             # Import ADBC Driver Manager
             try:
                 import adbc_driver_manager
+
                 self.adbc_manager_module = adbc_driver_manager
             except ImportError:
                 return {
                     "success": False,
                     "error": "Missing adbc_driver_manager module, please install: pip install adbc_driver_manager",
-                    "error_type": "missing_adbc_manager"
+                    "error_type": "missing_adbc_manager",
                 }
 
             # Import ADBC Flight SQL Driver
             try:
                 import adbc_driver_flightsql.dbapi as flight_sql
+
                 self.flight_sql_module = flight_sql
             except ImportError:
                 return {
                     "success": False,
                     "error": "Missing adbc_driver_flightsql module, please install: pip install adbc_driver_flightsql",
-                    "error_type": "missing_flight_sql_driver"
+                    "error_type": "missing_flight_sql_driver",
                 }
 
             return {
                 "success": True,
-                "adbc_manager_version": getattr(adbc_driver_manager, '__version__', 'unknown'),
-                "flight_sql_version": getattr(flight_sql, '__version__', 'unknown')
+                "adbc_manager_version": getattr(
+                    adbc_driver_manager, "__version__", "unknown"
+                ),
+                "flight_sql_version": getattr(flight_sql, "__version__", "unknown"),
             }
 
         except Exception as e:
@@ -389,16 +422,13 @@ class DorisADBCQueryTools:
             return {
                 "success": False,
                 "error": f"ADBC module import failed: {str(e)}",
-                "error_type": "import_error"
+                "error_type": "import_error",
             }
 
     async def _create_adbc_connection(self) -> dict[str, Any]:
         """Create ADBC connection"""
         try:
-            if (
-                self.adbc_manager_module is None
-                or self.flight_sql_module is None
-            ):
+            if self.adbc_manager_module is None or self.flight_sql_module is None:
                 return {
                     "success": False,
                     "error": "ADBC modules have not been loaded",
@@ -426,22 +456,17 @@ class DorisADBCQueryTools:
 
             # Create connection
             self.adbc_client = self.flight_sql_module.connect(
-                uri=uri,
-                db_kwargs=db_kwargs
+                uri=uri, db_kwargs=db_kwargs
             )
 
-            return {
-                "success": True,
-                "uri": uri,
-                "connection_established": True
-            }
+            return {"success": True, "uri": uri, "connection_established": True}
 
         except Exception as e:
             logger.error(f"Failed to create ADBC connection: {str(e)}")
             return {
                 "success": False,
                 "error": f"Failed to create ADBC connection: {str(e)}",
-                "error_type": "connection_error"
+                "error_type": "connection_error",
             }
 
     async def _execute_query_with_adbc(
@@ -456,7 +481,7 @@ class DorisADBCQueryTools:
                 return {
                     "success": False,
                     "error": "ADBC connection not established",
-                    "error_type": "no_connection"
+                    "error_type": "no_connection",
                 }
 
             # SECURITY FIX: Perform SQL security validation before executing
@@ -464,13 +489,15 @@ class DorisADBCQueryTools:
             if self.connection_manager.security_manager:
                 # Always perform security validation, even without auth_context
                 # Use a default context for basic SQL security checks
-                validation_result = await self.connection_manager.security_manager.validate_sql_security(sql, auth_context)
+                validation_result = await self.connection_manager.security_manager.validate_sql_security(
+                    sql, auth_context
+                )
                 if not validation_result.is_valid:
                     return {
                         "success": False,
                         "error": f"SQL security validation failed: {validation_result.error_message}",
                         "error_type": "security_violation",
-                        "risk_level": validation_result.risk_level
+                        "risk_level": validation_result.risk_level,
                     }
 
             cursor = self.adbc_client.cursor()
@@ -509,7 +536,7 @@ class DorisADBCQueryTools:
                 "success": False,
                 "error": f"ADBC query execution failed: {str(e)}",
                 "error_type": "query_execution_error",
-                "sql": sql
+                "sql": sql,
             }
 
     async def _cancel_adbc_worker(
@@ -671,11 +698,11 @@ class DorisADBCQueryTools:
                     "fe_host": self.connection_manager.host,
                     "fe_arrow_flight_port": fe_port,
                     "be_arrow_flight_port": be_port,
-                    "user": db_config.user
+                    "user": db_config.user,
                 },
                 "port_status": port_status,
                 "module_status": module_status,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
             if port_status["success"] and module_status["success"]:
@@ -697,7 +724,7 @@ class DorisADBCQueryTools:
             return {
                 "status": "error",
                 "error": f"Failed to get ADBC connection information: {str(e)}",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
             }
 
     def __del__(self) -> None:

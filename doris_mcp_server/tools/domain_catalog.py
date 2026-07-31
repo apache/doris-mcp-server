@@ -111,16 +111,17 @@ class LegacyToolMigration(ContractModel):
     def _validate_mode(self) -> Self:
         if self.mode is LegacyMigrationMode.COMPOSITE_SECTION:
             if self.target_section is None:
-                raise ValueError(
-                    "composite-section migrations require target_section"
-                )
+                raise ValueError("composite-section migrations require target_section")
         elif self.target_section is not None:
             raise ValueError(
                 "target_section is only valid for composite-section migrations"
             )
         if self.mode is LegacyMigrationMode.ADAPTED and self.adapter_name is None:
             raise ValueError("adapted migrations require adapter_name")
-        if self.mode is not LegacyMigrationMode.ADAPTED and self.adapter_name is not None:
+        if (
+            self.mode is not LegacyMigrationMode.ADAPTED
+            and self.adapter_name is not None
+        ):
             raise ValueError("adapter_name is only valid for adapted migrations")
         return self
 
@@ -184,9 +185,7 @@ class DorisDomainCatalog(ContractModel):
         )
         _require_unique(child_feature_ids, "formal child feature IDs")
         handler_names = tuple(
-            child.handler_name
-            for domain in self.domains
-            for child in domain.children
+            child.handler_name for domain in self.domains for child in domain.children
         )
         _require_unique(handler_names, "formal child handler bindings")
 
@@ -265,9 +264,10 @@ class DorisDomainCatalog(ContractModel):
             "indexes",
             "basic",
         )
-        if tuple(
-            migration.target_section for migration in table_context_migrations
-        ) != expected_sections:
+        if (
+            tuple(migration.target_section for migration in table_context_migrations)
+            != expected_sections
+        ):
             raise DomainCatalogError(
                 "get_table_context must merge the exact five legacy handlers "
                 "into schema, comments, indexes, and basic sections"
@@ -367,8 +367,7 @@ class DorisDomainCatalog(ContractModel):
         for domain in self.domains:
             for child in domain.children:
                 variants = ", ".join(
-                    f"`{variant.name}`"
-                    for variant in child.support_contract.variants
+                    f"`{variant.name}`" for variant in child.support_contract.variants
                 )
                 lines.append(
                     f"| `{domain.name}.{child.name}` | `{child.handler_name}` | "
@@ -413,12 +412,15 @@ def _string(
     *,
     enum: tuple[str, ...] | None = None,
     pattern: str | None = None,
+    max_length: int | None = None,
 ) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "string", "description": description}
     if enum is not None:
         schema["enum"] = list(enum)
     if pattern is not None:
         schema["pattern"] = pattern
+    if max_length is not None:
+        schema["maxLength"] = max_length
     return schema
 
 
@@ -495,6 +497,7 @@ def _input_schema(
     *,
     required: tuple[str, ...] = (),
     any_of: tuple[dict[str, Any], ...] = (),
+    one_of: tuple[dict[str, Any], ...] = (),
 ) -> dict[str, Any]:
     schema: dict[str, Any] = {
         "type": "object",
@@ -505,7 +508,26 @@ def _input_schema(
         schema["required"] = list(required)
     if any_of:
         schema["anyOf"] = list(any_of)
+    if one_of:
+        schema["oneOf"] = list(one_of)
     return schema
+
+
+def _query_parameters() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "description": (
+            "Exact values for PyMySQL named placeholders written as "
+            "%(name)s in the SQL text. Supplied keys must match every "
+            "placeholder exactly."
+        ),
+        "propertyNames": {
+            "pattern": r"^[A-Za-z_][A-Za-z0-9_]{0,63}$",
+        },
+        "additionalProperties": {
+            "type": ["string", "integer", "number", "boolean", "null"],
+        },
+    }
 
 
 def _result_schema(
@@ -546,9 +568,7 @@ def _result_schema(
     }
 
 
-_DETAIL_OUTPUT = _result_schema(
-    {"type": "object", "additionalProperties": True}
-)
+_DETAIL_OUTPUT = _result_schema({"type": "object", "additionalProperties": True})
 _DIAGNOSTIC_OUTPUT = _result_schema(
     {"type": "object", "additionalProperties": True},
     evidence=True,
@@ -821,9 +841,7 @@ DOMAIN_DEFINITIONS = (
                 "List visible internal and external Doris catalogs.",
                 _input_schema(
                     {
-                        "include_external": _boolean(
-                            "Include external catalogs."
-                        ),
+                        "include_external": _boolean("Include external catalogs."),
                         "pattern": _string("Optional catalog-name pattern."),
                     }
                 ),
@@ -919,17 +937,28 @@ DOMAIN_DEFINITIONS = (
                 "Execute one read-only Doris SQL statement with bounded results.",
                 _input_schema(
                     {
-                        "sql": _string("Read-only SQL statement."),
-                        "catalog": _string("Catalog context."),
-                        "database": _string("Database context."),
-                        "parameters": _object("Bound query parameters."),
+                        "sql": _string(
+                            "Read-only SQL statement.",
+                            max_length=1024 * 1024,
+                        ),
+                        "catalog": _string(
+                            "Catalog context.",
+                            max_length=64,
+                        ),
+                        "database": _string(
+                            "Database context.",
+                            max_length=64,
+                        ),
+                        "parameters": _query_parameters(),
                         "max_rows": _integer(
                             "Maximum returned rows.",
                             minimum=1,
+                            maximum=100_000,
                         ),
                         "timeout_ms": _integer(
                             "Execution timeout in milliseconds.",
                             minimum=1,
+                            maximum=300_000,
                         ),
                     },
                     required=("sql",),
@@ -944,9 +973,18 @@ DOMAIN_DEFINITIONS = (
                 "pushdown, and index selection.",
                 _input_schema(
                     {
-                        "sql": _string("Read-only SQL statement."),
-                        "catalog": _string("Catalog context."),
-                        "database": _string("Database context."),
+                        "sql": _string(
+                            "Read-only SQL statement.",
+                            max_length=1024 * 1024,
+                        ),
+                        "catalog": _string(
+                            "Catalog context.",
+                            max_length=64,
+                        ),
+                        "database": _string(
+                            "Database context.",
+                            max_length=64,
+                        ),
                         "level": _string(
                             "Explain detail level.",
                             enum=("normal", "verbose", "costs"),
@@ -963,19 +1001,31 @@ DOMAIN_DEFINITIONS = (
                 "Read a Doris query profile by query ID or a bounded SQL run.",
                 _input_schema(
                     {
-                        "query_id": _string("Existing Doris query ID."),
-                        "sql": _string("Read-only SQL to profile."),
+                        "query_id": _string(
+                            "Existing Doris query ID.",
+                            pattern=r"^[A-Za-z0-9_-]+$",
+                            max_length=128,
+                        ),
+                        "sql": _string(
+                            "Read-only SQL to profile.",
+                            max_length=1024 * 1024,
+                        ),
                         "recent_window_minutes": _integer(
                             "Recent lookup window in minutes.",
                             minimum=1,
+                            maximum=129_600,
                         ),
-                        "include_operator_tree": _boolean(
-                            "Include the operator tree."
-                        ),
+                        "include_operator_tree": _boolean("Include the operator tree."),
                     },
-                    any_of=(
-                        {"required": ["query_id"]},
-                        {"required": ["sql"]},
+                    one_of=(
+                        {
+                            "required": ["query_id"],
+                            "not": {"required": ["sql"]},
+                        },
+                        {
+                            "required": ["sql"],
+                            "not": {"required": ["query_id"]},
+                        },
                     ),
                 ),
                 _DIAGNOSTIC_OUTPUT,
@@ -988,16 +1038,32 @@ DOMAIN_DEFINITIONS = (
                 "through deterministic diagnostic rules.",
                 _input_schema(
                     {
-                        "query_id": _string("Existing Doris query ID."),
-                        "sql": _string("Read-only SQL to diagnose."),
-                        "database": _string("Database context."),
+                        "query_id": _string(
+                            "Existing Doris query ID.",
+                            pattern=r"^[A-Za-z0-9_-]+$",
+                            max_length=128,
+                        ),
+                        "sql": _string(
+                            "Read-only SQL to diagnose.",
+                            max_length=1024 * 1024,
+                        ),
+                        "database": _string(
+                            "Database context.",
+                            max_length=64,
+                        ),
                         "include_cluster_context": _boolean(
                             "Include relevant cluster evidence."
                         ),
                     },
-                    any_of=(
-                        {"required": ["query_id"]},
-                        {"required": ["sql"]},
+                    one_of=(
+                        {
+                            "required": ["query_id"],
+                            "not": {"required": ["sql"]},
+                        },
+                        {
+                            "required": ["sql"],
+                            "not": {"required": ["query_id"]},
+                        },
                     ),
                 ),
                 _DIAGNOSTIC_OUTPUT,
@@ -1013,13 +1079,25 @@ DOMAIN_DEFINITIONS = (
                         "window_minutes": _integer(
                             "Lookback window in minutes.",
                             minimum=1,
+                            maximum=129_600,
                         ),
-                        "limit": _integer("Maximum results.", minimum=1),
+                        "limit": _integer(
+                            "Maximum results.",
+                            minimum=1,
+                            maximum=1000,
+                        ),
                         "min_duration_ms": _integer(
-                            "Minimum duration in milliseconds."
+                            "Minimum duration in milliseconds.",
+                            maximum=86_400_000,
                         ),
-                        "database": _string("Database filter."),
-                        "user": _string("User filter."),
+                        "database": _string(
+                            "Database filter.",
+                            max_length=64,
+                        ),
+                        "user": _string(
+                            "User filter.",
+                            max_length=128,
+                        ),
                     }
                 ),
                 _COLLECTION_OUTPUT,
@@ -1038,14 +1116,19 @@ DOMAIN_DEFINITIONS = (
                 "Execute one read-only SQL statement through Arrow Flight SQL.",
                 _input_schema(
                     {
-                        "sql": _string("Read-only SQL statement."),
+                        "sql": _string(
+                            "Read-only SQL statement.",
+                            max_length=1024 * 1024,
+                        ),
                         "max_rows": _integer(
                             "Maximum returned rows.",
                             minimum=1,
+                            maximum=100_000,
                         ),
                         "timeout_ms": _integer(
                             "Execution timeout in milliseconds.",
                             minimum=1,
+                            maximum=300_000,
                         ),
                         "result_format": _string(
                             "Result representation.",
@@ -1098,9 +1181,7 @@ DOMAIN_DEFINITIONS = (
                             "Node types to include.",
                             enum=("fe", "be", "broker"),
                         ),
-                        "include_metrics": _boolean(
-                            "Include bounded node metrics."
-                        ),
+                        "include_metrics": _boolean("Include bounded node metrics."),
                     }
                 ),
                 _COLLECTION_OUTPUT,
@@ -1112,9 +1193,7 @@ DOMAIN_DEFINITIONS = (
                 "List visible query, load, schema-change, and compaction tasks.",
                 _input_schema(
                     {
-                        "task_types": _string_array(
-                            "Task types to include."
-                        ),
+                        "task_types": _string_array("Task types to include."),
                         "states": _string_array("Task states to include."),
                         "limit": _integer("Maximum results.", minimum=1),
                     }
@@ -1158,9 +1237,7 @@ DOMAIN_DEFINITIONS = (
                     {
                         "scope": _string("Cache scope."),
                         "node_ids": _string_array("Node identifiers."),
-                        "include_queues": _boolean(
-                            "Include queue statistics."
-                        ),
+                        "include_queues": _boolean("Include queue statistics."),
                     }
                 ),
             ),
@@ -1186,9 +1263,7 @@ DOMAIN_DEFINITIONS = (
                 _input_schema(
                     {
                         "name": _string("Workload-group name."),
-                        "include_usage": _boolean(
-                            "Include current resource usage."
-                        ),
+                        "include_usage": _boolean("Include current resource usage."),
                     }
                 ),
             ),
@@ -1425,12 +1500,8 @@ DOMAIN_DEFINITIONS = (
                 _input_schema(
                     {
                         "sql": _string("Read-only search SQL."),
-                        "search_request": _object(
-                            "Structured search request."
-                        ),
-                        "include_profile": _boolean(
-                            "Include query-profile evidence."
-                        ),
+                        "search_request": _object("Structured search request."),
+                        "include_profile": _boolean("Include query-profile evidence."),
                     },
                     any_of=(
                         {"required": ["sql"]},
@@ -1478,9 +1549,7 @@ DOMAIN_DEFINITIONS = (
                     {
                         "database": _string("Database name."),
                         "table": _string("Table name."),
-                        "include_partitions": _boolean(
-                            "Include partition details."
-                        ),
+                        "include_partitions": _boolean("Include partition details."),
                         "include_indexes": _boolean("Include index details."),
                     },
                     required=("database", "table"),
@@ -1590,9 +1659,7 @@ DOMAIN_DEFINITIONS = (
                             "Authentication provider.",
                             enum=("ldap", "oidc"),
                         ),
-                        "include_roles": _boolean(
-                            "Include authorized role mappings."
-                        ),
+                        "include_roles": _boolean("Include authorized role mappings."),
                     }
                 ),
                 _DIAGNOSTIC_OUTPUT,
@@ -1613,9 +1680,7 @@ DOMAIN_DEFINITIONS = (
                 _input_schema(
                     {
                         "catalog": _string("External catalog name."),
-                        "include_objects": _boolean(
-                            "Include a bounded object sample."
-                        ),
+                        "include_objects": _boolean("Include a bounded object sample."),
                         "object_limit": _integer(
                             "Maximum sampled objects.",
                             minimum=1,

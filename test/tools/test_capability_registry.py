@@ -196,9 +196,7 @@ def test_evaluator_requires_version_probes_handler_and_call_permission() -> None
 def test_evaluator_normalizes_system_object_probe_evidence_for_manifest() -> None:
     evaluator = CapabilityEvaluator(
         matrix=DORIS_FEATURE_MATRIX,
-        bound_handlers=_BoundHandlers(
-            "doris_catalog.get_table_context"
-        ),  # type: ignore[arg-type]
+        bound_handlers=_BoundHandlers("doris_catalog.get_table_context"),  # type: ignore[arg-type]
     )
     domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_catalog")
     child = DORIS_DOMAIN_CATALOG.resolve_child(
@@ -261,7 +259,7 @@ def test_evaluator_distinguishes_provider_misconfiguration() -> None:
     [
         (False, True, CapabilityProbeStatus.MISCONFIGURED),
         (True, False, CapabilityProbeStatus.MISCONFIGURED),
-        (True, True, CapabilityProbeStatus.DEGRADED),
+        (True, True, CapabilityProbeStatus.SUPPORTED),
     ],
 )
 def test_adbc_provider_requires_configuration_and_bound_consumer(
@@ -287,10 +285,30 @@ def test_adbc_provider_requires_configuration_and_bound_consumer(
 
     assert provider.status is expected_status
     assert provider.reason_code == (
-        "PROVIDER_CONFIGURED_UNPROBED"
-        if expected_status is CapabilityProbeStatus.DEGRADED
+        "PROVIDER_CONFIGURED"
+        if expected_status is CapabilityProbeStatus.SUPPORTED
         else "PROVIDER_NOT_CONFIGURED"
     )
+
+
+def test_builtin_query_evidence_providers_are_ready_when_bound() -> None:
+    handlers = _BoundHandlers(
+        "doris_query.diagnose_query_performance",
+        "doris_query.list_slow_queries",
+    )
+    registry = CapabilityProviderRegistry.from_runtime(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=handlers,  # type: ignore[arg-type]
+        config=SimpleNamespace(adbc=SimpleNamespace(enabled=False)),
+    )
+
+    providers = registry.snapshot().providers
+
+    assert (
+        providers["query_evidence_provider"].status is CapabilityProbeStatus.SUPPORTED
+    )
+    assert providers["audit_log_provider"].status is CapabilityProbeStatus.SUPPORTED
+    assert providers["query_evidence_provider"].reason_code == ("PROVIDER_CONFIGURED")
 
 
 class _MutableClock:
@@ -534,6 +552,7 @@ async def test_provider_down_advances_generation_and_fails_closed() -> None:
             for probe_id in (
                 "adbc_driver_ready",
                 "flight_sql",
+                "flight_sql_reachable",
                 "read_only_sql_guard_ready",
             )
         },
@@ -599,6 +618,7 @@ async def test_manifest_uses_one_provider_generation_during_refresh() -> None:
             for probe_id in (
                 "adbc_driver_ready",
                 "flight_sql",
+                "flight_sql_reachable",
                 "read_only_sql_guard_ready",
             )
         },
@@ -617,9 +637,7 @@ async def test_manifest_uses_one_provider_generation_during_refresh() -> None:
         provider_registry=providers,
         evaluator=CapabilityEvaluator(
             matrix=DORIS_FEATURE_MATRIX,
-            bound_handlers=_BoundHandlers(
-                "doris_query.execute_adbc_query"
-            ),  # type: ignore[arg-type]
+            bound_handlers=_BoundHandlers("doris_query.execute_adbc_query"),  # type: ignore[arg-type]
         ),
         clock=clock,
     )
@@ -637,19 +655,13 @@ async def test_manifest_uses_one_provider_generation_during_refresh() -> None:
     coherent_old = await service.discover(domain, None)
     current = await service.discover(domain, None)
     old_child = next(
-        child
-        for child in coherent_old.children
-        if child.name == "execute_adbc_query"
+        child for child in coherent_old.children if child.name == "execute_adbc_query"
     )
     current_child = next(
-        child
-        for child in current.children
-        if child.name == "execute_adbc_query"
+        child for child in current.children if child.name == "execute_adbc_query"
     )
 
     assert old_child.availability.callable is True
     assert current_child.availability.callable is False
-    assert current_child.availability.reason_code == (
-        "PROVIDER_HEALTHCHECK_FAILED"
-    )
+    assert current_child.availability.reason_code == ("PROVIDER_HEALTHCHECK_FAILED")
     assert coherent_old.manifest_version != current.manifest_version
