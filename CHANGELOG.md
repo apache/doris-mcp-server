@@ -122,6 +122,9 @@ under **Unreleased** until a new version is selected and published.
   OAuth scope issuance on explicit channel opt-in plus `semantic:read`.
 - Rejected 1.0 configuration attempts to enable the reserved administration
   domain or disable its mandatory confirmation invariant.
+- Enforced a 24 KiB hard budget for the stable eight-domain `tools/list`, with
+  cross-domain and separate-worker determinism gates for Hosts that do not
+  support dynamic tool re-registration.
 
 ### Fixed
 

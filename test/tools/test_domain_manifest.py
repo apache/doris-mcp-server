@@ -35,6 +35,7 @@ from doris_mcp_server.tools.domain_manifest import (
     MAX_CHILD_DESCRIPTION_CHARACTERS,
     MAX_CHILD_SCHEMA_BYTES,
     MAX_SCHEMA_ENUM_VALUES,
+    MAX_TOP_LEVEL_TOOL_LIST_BYTES,
     DomainManifestBudgetError,
     DomainManifestManagerMixin,
     DomainManifestService,
@@ -142,6 +143,7 @@ def test_top_level_catalog_is_exactly_eight_stable_read_only_domains() -> None:
     assert len({tool.name for tool in tools}) == 8
     assert len({str(tool.input_schema) for tool in tools}) == 1
     assert len({str(tool.output_schema) for tool in tools}) == 1
+    assert service.top_level_tool_list_bytes <= MAX_TOP_LEVEL_TOOL_LIST_BYTES
     ToolSchemaGuard().compile_catalog(tools)
 
     for tool in tools:
@@ -551,6 +553,21 @@ def test_startup_rejects_manifest_over_domain_budget() -> None:
     with pytest.raises(DomainManifestBudgetError, match="limit is 100 bytes"):
         DomainManifestService(
             catalog=_replace_domain(domain.name, constrained)
+        )
+
+
+def test_startup_rejects_top_level_tool_list_over_budget() -> None:
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_catalog")
+    oversized = domain.model_copy(
+        update={"description": "x" * MAX_TOP_LEVEL_TOOL_LIST_BYTES}
+    )
+
+    with pytest.raises(
+        DomainManifestBudgetError,
+        match="top-level tools/list is",
+    ):
+        DomainManifestService(
+            catalog=_replace_domain(domain.name, oversized)
         )
 
 
