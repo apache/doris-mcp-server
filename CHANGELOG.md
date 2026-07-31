@@ -25,7 +25,14 @@ under **Unreleased** until a new version is selected and published.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Fixed
+
+- Migrated the opt-in real Doris process integration suite from removed legacy
+  tool names to the 1.0 hierarchical domain discovery and exact Child
+  execution contract across Streamable HTTP and stdio.
+- Added real Doris regression coverage for the Query read-only guard, runtime
+  row, byte, and timeout ceilings, cancellation recovery, and database-level
+  read permission denial through the formal `doris_query` Child surface.
 
 ## [1.0.0] - 2026-07-31
 
