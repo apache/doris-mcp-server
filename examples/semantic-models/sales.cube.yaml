@@ -1,0 +1,48 @@
+cubes:
+  - name: orders
+    sql_table: dw.orders
+    description: Order fact table (one row per order)
+    joins:
+      - name: users
+        sql: "{CUBE}.user_id = {users}.id"
+        relationship: many_to_one
+    measures:
+      - name: revenue
+        type: sum
+        sql: amount
+        description: Total order amount
+      - name: order_count
+        type: count
+        description: Number of orders
+      - name: avg_order_value
+        type: avg
+        sql: amount
+    dimensions:
+      - name: order_id
+        sql: id
+        type: number
+        primary_key: true
+      - name: country
+        sql: country
+        type: string
+      - name: channel
+        sql: channel
+        type: string
+      - name: create_time
+        sql: create_time
+        type: time
+
+  - name: users
+    sql_table: dw.users
+    description: User dimension table
+    dimensions:
+      - name: user_id
+        sql: id
+        type: number
+        primary_key: true
+      - name: city
+        sql: city
+        type: string
+      - name: signup_date
+        sql: signup_date
+        type: time
