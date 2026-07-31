@@ -170,19 +170,34 @@ async def test_exec_query_uses_configured_default_rows_when_argument_is_omitted(
     connection_manager = Mock()
     connection_manager.config = _config(default_rows=17)
     manager = DorisToolsManager(connection_manager)
-    manager.metadata_extractor.exec_query_for_mcp = AsyncMock()
-    manager.metadata_extractor.exec_query_for_mcp.return_value = {"success": True}
+    manager.query_runtime.execute_query = AsyncMock(
+        return_value={
+            "status": "success",
+            "data": {
+                "columns": [],
+                "rows": [],
+                "row_count": 0,
+                "truncated": False,
+            },
+            "warnings": [],
+            "metadata": {},
+        }
+    )
 
     result = await manager._exec_query_tool({"sql": "SELECT 1"})
 
-    assert result == {"success": True}
-    manager.metadata_extractor.exec_query_for_mcp.assert_called_once_with(
-        "SELECT 1",
-        None,
-        None,
-        17,
-        30,
-        max_bytes=None,
+    assert result["status"] == "success"
+    assert manager.query_runtime._resolve_limits(
+        max_rows=None,
+        timeout_ms=None,
+    ).max_rows == 17
+    manager.query_runtime.execute_query.assert_awaited_once_with(
+        sql="SELECT 1",
+        catalog=None,
+        database=None,
+        parameters=None,
+        max_rows=None,
+        timeout_ms=None,
     )
 
 

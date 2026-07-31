@@ -195,6 +195,8 @@ class DorisConnection:
         that must remain machine-readable after authorization.
         """
         start_time = time.time()
+        cursor: Any | None = None
+        bounded_result = max_rows is not None or max_bytes is not None
 
         try:
             # If security manager exists, perform SQL security check
@@ -213,109 +215,148 @@ class DorisConnection:
                     "blocked_operations": validation_result.blocked_operations,
                 }
 
-            bounded_result = max_rows is not None or max_bytes is not None
             cursor_type = (
                 aiomysql.SSDictCursor if bounded_result else aiomysql.DictCursor
             )
-            async with self.connection.cursor(cursor_type) as cursor:
-                await cursor.execute(sql, params)
+            cursor = await self.connection.cursor(cursor_type)
+            await cursor.execute(sql, params)
 
-                # cursor.description is set by the DB driver for any statement that returns rows,
-                # avoiding a brittle hardcoded keyword list (e.g. missing WITH/CTE, comments before keywords).
-                result_bytes: int | None = None
-                truncated = False
-                truncation_reason: str | None = None
-                if cursor.description:
-                    if bounded_result:
-                        (
-                            final_data,
-                            result_bytes,
-                            truncated,
-                            truncation_reason,
-                        ) = await self._fetch_bounded_rows(
-                            cursor,
-                            auth_context=auth_context,
-                            mask_result=mask_result,
-                            max_rows=max_rows,
-                            max_bytes=max_bytes,
-                        )
-                        data = final_data
-                        row_count = len(final_data)
-                    else:
-                        data = await cursor.fetchall()
-                        row_count = len(data)
-                else:
-                    data = []
-                    row_count = cursor.rowcount
-
-                execution_time = time.time() - start_time
-                self.last_used = utc_now()
-                self.query_count += 1
-
-                # Get column information
-                columns = []
-                if cursor.description:
-                    columns = [desc[0] for desc in cursor.description]
-
-                # If security manager exists and has auth context, apply data masking
-                final_data = list(data) if data else []
-                if (
-                    not bounded_result
-                    and
-                    self.security_manager
-                    and auth_context
-                    and final_data
-                    and mask_result
-                ):
-                    final_data = await self.security_manager.apply_data_masking(
-                        final_data,
-                        auth_context,
-                    )
-
-                metadata: dict[str, Any] = {
-                    "columns": columns,
-                    "query": sql,
-                    "params": params,
-                }
-                if security_result:
-                    metadata["security_check"] = security_result
+            # cursor.description is set by the DB driver for any statement that returns rows,
+            # avoiding a brittle hardcoded keyword list (e.g. missing WITH/CTE, comments before keywords).
+            result_bytes: int | None = None
+            truncated = False
+            truncation_reason: str | None = None
+            if cursor.description:
                 if bounded_result:
-                    metadata.update(
-                        {
-                            "result_bytes": result_bytes or 2,
-                            "truncated": truncated,
-                            "truncation_reason": truncation_reason,
-                        }
+                    (
+                        final_data,
+                        result_bytes,
+                        truncated,
+                        truncation_reason,
+                    ) = await self._fetch_bounded_rows(
+                        cursor,
+                        auth_context=auth_context,
+                        mask_result=mask_result,
+                        max_rows=max_rows,
+                        max_bytes=max_bytes,
                     )
+                    data = final_data
+                    row_count = len(final_data)
+                else:
+                    data = await cursor.fetchall()
+                    row_count = len(data)
+            else:
+                data = []
+                row_count = cursor.rowcount
 
-                if truncated:
-                    # An unbuffered cursor still has unread rows.  Closing the
-                    # physical connection avoids draining an attacker-sized
-                    # result and prevents it from returning to the pool.
+            execution_time = time.time() - start_time
+            self.last_used = utc_now()
+            self.query_count += 1
+
+            # Get column information
+            columns = []
+            if cursor.description:
+                columns = [desc[0] for desc in cursor.description]
+
+            # If security manager exists and has auth context, apply data masking
+            final_data = list(data) if data else []
+            if (
+                not bounded_result
+                and self.security_manager
+                and auth_context
+                and final_data
+                and mask_result
+            ):
+                final_data = await self.security_manager.apply_data_masking(
+                    final_data,
+                    auth_context,
+                )
+
+            metadata: dict[str, Any] = {
+                "columns": columns,
+                "query": sql,
+                "params": params,
+            }
+            if security_result:
+                metadata["security_check"] = security_result
+            if bounded_result:
+                metadata.update(
+                    {
+                        "result_bytes": result_bytes or 2,
+                        "truncated": truncated,
+                        "truncation_reason": truncation_reason,
+                    }
+                )
+
+            if truncated:
+                # An unbuffered cursor still has unread rows.  Closing the
+                # physical connection avoids draining an attacker-sized
+                # result and prevents it from returning to the pool.  Clear
+                # the local cursor first so cleanup never calls SSCursor.close,
+                # which would otherwise drain the unread result.
+                self.is_healthy = False
+                cursor = None
+                await self.connection.ensure_closed()
+            else:
+                cursor_to_close = cursor
+                cursor = None
+                try:
+                    await cursor_to_close.close()
+                except Exception:
                     self.is_healthy = False
                     await self.connection.ensure_closed()
+                    raise
 
-                return QueryResult(
-                    data=final_data,
-                    metadata=metadata,
-                    execution_time=execution_time,
-                    row_count=row_count,
-                    sql=sql,
-                )
+            return QueryResult(
+                data=final_data,
+                metadata=metadata,
+                execution_time=execution_time,
+                row_count=row_count,
+                sql=sql,
+            )
 
         except asyncio.CancelledError:
             # MCP cancellation and asyncio timeouts both arrive here as task
             # cancellation.  A running MySQL command cannot safely be returned
             # to the pool, so terminate its physical connection first.
             self.is_healthy = False
+            cursor = None
             try:
                 await self.connection.ensure_closed()
             finally:
                 raise
         except Exception as e:
             self.is_healthy = False
+            if bounded_result and cursor is not None:
+                # SSCursor.close() drains unread rows.  A bounded fetch that
+                # fails must terminate its physical connection instead.
+                cursor = None
+                try:
+                    await self.connection.ensure_closed()
+                except Exception as close_error:
+                    self.logger.warning(
+                        "Failed to close connection after bounded query failure: %s",
+                        close_error,
+                    )
             logging.error(f"Query execution failed: {e}")
             raise
+        finally:
+            if cursor is not None:
+                try:
+                    await cursor.close()
+                except Exception as cleanup_error:
+                    self.is_healthy = False
+                    self.logger.warning(
+                        "Failed to close cursor after query failure: %s",
+                        cleanup_error,
+                    )
+                    try:
+                        await self.connection.ensure_closed()
+                    except Exception as close_error:
+                        self.logger.warning(
+                            "Failed to close connection after cursor cleanup failure: %s",
+                            close_error,
+                        )
 
     async def _fetch_bounded_rows(
         self,
@@ -615,7 +656,11 @@ class DorisConnectionManager:
     @staticmethod
     def _ordered_hosts(primary: str, configured: object) -> list[str]:
         hosts = (
-            [host.strip() for host in configured if isinstance(host, str) and host.strip()]
+            [
+                host.strip()
+                for host in configured
+                if isinstance(host, str) and host.strip()
+            ]
             if isinstance(configured, list)
             else []
         )
@@ -2367,9 +2412,7 @@ class DorisConnectionManager:
             effective_context is not None
             and effective_context.auth_method == "doris_oauth"
         ):
-            doris_user = self._validate_doris_user(
-                effective_context.doris_user
-            )
+            doris_user = self._validate_doris_user(effective_context.doris_user)
             route_key = self._doris_user_route_key(doris_user)
             meta = self.doris_user_pool_meta.get(doris_user)
             generation = meta.generation if meta is not None else 0
@@ -2378,9 +2421,7 @@ class DorisConnectionManager:
             route_key = f"static_token:{token_hash}"
             generation = self._token_pool_generations.get(token_hash, 0)
 
-        database_config = self.get_database_config_for_auth_context(
-            effective_context
-        )
+        database_config = self.get_database_config_for_auth_context(effective_context)
 
         def config_value(name: str, default: Any = "") -> Any:
             if isinstance(database_config, Mapping):
@@ -2402,16 +2443,12 @@ class DorisConnectionManager:
         endpoint_fingerprint = hashlib.sha256(
             endpoint_material.encode("utf-8")
         ).hexdigest()
-        route_material = (
-            f"{route_key}\x1f{generation}\x1f{endpoint_fingerprint}"
-        )
+        route_material = f"{route_key}\x1f{generation}\x1f{endpoint_fingerprint}"
         return DorisRouteIdentity(
             route_key=route_key,
             generation=generation,
             endpoint_fingerprint=endpoint_fingerprint,
-            fingerprint=hashlib.sha256(
-                route_material.encode("utf-8")
-            ).hexdigest(),
+            fingerprint=hashlib.sha256(route_material.encode("utf-8")).hexdigest(),
         )
 
     async def _get_connection_for_auth_context(
@@ -2576,6 +2613,12 @@ class DorisConnectionManager:
 
         raw_connection = connection.connection
         owner_pool = getattr(connection, "owner_pool", None)
+        if getattr(connection, "is_healthy", True) is False:
+            await self._force_close_raw_connection(
+                raw_connection,
+                "unhealthy routed connection",
+            )
+            return
         if owner_pool is None:
             self.logger.warning(
                 "Connection %s has no captured owner pool; force closing raw connection",

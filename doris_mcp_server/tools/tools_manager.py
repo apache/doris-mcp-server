@@ -27,7 +27,6 @@ from typing import Any
 from mcp.types import Tool
 
 from ..auth.operation_policy import authorize_operation
-from ..result_limits import configured_default_result_rows
 from ..state_handles import StateHandleCodec
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.analysis_tools import MemoryTracker, SQLAnalyzer, TableAnalyzer
@@ -64,6 +63,7 @@ from .domain_manifest import (
     DomainManifestService,
 )
 from .doris_feature_matrix import DORIS_FEATURE_MATRIX
+from .query_handlers import QueryToolHandlersMixin
 from .tool_provider import CustomToolProvider, ToolProviderRuntime
 from .tool_registry import ToolRegistryError
 
@@ -71,6 +71,7 @@ logger = get_logger(__name__)
 
 
 class DorisToolsManager(
+    QueryToolHandlersMixin,
     CatalogToolHandlersMixin,
     DomainManifestManagerMixin,
 ):
@@ -109,6 +110,10 @@ class DorisToolsManager(
 
         # Initialize ADBC query tools
         self.adbc_query_tools = DorisADBCQueryTools(connection_manager)
+        self._initialize_query_handlers(
+            connection_manager,
+            self.adbc_query_tools,
+        )
         self._capability_registry: CapabilityRegistry | None = None
         if domain_availability_provider is None:
             bound_handlers = BoundHandlerAvailabilityProvider(self)
@@ -130,6 +135,7 @@ class DorisToolsManager(
                     "stale_grace_seconds",
                     900,
                 ),
+                adbc_query_tools=self.adbc_query_tools,
             )
             provider_registry = CapabilityProviderRegistry.from_runtime(
                 matrix=DORIS_FEATURE_MATRIX,
@@ -292,28 +298,6 @@ class DorisToolsManager(
         )
         return serialize_dispatch_result(result)
 
-    async def _exec_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """SQL query execution tool routing (supports federation queries)"""
-        sql = self._required_string(arguments, "sql")
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-        max_rows = arguments.get(
-            "max_rows",
-            configured_default_result_rows(self.connection_manager.config),
-        )
-        max_bytes = arguments.get("max_bytes")
-        timeout = arguments.get("timeout", 30)
-
-        # Delegate to metadata extractor for processing
-        return await self.metadata_extractor.exec_query_for_mcp(
-            sql,
-            db_name,
-            catalog_name,
-            max_rows,
-            timeout,
-            max_bytes=max_bytes,
-        )
-
     async def _get_recent_audit_logs_tool(
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -323,30 +307,6 @@ class DorisToolsManager(
 
         # Delegate to metadata extractor for processing
         return await self.metadata_extractor.get_recent_audit_logs_for_mcp(days, limit)
-
-    async def _get_sql_explain_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """SQL Explain tool routing"""
-        sql = self._required_string(arguments, "sql")
-        verbose = arguments.get("verbose", False)
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-
-        # Delegate to SQL analyzer for processing
-        return await self.sql_analyzer.get_sql_explain(
-            sql, verbose, db_name, catalog_name
-        )
-
-    async def _get_sql_profile_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """SQL Profile tool routing"""
-        sql = self._required_string(arguments, "sql")
-        db_name = arguments.get("db_name")
-        catalog_name = arguments.get("catalog_name")
-        timeout = arguments.get("timeout", 30)
-
-        # Delegate to SQL analyzer for processing
-        return await self.sql_analyzer.get_sql_profile(
-            sql, db_name, catalog_name, timeout
-        )
 
     async def _get_monitoring_metrics_tool(
         self, arguments: dict[str, Any]
@@ -655,20 +615,6 @@ class DorisToolsManager(
             target_table, analysis_depth, include_views, catalog_name, db_name
         )
 
-    async def _analyze_slow_queries_topn_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Slow queries Top-N analysis tool routing"""
-        days = arguments.get("days", 7)
-        top_n = arguments.get("top_n", 20)
-        min_execution_time_ms = arguments.get("min_execution_time_ms", 1000)
-        include_patterns = arguments.get("include_patterns", True)
-
-        # Delegate to performance analytics tools for processing
-        return await self.performance_analytics_tools.analyze_slow_queries_topn(
-            days, top_n, min_execution_time_ms, include_patterns
-        )
-
     async def _analyze_resource_growth_curves_tool(
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -684,29 +630,3 @@ class DorisToolsManager(
         return await self.performance_analytics_tools.analyze_resource_growth_curves(
             days, resource_types, include_predictions, detailed_response
         )
-
-    # ==================== ADBC Query Tools Private Methods ====================
-
-    async def _exec_adbc_query_tool(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        """ADBC query execution tool routing"""
-        sql = self._required_string(arguments, "sql")
-        max_rows = arguments.get("max_rows")
-        max_bytes = arguments.get("max_bytes")
-        timeout = arguments.get("timeout")
-        return_format = arguments.get("return_format")
-
-        # Delegate to ADBC query tools for processing
-        return await self.adbc_query_tools.exec_adbc_query(
-            sql,
-            max_rows=max_rows,
-            timeout=timeout,
-            return_format=return_format,
-            max_bytes=max_bytes,
-        )
-
-    async def _get_adbc_connection_info_tool(
-        self, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        """ADBC connection information tool routing"""
-        # Delegate to ADBC query tools for processing
-        return await self.adbc_query_tools.get_adbc_connection_info()

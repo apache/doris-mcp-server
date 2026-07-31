@@ -117,12 +117,12 @@ class CapabilityProviderRegistry:
             providers[provider_id] = CapabilityProviderEvidence(
                 provider_id=provider_id,
                 status=(
-                    CapabilityProbeStatus.DEGRADED
+                    CapabilityProbeStatus.SUPPORTED
                     if configured
                     else CapabilityProbeStatus.MISCONFIGURED
                 ),
                 reason_code=(
-                    "PROVIDER_CONFIGURED_UNPROBED"
+                    "PROVIDER_CONFIGURED"
                     if configured
                     else "PROVIDER_NOT_CONFIGURED"
                 ),

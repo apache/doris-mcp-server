@@ -44,6 +44,7 @@ from ..schema_validation import (
 from ..state_handles import StateHandleCodec, StateHandleError
 from ..utils.catalog_metadata import CatalogMetadataFailure
 from ..utils.logger import get_audit_logger, get_logger
+from ..utils.query_runtime import QueryRuntimeFailure
 from . import domain_catalog as domain_catalog_module
 from .domain_catalog import (
     DorisDomainCatalog,
@@ -116,7 +117,16 @@ class _AtomicBinding:
     migration: LegacyToolMigration
 
 
-_Binding = _AtomicBinding | tuple[LegacyToolMigration, ...]
+@dataclass(frozen=True)
+class _FormalBinding:
+    handler_name: str
+
+
+_Binding = _AtomicBinding | _FormalBinding | tuple[LegacyToolMigration, ...]
+
+
+def _formal_handler_name(domain_name: str, child_name: str) -> str:
+    return f"_formal_{domain_name}_{child_name}_tool"
 
 
 def _build_bindings(
@@ -153,6 +163,15 @@ def _build_bindings(
                 f"{feature_id} has ambiguous atomic handler bindings"
             )
         bindings[feature_id] = _AtomicBinding(migrations[0])
+
+    for domain in catalog.domains:
+        for child in domain.children:
+            feature_id = f"{domain.name}.{child.name}"
+            if feature_id in bindings:
+                continue
+            handler_name = _formal_handler_name(domain.name, child.name)
+            if callable(getattr(owner, handler_name, None)):
+                bindings[feature_id] = _FormalBinding(handler_name)
     return bindings
 
 
@@ -539,6 +558,11 @@ class DomainDispatcher:
                     adapter_warnings,
                     auth_context,
                 )
+            elif isinstance(binding, _FormalBinding):
+                data = await self._call_formal(
+                    binding.handler_name,
+                    arguments,
+                )
             else:
                 data = await self._call_table_context(
                     child,
@@ -563,6 +587,30 @@ class DomainDispatcher:
                 details={
                     "rediscover": False,
                     "violations": violations,
+                },
+            )
+        except QueryRuntimeFailure as exc:
+            self._audit(feature_id, arguments, "error", started)
+            if exc.reason_code in {
+                "QUERY_ARGUMENT_INVALID",
+                "QUERY_READ_ONLY_VIOLATION",
+            }:
+                code = DomainErrorCode.CHILD_ARGUMENTS_INVALID
+            elif exc.reason_code == "QUERY_TIMEOUT":
+                code = DomainErrorCode.CHILD_EXECUTION_TIMEOUT
+            else:
+                code = DomainErrorCode.CHILD_EXECUTION_FAILED
+            return self._error(
+                domain.name,
+                code,
+                str(exc),
+                child_tool=child.name,
+                manifest_version=manifest.manifest_version,
+                retryable=exc.retryable,
+                details={
+                    "rediscover": False,
+                    "reason_code": exc.reason_code,
+                    "status_code": exc.status_code,
                 },
             )
         except CatalogMetadataFailure as exc:
@@ -673,6 +721,17 @@ class DomainDispatcher:
         ):
             raise _failure_from_legacy_response(raw)
         return raw, warnings
+
+    async def _call_formal(
+        self,
+        handler_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        handler = getattr(self._owner, handler_name)
+        raw = await handler(dict(arguments))
+        if not isinstance(raw, dict):
+            raise TypeError("formal child handler must return an object")
+        return raw
 
     async def _call_table_context(
         self,
@@ -835,6 +894,14 @@ class DomainDispatcher:
         adapter_warnings: tuple[str, ...],
         auth_context: Any | None = None,
     ) -> dict[str, Any]:
+        if (
+            raw.get("status") in {"success", "partial"}
+            and isinstance(raw.get("data"), dict)
+            and isinstance(raw.get("warnings"), list)
+            and isinstance(raw.get("metadata"), dict)
+        ):
+            return dict(raw)
+
         output = cast(
             dict[str, Any],
             child.to_wire()["output_schema"],
@@ -1043,10 +1110,6 @@ def _adapt_arguments(
     }
 
     if adapter_name == "adapt:query_arguments":
-        if prepared.pop("parameters", None):
-            raise ChildArgumentsAdapterError(
-                "bound query parameters are not yet supported"
-            )
         timeout_ms = prepared.pop("timeout_ms", None)
         if timeout_ms is not None:
             prepared["timeout"] = max(1, math.ceil(timeout_ms / 1000))
@@ -1059,19 +1122,11 @@ def _adapt_arguments(
     elif adapter_name == "adapt:explain_arguments":
         level = prepared.pop("level", None)
         if level == "costs":
-            raise ChildArgumentsAdapterError(
-                "cost explain is not supported by the active handler"
-            )
-        if level is not None:
+            prepared["level"] = "costs"
+        elif level is not None:
             prepared["verbose"] = level == "verbose"
     elif adapter_name == "adapt:profile_arguments":
-        query_id = prepared.pop("query_id", None)
-        prepared.pop("recent_window_minutes", None)
-        prepared.pop("include_operator_tree", None)
-        if query_id is not None and "sql" not in prepared:
-            raise ChildArgumentsAdapterError(
-                "query-id profile lookup is not yet supported"
-            )
+        pass
     elif adapter_name == "adapt:table_size_arguments":
         prepared["single_replica"] = False
         prepared["_formal_catalog"] = True
@@ -1158,12 +1213,6 @@ def _adapt_arguments(
             "min_duration_ms",
             1000,
         )
-        for unsupported in ("db_name", "user"):
-            if prepared.pop(unsupported, None) is not None:
-                warnings.append(
-                    "One or more slow-query filters are not supported by the "
-                    "active handler."
-                )
     elif adapter_name == "adapt:resource_growth_arguments":
         resource = prepared.pop("resource", None)
         prepared["days"] = prepared.pop("window_days", 30)

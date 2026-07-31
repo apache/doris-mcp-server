@@ -30,6 +30,7 @@ from doris_mcp_server.tools.doris_feature_matrix import (
 )
 from doris_mcp_server.tools.tools_manager import DorisToolsManager
 from doris_mcp_server.utils.config import DorisConfig
+from doris_mcp_server.utils.query_runtime import QueryRuntimeFailure
 
 
 class TestDorisToolsManager:
@@ -86,17 +87,22 @@ class TestDorisToolsManager:
     async def test_exec_query_tool(self, tools_manager):
         """Test exec_query tool"""
         with patch.object(
-            tools_manager.metadata_extractor,
-            "exec_query_for_mcp",
+            tools_manager.query_runtime,
+            "execute_query",
         ) as mock_execute:
             mock_execute.return_value = {
-                "success": True,
-                "data": [
-                    {"id": 1, "name": "张三"},
-                    {"id": 2, "name": "李四"}
-                ],
-                "row_count": 2,
-                "execution_time": 0.15
+                "status": "success",
+                "data": {
+                    "columns": [{"name": "id"}, {"name": "name"}],
+                    "rows": [
+                        {"id": 1, "name": "Alice"},
+                        {"id": 2, "name": "Bob"},
+                    ],
+                    "row_count": 2,
+                    "truncated": False,
+                },
+                "warnings": [],
+                "metadata": {},
             }
 
             arguments = {
@@ -106,31 +112,39 @@ class TestDorisToolsManager:
 
             result = await tools_manager._exec_query_tool(arguments)
 
-            assert result["success"] is True
-            assert len(result["data"]) == 2
+            assert result["status"] == "success"
+            assert len(result["data"]["rows"]) == 2
             mock_execute.assert_awaited_once_with(
-                arguments["sql"],
-                None,
-                None,
-                100,
-                30,
-                max_bytes=None,
+                sql=arguments["sql"],
+                catalog=None,
+                database=None,
+                parameters=None,
+                max_rows=100,
+                timeout_ms=None,
             )
 
     @pytest.mark.asyncio
     async def test_exec_query_with_error(self, tools_manager):
         """Test exec_query tool with error"""
         with patch.object(
-            tools_manager.metadata_extractor,
-            "exec_query_for_mcp",
+            tools_manager.query_runtime,
+            "execute_query",
         ) as mock_execute:
-            mock_execute.side_effect = Exception("Database connection failed")
+            mock_execute.side_effect = QueryRuntimeFailure(
+                "Doris query execution is temporarily unavailable.",
+                reason_code="QUERY_BACKEND_UNAVAILABLE",
+                status_code=503,
+                retryable=True,
+            )
 
             arguments = {
                 "sql": "SELECT * FROM users"
             }
 
-            with pytest.raises(Exception, match="Database connection failed"):
+            with pytest.raises(
+                QueryRuntimeFailure,
+                match="temporarily unavailable",
+            ):
                 await tools_manager._exec_query_tool(arguments)
 
     @pytest.mark.asyncio

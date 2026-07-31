@@ -22,11 +22,17 @@ import asyncio
 import threading
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from doris_mcp_server.result_limits import ResultLimits
 from doris_mcp_server.utils.adbc_query_tools import DorisADBCQueryTools
+from doris_mcp_server.utils.security import (
+    AuthContext,
+    reset_auth_context,
+    set_current_auth_context,
+)
 
 
 def _manager() -> SimpleNamespace:
@@ -41,8 +47,15 @@ def _manager() -> SimpleNamespace:
                 default_max_rows=20,
                 default_timeout=10,
                 default_return_format="dict",
+                connection_timeout=30,
+            ),
+            database=SimpleNamespace(
+                be_hosts=["be-1"],
+                user="root",
+                password="",
             ),
         ),
+        host="fe-1",
         security_manager=None,
     )
 
@@ -101,9 +114,7 @@ class _BlockingCursor:
 
 @pytest.mark.asyncio
 async def test_adbc_streams_to_row_limit_without_fetchall() -> None:
-    cursor = _StreamingCursor(
-        [(1, "one"), (2, "two"), (3, "three")]
-    )
+    cursor = _StreamingCursor([(1, "one"), (2, "two"), (3, "three")])
     tools = DorisADBCQueryTools(_manager())
     tools.adbc_client = SimpleNamespace(cursor=lambda: cursor)
 
@@ -127,9 +138,7 @@ async def test_adbc_streams_to_row_limit_without_fetchall() -> None:
 
 @pytest.mark.asyncio
 async def test_adbc_streams_to_byte_limit() -> None:
-    cursor = _StreamingCursor(
-        [(1, "x" * 180), (2, "y" * 180)]
-    )
+    cursor = _StreamingCursor([(1, "x" * 180), (2, "y" * 180)])
     tools = DorisADBCQueryTools(_manager())
     tools.adbc_client = SimpleNamespace(cursor=lambda: cursor)
 
@@ -183,6 +192,47 @@ async def test_adbc_rejects_limit_escalation_before_network_checks() -> None:
 
     assert result["success"] is False
     assert result["error_type"] == "invalid_result_limits"
-    assert result["error"] == (
-        "max_rows exceeds the configured maximum of 50"
+    assert result["error"] == ("max_rows exceeds the configured maximum of 50")
+
+
+@pytest.mark.asyncio
+async def test_adbc_fails_closed_for_doris_oauth_before_probing() -> None:
+    tools = DorisADBCQueryTools(_manager())
+    tools._check_arrow_flight_ports = MagicMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("ADBC endpoint probe must not run")
     )
+    context_token = set_current_auth_context(
+        AuthContext(
+            auth_method="doris_oauth",
+            doris_user="analyst",
+        )
+    )
+    try:
+        result = await tools.exec_adbc_query("SELECT 1")
+    finally:
+        reset_auth_context(context_token)
+
+    assert result["success"] is False
+    assert result["error_type"] == "token_bound_adbc_unsupported"
+    tools._check_arrow_flight_ports.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_adbc_capability_probe_uses_bounded_socket_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tools = DorisADBCQueryTools(_manager())
+    connectivity = MagicMock(return_value=True)
+    tools._check_port_connectivity = connectivity  # type: ignore[method-assign]
+    monkeypatch.setenv("FE_ARROW_FLIGHT_SQL_PORT", "8070")
+    monkeypatch.setenv("BE_ARROW_FLIGHT_SQL_PORT", "8060")
+
+    result = await tools._check_arrow_flight_ports(
+        connectivity_timeout=0.25,
+    )
+
+    assert result["success"] is True
+    assert connectivity.call_args_list == [
+        (("fe-1", 8070, 0.25),),
+        (("be-1", 8060, 0.25),),
+    ]

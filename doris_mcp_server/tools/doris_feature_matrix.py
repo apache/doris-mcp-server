@@ -990,7 +990,7 @@ FEATURE_DEFINITIONS = (
     _feature(
         "doris_query",
         "diagnose_query_performance",
-        A,
+        P,
         _variant(
             "deterministic_query_diagnosis",
             providers=("query_evidence_provider",),
@@ -1030,7 +1030,11 @@ FEATURE_DEFINITIONS = (
             "adbc_read_only",
             endpoints=("flight_sql",),
             providers=("adbc_provider",),
-            probes=("adbc_driver_ready", "read_only_sql_guard_ready"),
+            probes=(
+                "adbc_driver_ready",
+                "flight_sql_reachable",
+                "read_only_sql_guard_ready",
+            ),
             sources=("ARROW_ADBC_FLIGHT_SQL",),
         ),
     ),

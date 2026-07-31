@@ -21,6 +21,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -29,9 +30,11 @@ from doris_mcp_server.tools.capability_detector import (
     CapabilityProbeStatus,
     CapabilityRouteChangedError,
     DorisCapabilityDetector,
+    _classify_profile_api_response,
 )
 from doris_mcp_server.tools.doris_feature_matrix import DORIS_FEATURE_MATRIX
 from doris_mcp_server.utils.db import DorisRouteIdentity
+from doris_mcp_server.utils.security import AuthContext
 
 
 class _ProbeConnection:
@@ -54,16 +57,9 @@ class _ProbeConnection:
             raise self.failures[sql]
         rows: dict[str, list[dict[str, Any]]] = {
             "SELECT @@version_comment;": [
-                {
-                    "@@version_comment": (
-                        "Doris version "
-                        "doris-4.0.5-rc01-59de8c4c524"
-                    )
-                }
+                {"@@version_comment": ("Doris version doris-4.0.5-rc01-59de8c4c524")}
             ],
-            "SELECT 1 AS capability_probe": [
-                {"capability_probe": 1}
-            ],
+            "SELECT 1 AS capability_probe": [{"capability_probe": 1}],
             "SHOW FRONTENDS": [
                 {
                     "Name": "fe-1",
@@ -94,13 +90,8 @@ class _ProbeConnection:
             (
                 "SELECT 1 AS table_metadata_probe "
                 "FROM information_schema.tables LIMIT 1"
-            ): [
-                {"table_metadata_probe": 1}
-            ],
-            (
-                "SELECT COLUMN_NAME, DATA_TYPE "
-                "FROM information_schema.columns LIMIT 1"
-            ): [
+            ): [{"table_metadata_probe": 1}],
+            ("SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.columns LIMIT 1"): [
                 {"COLUMN_NAME": "id", "DATA_TYPE": "bigint"}
             ],
             (
@@ -114,14 +105,18 @@ class _ProbeConnection:
                 }
             ],
         }
-        return SimpleNamespace(
-            data=self.row_overrides.get(sql, rows.get(sql, []))
-        )
+        return SimpleNamespace(data=self.row_overrides.get(sql, rows.get(sql, [])))
 
 
 class _ProbeConnectionManager:
     def __init__(self, connection: _ProbeConnection) -> None:
         self.connection = connection
+        database_config = SimpleNamespace()
+        self.config = SimpleNamespace(
+            adbc=SimpleNamespace(enabled=False),
+            database=database_config,
+        )
+        self.selected_database_config = database_config
         self.route = DorisRouteIdentity(
             route_key="global",
             generation=1,
@@ -132,6 +127,12 @@ class _ProbeConnectionManager:
 
     def get_route_identity(self, _auth_context: Any) -> DorisRouteIdentity:
         return self.route
+
+    def get_database_config_for_auth_context(
+        self,
+        _auth_context: Any,
+    ) -> Any:
+        return self.selected_database_config
 
     @asynccontextmanager
     async def get_connection_context_for_auth_context(
@@ -165,17 +166,26 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
     assert len(base.version_vector.backends) == 2
     assert base.mixed_versions is False
     assert (
-        base.probe("version_probe_completed").status
-        is CapabilityProbeStatus.SUPPORTED
+        base.probe("version_probe_completed").status is CapabilityProbeStatus.SUPPORTED
     )
     assert (
-        base.probe("query_execution_readable").status
-        is CapabilityProbeStatus.SUPPORTED
+        base.probe("query_execution_readable").status is CapabilityProbeStatus.SUPPORTED
     )
     assert query.probed_domains == frozenset({"doris_query"})
     assert (
-        query.probe("explain_output_readable").status
+        query.probe("explain_output_readable").status is CapabilityProbeStatus.SUPPORTED
+    )
+    assert query.probe("audit_log_readable").status is CapabilityProbeStatus.SUPPORTED
+    assert (
+        query.probe("profile_or_audit_readable").status
         is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        query.probe("query_profile_api_readable").status
+        is CapabilityProbeStatus.UNKNOWN
+    )
+    assert (
+        query.probe("adbc_driver_ready").status is CapabilityProbeStatus.MISCONFIGURED
     )
     assert catalog.probed_domains == frozenset({"doris_catalog"})
     assert (
@@ -215,6 +225,219 @@ async def test_detector_marks_permission_failure_unknown_not_unsupported() -> No
     assert evidence.status is CapabilityProbeStatus.UNKNOWN
     assert evidence.reason_code == "PROBE_PERMISSION_DENIED"
     assert snapshot.version_vector.backends == ()
+
+
+@pytest.mark.asyncio
+async def test_detector_marks_adbc_callable_only_after_live_probes() -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    manager.config.adbc.enabled = True
+    adbc_tools = SimpleNamespace(
+        _import_adbc_modules=AsyncMock(return_value={"success": True}),
+        _check_arrow_flight_ports=AsyncMock(
+            return_value={
+                "success": True,
+                "be_available_count": 1,
+            }
+        ),
+    )
+    detector = DorisCapabilityDetector(
+        manager,  # type: ignore[arg-type]
+        adbc_query_tools=adbc_tools,
+    )
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    query = await detector.detect_domain(base, "doris_query", None)
+
+    assert query.probe("adbc_driver_ready").status is CapabilityProbeStatus.SUPPORTED
+    assert query.probe("flight_sql_reachable").status is CapabilityProbeStatus.SUPPORTED
+    assert query.probe("flight_sql").status is CapabilityProbeStatus.SUPPORTED
+    adbc_tools._import_adbc_modules.assert_awaited_once_with()
+    adbc_tools._check_arrow_flight_ports.assert_awaited_once_with(
+        connectivity_timeout=1.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_detector_isolates_optional_adbc_probe_timeout() -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    manager.config.adbc.enabled = True
+    detector = DorisCapabilityDetector(
+        manager,  # type: ignore[arg-type]
+        adbc_query_tools=SimpleNamespace(),
+    )
+    detector._probe_adbc_services = AsyncMock(  # type: ignore[method-assign]
+        side_effect=TimeoutError
+    )
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    query = await detector.detect_domain(base, "doris_query", None)
+
+    assert (
+        query.probe("query_execution_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        query.probe("explain_output_readable").status is CapabilityProbeStatus.SUPPORTED
+    )
+    assert query.probe("adbc_driver_ready").status is CapabilityProbeStatus.DEGRADED
+    assert (
+        query.probe("adbc_driver_ready").reason_code == "ADBC_RUNTIME_PROBE_TIMED_OUT"
+    )
+
+
+@pytest.mark.asyncio
+async def test_detector_marks_oauth_http_and_adbc_routes_unavailable() -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    manager.config.adbc.enabled = True
+    adbc_tools = SimpleNamespace(
+        _import_adbc_modules=AsyncMock(
+            side_effect=AssertionError("ADBC import probe must not run")
+        ),
+        _check_arrow_flight_ports=AsyncMock(
+            side_effect=AssertionError("ADBC endpoint probe must not run")
+        ),
+    )
+    detector = DorisCapabilityDetector(
+        manager,  # type: ignore[arg-type]
+        adbc_query_tools=adbc_tools,
+    )
+    auth_context = AuthContext(
+        auth_method="doris_oauth",
+        doris_user="analyst",
+    )
+    base = await detector.detect_base(
+        auth_context,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    query = await detector.detect_domain(
+        base,
+        "doris_query",
+        auth_context,
+    )
+
+    assert (
+        query.probe("query_execution_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        query.probe("query_profile_api_readable").reason_code
+        == "PROFILE_API_CREDENTIAL_ROUTE_UNAVAILABLE"
+    )
+    assert (
+        query.probe("adbc_driver_ready").reason_code
+        == "ADBC_CREDENTIAL_ROUTE_UNAVAILABLE"
+    )
+    adbc_tools._import_adbc_modules.assert_not_awaited()
+    adbc_tools._check_arrow_flight_ports.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_detector_marks_static_token_adbc_route_unavailable() -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    manager.config.adbc.enabled = True
+    manager.selected_database_config = SimpleNamespace()
+    adbc_tools = SimpleNamespace(
+        _import_adbc_modules=AsyncMock(
+            side_effect=AssertionError("ADBC import probe must not run")
+        ),
+        _check_arrow_flight_ports=AsyncMock(
+            side_effect=AssertionError("ADBC endpoint probe must not run")
+        ),
+    )
+    detector = DorisCapabilityDetector(
+        manager,  # type: ignore[arg-type]
+        adbc_query_tools=adbc_tools,
+    )
+    auth_context = AuthContext(
+        auth_method="token",
+        token="tenant-token",
+    )
+    base = await detector.detect_base(
+        auth_context,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    query = await detector.detect_domain(
+        base,
+        "doris_query",
+        auth_context,
+    )
+
+    assert (
+        query.probe("query_execution_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        query.probe("adbc_driver_ready").reason_code
+        == "ADBC_CREDENTIAL_ROUTE_UNAVAILABLE"
+    )
+    adbc_tools._import_adbc_modules.assert_not_awaited()
+    adbc_tools._check_arrow_flight_ports.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("http_status", "payload", "expected_status", "expected_reason"),
+    [
+        (
+            200,
+            {"code": 0},
+            CapabilityProbeStatus.SUPPORTED,
+            "PROFILE_API_READABLE",
+        ),
+        (
+            200,
+            {"code": "403"},
+            CapabilityProbeStatus.UNKNOWN,
+            "PROFILE_API_PERMISSION_DENIED",
+        ),
+        (
+            200,
+            None,
+            CapabilityProbeStatus.UNKNOWN,
+            "PROFILE_API_INVALID_RESPONSE",
+        ),
+        (
+            503,
+            None,
+            CapabilityProbeStatus.DEGRADED,
+            "PROFILE_API_UNREACHABLE",
+        ),
+        (
+            404,
+            None,
+            CapabilityProbeStatus.UNSUPPORTED,
+            "PROFILE_API_UNSUPPORTED",
+        ),
+    ],
+)
+def test_profile_api_probe_classification_is_fail_closed(
+    http_status: int,
+    payload: dict[str, Any] | None,
+    expected_status: CapabilityProbeStatus,
+    expected_reason: str,
+) -> None:
+    status, reason = _classify_profile_api_response(
+        http_status,
+        payload,
+    )
+
+    assert status is expected_status
+    assert reason == expected_reason
 
 
 @pytest.mark.asyncio

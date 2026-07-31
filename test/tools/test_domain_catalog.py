@@ -85,8 +85,7 @@ def _copy_catalog(
     return DORIS_DOMAIN_CATALOG.model_copy(
         update={
             "domains": domains or DORIS_DOMAIN_CATALOG.domains,
-            "legacy_migrations": migrations
-            or DORIS_DOMAIN_CATALOG.legacy_migrations,
+            "legacy_migrations": migrations or DORIS_DOMAIN_CATALOG.legacy_migrations,
         }
     )
 
@@ -108,21 +107,26 @@ def test_catalog_has_exact_ordered_eight_domain_forty_seven_child_shape() -> Non
     assert tuple(domain.name for domain in summary.domains) == tuple(
         EXPECTED_DOMAIN_CHILDREN
     )
-    assert {
-        domain.name: domain.child_names for domain in summary.domains
-    } == dict(EXPECTED_DOMAIN_CHILDREN)
-    assert tuple(
-        len(domain.children) for domain in DORIS_DOMAIN_CATALOG.domains
-    ) == (5, 7, 11, 5, 4, 8, 3, 4)
+    assert {domain.name: domain.child_names for domain in summary.domains} == dict(
+        EXPECTED_DOMAIN_CHILDREN
+    )
+    assert tuple(len(domain.children) for domain in DORIS_DOMAIN_CATALOG.domains) == (
+        5,
+        7,
+        11,
+        5,
+        4,
+        8,
+        3,
+        4,
+    )
 
 
 def test_adbc_is_inside_query_and_cluster_has_exactly_eleven_children() -> None:
     query = DORIS_DOMAIN_CATALOG.resolve_domain("doris_query")
     cluster = DORIS_DOMAIN_CATALOG.resolve_domain("doris_cluster")
 
-    assert "get_adbc_connection_info" in {
-        child.name for child in query.children
-    }
+    assert "get_adbc_connection_info" in {child.name for child in query.children}
     assert "execute_adbc_query" in {child.name for child in query.children}
     assert len(cluster.children) == 11
 
@@ -170,6 +174,35 @@ def test_every_child_schema_is_valid_closed_and_non_placeholder() -> None:
 
 
 @pytest.mark.parametrize(
+    "child_name",
+    ["get_query_profile", "diagnose_query_performance"],
+)
+def test_query_evidence_inputs_require_exactly_one_reference(
+    child_name: str,
+) -> None:
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_query",
+        child_name,
+    )
+    validator = Draft202012Validator(_wire_input(child))
+
+    assert list(validator.iter_errors({"query_id": "query_1"})) == []
+    assert list(validator.iter_errors({"sql": "SELECT 1"})) == []
+    assert list(validator.iter_errors({"query_id": "query_1", "sql": "SELECT 1"}))
+    assert list(validator.iter_errors({}))
+
+
+def test_query_schemas_publish_bounded_execution_limits() -> None:
+    query = DORIS_DOMAIN_CATALOG.resolve_domain("doris_query")
+    schemas = {child.name: _wire_input(child) for child in query.children}
+
+    assert schemas["execute_query"]["properties"]["sql"]["maxLength"] == 1024 * 1024
+    assert schemas["execute_query"]["properties"]["max_rows"]["maximum"] == 100_000
+    assert schemas["execute_query"]["properties"]["timeout_ms"]["maximum"] == 300_000
+    assert schemas["list_slow_queries"]["properties"]["limit"]["maximum"] == 1000
+
+
+@pytest.mark.parametrize(
     ("domain_name", "child_name", "required"),
     [
         ("doris_catalog", "list_tables", {"database"}),
@@ -177,7 +210,11 @@ def test_every_child_schema_is_valid_closed_and_non_placeholder() -> None:
         ("doris_query", "execute_query", {"sql"}),
         ("doris_query", "execute_adbc_query", {"sql"}),
         ("doris_pipeline", "monitor_data_freshness", {"database", "table"}),
-        ("doris_lakehouse", "inspect_lakehouse_table", {"catalog", "database", "table"}),
+        (
+            "doris_lakehouse",
+            "inspect_lakehouse_table",
+            {"catalog", "database", "table"},
+        ),
         (
             "doris_semantic",
             "get_semantic_model_summary",
@@ -203,9 +240,7 @@ def test_important_child_required_parameters_are_explicit(
 
 def test_semantic_content_children_require_explicit_model_ref() -> None:
     semantic = DORIS_DOMAIN_CATALOG.resolve_domain("doris_semantic")
-    schemas = {
-        child.name: _wire_input(child) for child in semantic.children
-    }
+    schemas = {child.name: _wire_input(child) for child in semantic.children}
 
     assert "required" not in schemas["list_semantic_models"]
     for name in (
@@ -254,6 +289,17 @@ def test_table_context_has_four_sections_and_five_deterministic_steps() -> None:
     }
 
 
+def test_query_parameter_schema_discloses_exact_placeholder_syntax() -> None:
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_query",
+        "execute_query",
+    )
+    parameters = _wire_input(child)["properties"]["parameters"]
+
+    assert "%(name)s" in parameters["description"]
+    assert "match every placeholder exactly" in parameters["description"]
+
+
 @pytest.mark.parametrize(
     ("domain_name", "child_name", "required_steps"),
     [
@@ -295,15 +341,21 @@ def test_legacy_migrations_cover_exact_flat_baseline_and_real_handlers() -> None
     manager = _manager()
     registry = _migration_registry(manager)
 
-    assert tuple(
-        migration.legacy_tool_name
-        for migration in DORIS_DOMAIN_CATALOG.legacy_migrations
-    ) == CURRENT_FLAT_TOOL_NAMES
-    assert tuple(
-        definition.name
-        for definition in registry.advertised_definitions
-        if definition.provider_name is None
-    ) == CURRENT_FLAT_TOOL_NAMES
+    assert (
+        tuple(
+            migration.legacy_tool_name
+            for migration in DORIS_DOMAIN_CATALOG.legacy_migrations
+        )
+        == CURRENT_FLAT_TOOL_NAMES
+    )
+    assert (
+        tuple(
+            definition.name
+            for definition in registry.advertised_definitions
+            if definition.provider_name is None
+        )
+        == CURRENT_FLAT_TOOL_NAMES
+    )
     DORIS_DOMAIN_CATALOG.validate_legacy_registry(
         registry,
         manager,
@@ -346,9 +398,7 @@ def test_renamed_or_reshaped_migrations_declare_adapters() -> None:
 
     assert adapted
     assert all(migration.adapter_name for migration in adapted)
-    assert all(
-        migration.target_section is None for migration in adapted
-    )
+    assert all(migration.target_section is None for migration in adapted)
 
 
 def test_catalog_markdown_is_deterministic_and_complete() -> None:
@@ -398,9 +448,7 @@ def test_duplicate_child_is_rejected_even_when_validation_was_bypassed() -> None
     invalid_domain = domain.model_copy(
         update={"children": (*domain.children, domain.children[0])}
     )
-    invalid = _copy_catalog(
-        domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
-    )
+    invalid = _copy_catalog(domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:]))
 
     with pytest.raises(DomainCatalogError, match="exact ordered"):
         invalid.validate_integrity()
@@ -434,9 +482,7 @@ def test_noncanonical_handler_binding_is_rejected() -> None:
     invalid_domain = domain.model_copy(
         update={"children": (child, *domain.children[1:])}
     )
-    invalid = _copy_catalog(
-        domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
-    )
+    invalid = _copy_catalog(domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:]))
 
     with pytest.raises(DomainCatalogError, match="non-canonical handler"):
         invalid.validate_integrity()
@@ -450,9 +496,7 @@ def test_noncanonical_authorization_policy_is_rejected() -> None:
     invalid_domain = domain.model_copy(
         update={"children": (child, *domain.children[1:])}
     )
-    invalid = _copy_catalog(
-        domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
-    )
+    invalid = _copy_catalog(domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:]))
 
     with pytest.raises(DomainCatalogError, match="authorization policy"):
         invalid.validate_integrity()
@@ -470,9 +514,7 @@ def test_wrong_feature_matrix_contract_is_rejected() -> None:
     invalid_domain = domain.model_copy(
         update={"children": (child, *domain.children[1:])}
     )
-    invalid = _copy_catalog(
-        domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
-    )
+    invalid = _copy_catalog(domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:]))
 
     with pytest.raises(DomainCatalogError, match="feature-matrix contract"):
         invalid.validate_integrity()
@@ -480,48 +522,32 @@ def test_wrong_feature_matrix_contract_is_rejected() -> None:
 
 def test_non_read_only_domain_and_child_are_rejected() -> None:
     domain = DORIS_DOMAIN_CATALOG.domains[0]
-    writable_annotations = domain.annotations.model_copy(
-        update={"read_only": False}
-    )
-    invalid_domain = domain.model_copy(
-        update={"annotations": writable_annotations}
-    )
-    invalid = _copy_catalog(
-        domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
-    )
+    writable_annotations = domain.annotations.model_copy(update={"read_only": False})
+    invalid_domain = domain.model_copy(update={"annotations": writable_annotations})
+    invalid = _copy_catalog(domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:]))
 
     with pytest.raises(DomainCatalogError, match="not marked read-only"):
         invalid.validate_integrity()
 
-    child = domain.children[0].model_copy(
-        update={"annotations": writable_annotations}
-    )
+    child = domain.children[0].model_copy(update={"annotations": writable_annotations})
     invalid_domain = domain.model_copy(
         update={"children": (child, *domain.children[1:])}
     )
-    invalid = _copy_catalog(
-        domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
-    )
+    invalid = _copy_catalog(domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:]))
     with pytest.raises(DomainCatalogError, match="risk contract"):
         invalid.validate_integrity()
 
 
 def test_migration_baseline_drift_is_rejected() -> None:
-    invalid = _copy_catalog(
-        migrations=DORIS_DOMAIN_CATALOG.legacy_migrations[:-1]
-    )
+    invalid = _copy_catalog(migrations=DORIS_DOMAIN_CATALOG.legacy_migrations[:-1])
 
     with pytest.raises(DomainCatalogError, match="exact ordered 25-tool"):
         invalid.validate_integrity()
 
 
 def test_unknown_migration_target_is_rejected() -> None:
-    first = LEGACY_TOOL_MIGRATIONS[0].model_copy(
-        update={"child_name": "missing_child"}
-    )
-    invalid = _copy_catalog(
-        migrations=(first, *LEGACY_TOOL_MIGRATIONS[1:])
-    )
+    first = LEGACY_TOOL_MIGRATIONS[0].model_copy(update={"child_name": "missing_child"})
+    invalid = _copy_catalog(migrations=(first, *LEGACY_TOOL_MIGRATIONS[1:]))
 
     with pytest.raises(DomainCatalogError, match="targets unknown child"):
         invalid.validate_integrity()
@@ -534,9 +560,7 @@ def test_composite_migration_requires_composite_target() -> None:
             "target_section": "schema",
         }
     )
-    invalid = _copy_catalog(
-        migrations=(first, *LEGACY_TOOL_MIGRATIONS[1:])
-    )
+    invalid = _copy_catalog(migrations=(first, *LEGACY_TOOL_MIGRATIONS[1:]))
 
     with pytest.raises(DomainCatalogError, match="non-composite child"):
         invalid.validate_integrity()
@@ -544,9 +568,7 @@ def test_composite_migration_requires_composite_target() -> None:
 
 def test_table_context_section_mapping_drift_is_rejected() -> None:
     migrations = list(LEGACY_TOOL_MIGRATIONS)
-    migrations[1] = migrations[1].model_copy(
-        update={"target_section": "basic"}
-    )
+    migrations[1] = migrations[1].model_copy(update={"target_section": "basic"})
     invalid = _copy_catalog(migrations=tuple(migrations))
 
     with pytest.raises(DomainCatalogError, match="exact five legacy handlers"):
@@ -590,9 +612,7 @@ def test_runtime_registry_handler_name_drift_is_rejected() -> None:
     first = LEGACY_TOOL_MIGRATIONS[0].model_copy(
         update={"legacy_handler_name": "_changed_handler"}
     )
-    invalid = _copy_catalog(
-        migrations=(first, *LEGACY_TOOL_MIGRATIONS[1:])
-    )
+    invalid = _copy_catalog(migrations=(first, *LEGACY_TOOL_MIGRATIONS[1:]))
 
     with pytest.raises(DomainCatalogError, match="changed handler"):
         invalid.validate_legacy_registry(registry, manager)
@@ -626,9 +646,7 @@ def test_server_startup_rejects_injected_duplicate_catalog(
     invalid_domain = domain.model_copy(
         update={"children": (*domain.children, domain.children[0])}
     )
-    invalid = _copy_catalog(
-        domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:])
-    )
+    invalid = _copy_catalog(domains=(invalid_domain, *DORIS_DOMAIN_CATALOG.domains[1:]))
     monkeypatch.setattr(domain_catalog_module, "DORIS_DOMAIN_CATALOG", invalid)
 
     with pytest.raises(DomainCatalogError, match="exact ordered"):

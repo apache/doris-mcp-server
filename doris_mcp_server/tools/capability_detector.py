@@ -28,7 +28,15 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
 
+from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.db import DorisConnection, DorisConnectionManager, DorisRouteIdentity
+from ..utils.doris_http_client import (
+    DorisHTTPClient,
+    DorisHTTPPolicyError,
+    DorisHTTPRequestError,
+    configured_fe_http_hosts,
+    database_config_for_request,
+)
 from .doris_feature_matrix import DorisClusterVersionVector
 from .doris_version import (
     DorisVersion,
@@ -111,9 +119,7 @@ class DorisCapabilitySnapshot:
             separators=(",", ":"),
             sort_keys=True,
         )
-        return "cap." + hashlib.sha256(
-            canonical.encode("utf-8")
-        ).hexdigest()[:16]
+        return "cap." + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
     def as_stale(
         self,
@@ -143,17 +149,11 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         ("SHOW CATALOGS", ("catalog_metadata_readable",)),
         ("SHOW DATABASES", ("database_metadata_readable",)),
         (
-            (
-                "SELECT 1 AS table_metadata_probe "
-                "FROM information_schema.tables LIMIT 1"
-            ),
+            ("SELECT 1 AS table_metadata_probe FROM information_schema.tables LIMIT 1"),
             ("table_metadata_readable",),
         ),
         (
-            (
-                "SELECT COLUMN_NAME, DATA_TYPE "
-                "FROM information_schema.columns LIMIT 1"
-            ),
+            ("SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.columns LIMIT 1"),
             (
                 "information_schema.columns",
                 "table_context_sections_readable",
@@ -172,6 +172,10 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             "EXPLAIN SELECT 1",
             ("explain_output_readable", "explain_readable"),
         ),
+        (
+            ("SELECT `query_id` FROM internal.__internal_schema.audit_log LIMIT 1"),
+            ("audit_log_readable",),
+        ),
     ),
 }
 
@@ -186,20 +190,20 @@ class DorisCapabilityDetector:
         probe_timeout_seconds: float = 5.0,
         snapshot_ttl_seconds: int = 300,
         stale_grace_seconds: int = 900,
+        adbc_query_tools: DorisADBCQueryTools | None = None,
         clock: Any | None = None,
     ) -> None:
         self._connection_manager = connection_manager
         self._probe_timeout_seconds = probe_timeout_seconds
         self._snapshot_ttl_seconds = snapshot_ttl_seconds
         self._stale_grace_seconds = stale_grace_seconds
+        self._adbc_query_tools = adbc_query_tools
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def route_identity(self, auth_context: Any | None) -> DorisRouteIdentity:
         route = self._connection_manager.get_route_identity(auth_context)
         if not isinstance(route, DorisRouteIdentity):
-            raise CapabilityDetectionError(
-                "Doris route identity is unavailable"
-            )
+            raise CapabilityDetectionError("Doris route identity is unavailable")
         return route
 
     async def detect_base(
@@ -213,13 +217,9 @@ class DorisCapabilityDetector:
             async with asyncio.timeout(self._probe_timeout_seconds):
                 for _ in range(2):
                     requested_route = self.route_identity(auth_context)
-                    session_id = (
-                        "capability-base:"
-                        f"{requested_route.fingerprint[:16]}"
-                    )
+                    session_id = f"capability-base:{requested_route.fingerprint[:16]}"
                     async with (
-                        self._connection_manager
-                        .get_connection_context_for_auth_context(
+                        self._connection_manager.get_connection_context_for_auth_context(
                             session_id,
                             auth_context,
                         ) as connection
@@ -268,13 +268,11 @@ class DorisCapabilityDetector:
                 )
 
             session_id = (
-                f"capability-domain:{domain_name}:"
-                f"{requested_route.fingerprint[:12]}"
+                f"capability-domain:{domain_name}:{requested_route.fingerprint[:12]}"
             )
             async with asyncio.timeout(self._probe_timeout_seconds):
                 async with (
-                    self._connection_manager
-                    .get_connection_context_for_auth_context(
+                    self._connection_manager.get_connection_context_for_auth_context(
                         session_id,
                         auth_context,
                     ) as connection
@@ -295,18 +293,21 @@ class DorisCapabilityDetector:
                             probe_ids,
                         )
                         probes.update(evidence)
-                    completed_route = self.route_identity(auth_context)
-                    if completed_route.fingerprint != base.route.fingerprint:
-                        raise CapabilityRouteChangedError(
-                            "Doris route changed during domain capability probing"
-                        )
-                    return replace(
-                        base,
-                        probes=probes,
-                        probed_domains=(
-                            base.probed_domains | frozenset({domain_name})
-                        ),
+                if domain_name == "doris_query":
+                    probes.update(await self._probe_query_services(auth_context))
+                    probes["profile_or_audit_readable"] = _combine_query_evidence_probe(
+                        probes
                     )
+                completed_route = self.route_identity(auth_context)
+                if completed_route.fingerprint != base.route.fingerprint:
+                    raise CapabilityRouteChangedError(
+                        "Doris route changed during domain capability probing"
+                    )
+                return replace(
+                    base,
+                    probes=probes,
+                    probed_domains=(base.probed_domains | frozenset({domain_name})),
+                )
         except TimeoutError as exc:
             raise CapabilityDetectionError(
                 f"Doris capability probe timed out for {domain_name}"
@@ -338,9 +339,7 @@ class DorisCapabilityDetector:
                 else CapabilityProbeStatus.UNKNOWN
             ),
             reason_code=(
-                "VERSION_PROBE_PARSED"
-                if version.is_parsed
-                else "DORIS_VERSION_UNKNOWN"
+                "VERSION_PROBE_PARSED" if version.is_parsed else "DORIS_VERSION_UNKNOWN"
             ),
             evidence_sources=("version_probe",),
         )
@@ -388,9 +387,7 @@ class DorisCapabilityDetector:
             else CapabilityProbeStatus.UNKNOWN
         )
         node_reason = (
-            "FE_BE_VERSIONS_OBSERVED"
-            if nodes_ready
-            else "FE_BE_VERSIONS_INCOMPLETE"
+            "FE_BE_VERSIONS_OBSERVED" if nodes_ready else "FE_BE_VERSIONS_INCOMPLETE"
         )
         for probe_id in (
             "cluster_components_discoverable",
@@ -437,10 +434,7 @@ class DorisCapabilityDetector:
             expires_at=now + timedelta(seconds=self._snapshot_ttl_seconds),
             stale_until=now
             + timedelta(
-                seconds=(
-                    self._snapshot_ttl_seconds
-                    + self._stale_grace_seconds
-                )
+                seconds=(self._snapshot_ttl_seconds + self._stale_grace_seconds)
             ),
         )
 
@@ -484,11 +478,7 @@ class DorisCapabilityDetector:
                 max_rows=512,
                 max_bytes=512 * 1024,
             )
-            rows = tuple(
-                row
-                for row in (result.data or ())
-                if isinstance(row, Mapping)
-            )
+            rows = tuple(row for row in (result.data or ()) if isinstance(row, Mapping))
         except Exception as exc:
             status, reason = _classify_probe_error(exc)
             rows = ()
@@ -501,16 +491,243 @@ class DorisCapabilityDetector:
             reason_code=reason,
         )
 
+    async def _probe_query_services(
+        self,
+        auth_context: Any | None,
+    ) -> dict[str, CapabilityProbeEvidence]:
+        profile, probes = await asyncio.gather(
+            self._safe_probe_profile_api(auth_context),
+            self._safe_probe_adbc_services(auth_context),
+        )
+        probes["query_profile_api_readable"] = profile
+        probes["fe_profile_api"] = CapabilityProbeEvidence(
+            probe_id="fe_profile_api",
+            status=profile.status,
+            reason_code=profile.reason_code,
+            evidence_sources=profile.evidence_sources,
+        )
+        return probes
+
+    async def _safe_probe_profile_api(
+        self,
+        auth_context: Any | None,
+    ) -> CapabilityProbeEvidence:
+        try:
+            async with asyncio.timeout(self._optional_probe_timeout()):
+                return await self._probe_profile_api(auth_context)
+        except TimeoutError:
+            return CapabilityProbeEvidence(
+                probe_id="query_profile_api_readable",
+                status=CapabilityProbeStatus.DEGRADED,
+                reason_code="PROFILE_API_PROBE_TIMED_OUT",
+                evidence_sources=("doris_fe_http", "runtime_probe"),
+            )
+        except Exception:
+            return CapabilityProbeEvidence(
+                probe_id="query_profile_api_readable",
+                status=CapabilityProbeStatus.UNKNOWN,
+                reason_code="PROFILE_API_PROBE_FAILED",
+                evidence_sources=("doris_fe_http", "runtime_probe"),
+            )
+
+    async def _probe_profile_api(
+        self,
+        auth_context: Any | None,
+    ) -> CapabilityProbeEvidence:
+        if getattr(auth_context, "auth_method", "") == "doris_oauth":
+            return CapabilityProbeEvidence(
+                probe_id="query_profile_api_readable",
+                status=CapabilityProbeStatus.MISCONFIGURED,
+                reason_code="PROFILE_API_CREDENTIAL_ROUTE_UNAVAILABLE",
+                evidence_sources=("credential_route_policy",),
+            )
+        try:
+            config_resolver = getattr(
+                self._connection_manager,
+                "get_database_config_for_auth_context",
+                None,
+            )
+            db_config = (
+                config_resolver(auth_context)
+                if callable(config_resolver)
+                else database_config_for_request(self._connection_manager)
+            )
+            client = DorisHTTPClient.from_database_config(db_config)
+            response = await client.get_first_available(
+                role="fe",
+                hosts=configured_fe_http_hosts(db_config),
+                port=db_config.fe_http_port,
+                path="/rest/v2/manager/query/query_info",
+                params={
+                    "query_id": ("0000000000000000-0000000000000000"),
+                    "is_all_node": "false",
+                },
+                headers={"Accept": "application/json, text/plain"},
+            )
+        except DorisHTTPPolicyError:
+            status = CapabilityProbeStatus.MISCONFIGURED
+            reason = "PROFILE_API_ENDPOINT_MISCONFIGURED"
+        except DorisHTTPRequestError:
+            status = CapabilityProbeStatus.DEGRADED
+            reason = "PROFILE_API_UNREACHABLE"
+        except Exception:
+            status = CapabilityProbeStatus.UNKNOWN
+            reason = "PROFILE_API_PROBE_FAILED"
+        else:
+            payload: Mapping[str, Any] | None = None
+            if response.status == 200:
+                try:
+                    parsed = json.loads(response.text())
+                except json.JSONDecodeError:
+                    parsed = None
+                if isinstance(parsed, Mapping):
+                    payload = parsed
+            status, reason = _classify_profile_api_response(
+                response.status,
+                payload,
+            )
+        return CapabilityProbeEvidence(
+            probe_id="query_profile_api_readable",
+            status=status,
+            reason_code=reason,
+            evidence_sources=("doris_fe_http", "runtime_probe"),
+        )
+
+    async def _probe_adbc_services(
+        self,
+        auth_context: Any | None,
+    ) -> dict[str, CapabilityProbeEvidence]:
+        if getattr(auth_context, "auth_method", "") == "doris_oauth":
+            return _adbc_probe_evidence(
+                driver_status=CapabilityProbeStatus.MISCONFIGURED,
+                driver_reason="ADBC_CREDENTIAL_ROUTE_UNAVAILABLE",
+                endpoint_status=CapabilityProbeStatus.MISCONFIGURED,
+                endpoint_reason="ADBC_CREDENTIAL_ROUTE_UNAVAILABLE",
+            )
+        global_database_config = getattr(
+            getattr(self._connection_manager, "config", None),
+            "database",
+            None,
+        )
+        config_resolver = getattr(
+            self._connection_manager,
+            "get_database_config_for_auth_context",
+            None,
+        )
+        if global_database_config is not None and callable(config_resolver):
+            selected_database_config = config_resolver(auth_context)
+            if selected_database_config is not global_database_config:
+                return _adbc_probe_evidence(
+                    driver_status=CapabilityProbeStatus.MISCONFIGURED,
+                    driver_reason="ADBC_CREDENTIAL_ROUTE_UNAVAILABLE",
+                    endpoint_status=CapabilityProbeStatus.MISCONFIGURED,
+                    endpoint_reason="ADBC_CREDENTIAL_ROUTE_UNAVAILABLE",
+                )
+        enabled = bool(
+            getattr(
+                getattr(
+                    getattr(self._connection_manager, "config", None),
+                    "adbc",
+                    None,
+                ),
+                "enabled",
+                False,
+            )
+        )
+        if not enabled:
+            return _adbc_probe_evidence(
+                driver_status=CapabilityProbeStatus.MISCONFIGURED,
+                driver_reason="ADBC_PROVIDER_NOT_CONFIGURED",
+                endpoint_status=CapabilityProbeStatus.MISCONFIGURED,
+                endpoint_reason="ADBC_PROVIDER_NOT_CONFIGURED",
+            )
+        if self._adbc_query_tools is None:
+            return _adbc_probe_evidence(
+                driver_status=CapabilityProbeStatus.UNKNOWN,
+                driver_reason="ADBC_RUNTIME_PROBE_PENDING",
+                endpoint_status=CapabilityProbeStatus.UNKNOWN,
+                endpoint_reason="ADBC_RUNTIME_PROBE_PENDING",
+            )
+
+        module_result = await self._adbc_query_tools._import_adbc_modules()
+        port_result = await self._adbc_query_tools._check_arrow_flight_ports(
+            connectivity_timeout=max(
+                0.25,
+                min(1.0, self._probe_timeout_seconds / 4),
+            )
+        )
+        driver_ready = bool(module_result.get("success"))
+        endpoint_ready = bool(port_result.get("success"))
+        endpoint_error_type = str(port_result.get("error_type", ""))
+        endpoint_status = (
+            CapabilityProbeStatus.SUPPORTED
+            if endpoint_ready
+            else (
+                CapabilityProbeStatus.MISCONFIGURED
+                if endpoint_error_type
+                in {
+                    "missing_fe_port_config",
+                    "missing_be_port_config",
+                    "invalid_port_format",
+                }
+                else CapabilityProbeStatus.DEGRADED
+            )
+        )
+        return _adbc_probe_evidence(
+            driver_status=(
+                CapabilityProbeStatus.SUPPORTED
+                if driver_ready
+                else CapabilityProbeStatus.MISCONFIGURED
+            ),
+            driver_reason=(
+                "ADBC_DRIVER_READY" if driver_ready else "ADBC_DRIVER_NOT_READY"
+            ),
+            endpoint_status=endpoint_status,
+            endpoint_reason=(
+                "FLIGHT_SQL_REACHABLE"
+                if endpoint_ready
+                else (
+                    "FLIGHT_SQL_ENDPOINT_MISCONFIGURED"
+                    if endpoint_status is CapabilityProbeStatus.MISCONFIGURED
+                    else "FLIGHT_SQL_UNREACHABLE"
+                )
+            ),
+        )
+
+    async def _safe_probe_adbc_services(
+        self,
+        auth_context: Any | None,
+    ) -> dict[str, CapabilityProbeEvidence]:
+        try:
+            async with asyncio.timeout(self._optional_probe_timeout()):
+                return await self._probe_adbc_services(auth_context)
+        except TimeoutError:
+            return _adbc_probe_evidence(
+                driver_status=CapabilityProbeStatus.DEGRADED,
+                driver_reason="ADBC_RUNTIME_PROBE_TIMED_OUT",
+                endpoint_status=CapabilityProbeStatus.DEGRADED,
+                endpoint_reason="ADBC_RUNTIME_PROBE_TIMED_OUT",
+            )
+        except Exception:
+            return _adbc_probe_evidence(
+                driver_status=CapabilityProbeStatus.UNKNOWN,
+                driver_reason="ADBC_RUNTIME_PROBE_FAILED",
+                endpoint_status=CapabilityProbeStatus.UNKNOWN,
+                endpoint_reason="ADBC_RUNTIME_PROBE_FAILED",
+            )
+
+    def _optional_probe_timeout(self) -> float:
+        return max(
+            0.25,
+            min(2.0, self._probe_timeout_seconds / 2),
+        )
+
 
 def _classify_probe_error(
     error: Exception,
 ) -> tuple[CapabilityProbeStatus, str]:
     error_code = next(
-        (
-            value
-            for value in getattr(error, "args", ())
-            if isinstance(value, int)
-        ),
+        (value for value in getattr(error, "args", ()) if isinstance(value, int)),
         None,
     )
     if error_code in {1044, 1045, 1142, 1227}:
@@ -529,6 +746,105 @@ def _classify_probe_error(
             "PROBE_CONNECTION_FAILED",
         )
     return CapabilityProbeStatus.UNKNOWN, "RUNTIME_PROBE_FAILED"
+
+
+def _profile_api_code(payload: Mapping[str, Any] | None) -> int | None:
+    if payload is None or "code" not in payload:
+        return None
+    try:
+        return int(payload["code"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _classify_profile_api_response(
+    status_code: int,
+    payload: Mapping[str, Any] | None,
+) -> tuple[CapabilityProbeStatus, str]:
+    api_code = _profile_api_code(payload)
+    if status_code == 200 and api_code == 0:
+        return CapabilityProbeStatus.SUPPORTED, "PROFILE_API_READABLE"
+    if status_code in {401, 403} or api_code in {401, 403}:
+        return (
+            CapabilityProbeStatus.UNKNOWN,
+            "PROFILE_API_PERMISSION_DENIED",
+        )
+    if status_code in {502, 503, 504}:
+        return (
+            CapabilityProbeStatus.DEGRADED,
+            "PROFILE_API_UNREACHABLE",
+        )
+    if status_code == 200:
+        return (
+            CapabilityProbeStatus.UNKNOWN,
+            "PROFILE_API_INVALID_RESPONSE",
+        )
+    return CapabilityProbeStatus.UNSUPPORTED, "PROFILE_API_UNSUPPORTED"
+
+
+def _adbc_probe_evidence(
+    *,
+    driver_status: CapabilityProbeStatus,
+    driver_reason: str,
+    endpoint_status: CapabilityProbeStatus,
+    endpoint_reason: str,
+) -> dict[str, CapabilityProbeEvidence]:
+    return {
+        "adbc_driver_ready": CapabilityProbeEvidence(
+            probe_id="adbc_driver_ready",
+            status=driver_status,
+            reason_code=driver_reason,
+            evidence_sources=("adbc_runtime_probe",),
+        ),
+        "flight_sql_reachable": CapabilityProbeEvidence(
+            probe_id="flight_sql_reachable",
+            status=endpoint_status,
+            reason_code=endpoint_reason,
+            evidence_sources=("adbc_runtime_probe",),
+        ),
+        "flight_sql": CapabilityProbeEvidence(
+            probe_id="flight_sql",
+            status=endpoint_status,
+            reason_code=endpoint_reason,
+            evidence_sources=("adbc_runtime_probe",),
+        ),
+    }
+
+
+def _combine_query_evidence_probe(
+    probes: Mapping[str, CapabilityProbeEvidence],
+) -> CapabilityProbeEvidence:
+    candidates = tuple(
+        probe
+        for probe_id in (
+            "query_profile_api_readable",
+            "audit_log_readable",
+        )
+        if (probe := probes.get(probe_id)) is not None
+    )
+    if any(probe.status is CapabilityProbeStatus.SUPPORTED for probe in candidates):
+        status = CapabilityProbeStatus.SUPPORTED
+        reason = "PROFILE_OR_AUDIT_EVIDENCE_READABLE"
+    elif any(probe.status is CapabilityProbeStatus.DEGRADED for probe in candidates):
+        status = CapabilityProbeStatus.DEGRADED
+        reason = "PROFILE_OR_AUDIT_EVIDENCE_DEGRADED"
+    elif any(
+        probe.status is CapabilityProbeStatus.MISCONFIGURED for probe in candidates
+    ):
+        status = CapabilityProbeStatus.MISCONFIGURED
+        reason = "PROFILE_OR_AUDIT_EVIDENCE_MISCONFIGURED"
+    elif any(probe.status is CapabilityProbeStatus.UNSUPPORTED for probe in candidates):
+        status = CapabilityProbeStatus.UNSUPPORTED
+        reason = "PROFILE_OR_AUDIT_EVIDENCE_UNSUPPORTED"
+    else:
+        status = CapabilityProbeStatus.UNKNOWN
+        reason = "PROFILE_OR_AUDIT_EVIDENCE_UNKNOWN"
+    return CapabilityProbeEvidence(
+        probe_id="profile_or_audit_readable",
+        status=status,
+        reason_code=reason,
+        evidence_sources=("runtime_probe",),
+    )
 
 
 def _row_value(
@@ -564,9 +880,7 @@ def _frontend_versions(
 ) -> tuple[DorisVersion, tuple[DorisVersion, ...]]:
     observed: list[tuple[DorisVersion, bool]] = []
     for row in rows:
-        version = _component_version(
-            _row_value(row, "Version", "FeVersion")
-        )
+        version = _component_version(_row_value(row, "Version", "FeVersion"))
         observed.append(
             (
                 version,
@@ -574,11 +888,7 @@ def _frontend_versions(
             )
         )
     master_index = next(
-        (
-            index
-            for index, (_, is_master) in enumerate(observed)
-            if is_master
-        ),
+        (index for index, (_, is_master) in enumerate(observed) if is_master),
         None,
     )
     if master_index is None:
@@ -588,9 +898,7 @@ def _frontend_versions(
     if not master.raw:
         master = fallback
     followers = tuple(
-        version
-        for index, (version, _) in enumerate(observed)
-        if index != master_index
+        version for index, (version, _) in enumerate(observed) if index != master_index
     )
     return master, followers
 
@@ -599,8 +907,7 @@ def _backend_versions(
     rows: Sequence[Mapping[str, Any]],
 ) -> tuple[DorisVersion, ...]:
     return tuple(
-        _component_version(_row_value(row, "Version", "BeVersion"))
-        for row in rows
+        _component_version(_row_value(row, "Version", "BeVersion")) for row in rows
     )
 
 
@@ -617,8 +924,7 @@ def _cluster_fingerprint(
         for row in rows:
             values.append(
                 "\x1f".join(
-                    str(_row_value(row, identifier) or "")
-                    for identifier in identifiers
+                    str(_row_value(row, identifier) or "") for identifier in identifiers
                 )
             )
         return sorted(values)

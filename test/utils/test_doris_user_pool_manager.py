@@ -113,7 +113,9 @@ def doris_context(user="alice", token=""):
 
 
 @pytest.mark.asyncio
-async def test_authenticate_doris_user_success_does_not_create_pool(manager, monkeypatch):
+async def test_authenticate_doris_user_success_does_not_create_pool(
+    manager, monkeypatch
+):
     connect = AsyncMock(return_value=FakeAuthConnection())
     create_pool = AsyncMock()
     monkeypatch.setattr(db_module.aiomysql, "connect", connect)
@@ -159,13 +161,20 @@ async def test_repeat_login_reverifies_and_reuses_existing_pool(manager, monkeyp
     assert create_pool.await_count == 1
     assert create_pool.await_args.kwargs["db"] == "information_schema"
     assert manager.doris_user_pools["alice"] is pool
-    assert manager.doris_user_pool_meta["alice"].credential_fingerprint == first_meta.credential_fingerprint
+    assert (
+        manager.doris_user_pool_meta["alice"].credential_fingerprint
+        == first_meta.credential_fingerprint
+    )
 
 
 @pytest.mark.asyncio
-async def test_wrong_password_after_existing_pool_preserves_old_pool(manager, monkeypatch):
+async def test_wrong_password_after_existing_pool_preserves_old_pool(
+    manager, monkeypatch
+):
     old_pool = FakePool("alice-v1")
-    connect = AsyncMock(side_effect=[FakeAuthConnection(), RuntimeError("access denied")])
+    connect = AsyncMock(
+        side_effect=[FakeAuthConnection(), RuntimeError("access denied")]
+    )
     create_pool = AsyncMock(return_value=old_pool)
     monkeypatch.setattr(db_module.aiomysql, "connect", connect)
     monkeypatch.setattr(db_module.aiomysql, "create_pool", create_pool)
@@ -178,12 +187,17 @@ async def test_wrong_password_after_existing_pool_preserves_old_pool(manager, mo
 
     assert manager.doris_user_pools["alice"] is old_pool
     assert manager.doris_user_pool_meta["alice"].owner_id == old_meta.owner_id
-    assert manager.doris_user_pool_meta["alice"].credential_fingerprint == old_meta.credential_fingerprint
+    assert (
+        manager.doris_user_pool_meta["alice"].credential_fingerprint
+        == old_meta.credential_fingerprint
+    )
     assert create_pool.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_soft_replace_releases_old_checked_out_connection_to_old_owner(manager, monkeypatch):
+async def test_soft_replace_releases_old_checked_out_connection_to_old_owner(
+    manager, monkeypatch
+):
     old_pool = FakePool("alice-v1")
     new_pool = FakePool("alice-v2")
     connect = AsyncMock(side_effect=[FakeAuthConnection(), FakeAuthConnection()])
@@ -221,7 +235,10 @@ async def test_new_pool_create_failure_preserves_existing_pool(manager, monkeypa
 
     assert manager.doris_user_pools["alice"] is old_pool
     assert manager.doris_user_pool_meta["alice"].owner_id == old_meta.owner_id
-    assert manager.doris_user_pool_meta["alice"].credential_fingerprint == old_meta.credential_fingerprint
+    assert (
+        manager.doris_user_pool_meta["alice"].credential_fingerprint
+        == old_meta.credential_fingerprint
+    )
 
 
 @pytest.mark.asyncio
@@ -262,7 +279,9 @@ async def test_execute_query_pool_missing_does_not_fallback_to_global_or_token(m
 
 
 @pytest.mark.asyncio
-async def test_execute_query_releases_to_captured_doris_user_owner(manager, monkeypatch):
+async def test_execute_query_releases_to_captured_doris_user_owner(
+    manager, monkeypatch
+):
     pool = FakePool("alice-v1")
     connect = AsyncMock(return_value=FakeAuthConnection())
     create_pool = AsyncMock(return_value=pool)
@@ -281,7 +300,9 @@ async def test_execute_query_releases_to_captured_doris_user_owner(manager, monk
         max_bytes=None,
     ):
         del max_rows, max_bytes
-        return QueryResult(data=[{"ok": 1}], metadata={}, execution_time=0.0, row_count=1, sql=sql)
+        return QueryResult(
+            data=[{"ok": 1}], metadata={}, execution_time=0.0, row_count=1, sql=sql
+        )
 
     monkeypatch.setattr(DorisConnection, "execute", fake_execute)
 
@@ -362,7 +383,9 @@ async def test_static_token_release_uses_captured_owner_pool(manager, monkeypatc
         database="token_db",
         charset="utf8",
     )
-    manager.token_manager = SimpleNamespace(get_database_config_by_token=lambda raw: token_db_config)
+    manager.token_manager = SimpleNamespace(
+        get_database_config_by_token=lambda raw: token_db_config
+    )
     create_pool = AsyncMock(return_value=old_pool)
     monkeypatch.setattr(db_module.aiomysql, "create_pool", create_pool)
 
@@ -413,6 +436,27 @@ async def test_release_routed_connection_releases_closed_raw_to_captured_owner(
     assert old_owner.release_calls == [raw_connection]
     assert current_pool.release_calls == []
     assert raw_connection.ensure_closed_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_release_routed_connection_force_closes_unhealthy_raw(manager):
+    owner = FakePool("owner")
+    raw_connection = FakeRawConnection("unhealthy-raw")
+    connection = DorisConnection(
+        raw_connection,
+        "s1",
+        pool_kind="static_token",
+        route_key="static_token:tokenhash",
+        owner_id="static_token:tokenhash:gen:1",
+        generation=1,
+        owner_pool=owner,
+    )
+    connection.is_healthy = False
+
+    await manager.release_routed_connection(connection)
+
+    assert owner.release_calls == []
+    assert raw_connection.ensure_closed_calls == 1
 
 
 @pytest.mark.asyncio
