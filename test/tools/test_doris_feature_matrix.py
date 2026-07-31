@@ -28,14 +28,18 @@ from doris_mcp_server.tools.doris_feature_matrix import (
     CERTIFICATION_TARGET_VERSIONS,
     CERTIFIED_DORIS_VERSIONS,
     DORIS_FEATURE_MATRIX,
+    DORIS_PATCH_CERTIFICATION_MATRIX,
     EXPECTED_DOMAIN_CHILDREN,
     PROJECT_MINIMUM_DORIS_VERSION,
     CapabilityVersionScope,
     DorisClusterVersionVector,
     DorisFeatureMatrix,
+    DorisPatchCertificationMatrix,
     DorisVersionRange,
     FeatureSource,
     FeatureSourceKind,
+    PatchCertificationCase,
+    PatchCertificationEvidence,
     VersionCertificationStatus,
     matching_version_ranges,
 )
@@ -61,6 +65,43 @@ def _vector(
 
 def _matrix_payload() -> dict[str, Any]:
     return cast(dict[str, Any], DORIS_FEATURE_MATRIX.model_dump(mode="python"))
+
+
+def _certification_cases() -> tuple[PatchCertificationCase, ...]:
+    return tuple(
+        PatchCertificationCase(
+            transport=transport,
+            exposure_mode=mode,
+            listed_tool_count=8 if mode == "hierarchical" else 47,
+            domain_manifest_count=8 if mode == "hierarchical" else 0,
+            read_only_query_passed=True,
+            write_operations_executed=0,
+        )
+        for transport in ("stdio", "streamable_http")
+        for mode in ("hierarchical", "flat")
+    )
+
+
+def _certification_evidence(
+    version: str = "4.1.2",
+) -> PatchCertificationEvidence:
+    return PatchCertificationEvidence(
+        certification_id="doris_4_1_2_linux_amd64",
+        version=version,
+        master_fe_version_comment=(
+            f"Doris version doris-{version}-rc01-43f06a5e26 (Cloud Mode)"
+        ),
+        backend_version_comments=(
+            f"Doris version doris-{version}-rc02-43f06a5e26",
+        ),
+        platform="linux_amd64",
+        deployment_mode="cloud",
+        cases=_certification_cases(),
+        domain_names=tuple(EXPECTED_DOMAIN_CHILDREN),
+        child_contract_count=47,
+        evidence_sha256="a" * 64,
+        verified_on="2026-07-31",
+    )
 
 
 def test_matrix_contains_exact_8_domain_47_child_contract() -> None:
@@ -214,17 +255,112 @@ def test_sources_are_https_authorities_with_branch_ranges() -> None:
     assert {"#61819", "#62077", "#63206"} == set(release_412.pull_requests)
 
 
-def test_certification_targets_are_not_claimed_as_certified() -> None:
+def test_only_evidence_backed_targets_are_claimed_as_certified() -> None:
     assert PROJECT_MINIMUM_DORIS_VERSION == "3.0.0"
     assert DORIS_FEATURE_MATRIX.certification_targets == (CERTIFICATION_TARGET_VERSIONS)
-    assert DORIS_FEATURE_MATRIX.certified_versions == ()
-    assert CERTIFIED_DORIS_VERSIONS == ()
+    assert DORIS_FEATURE_MATRIX.certified_versions == ("4.0.5",)
+    assert CERTIFIED_DORIS_VERSIONS == ("4.0.5",)
+    assert DORIS_PATCH_CERTIFICATION_MATRIX.target_versions == (
+        CERTIFICATION_TARGET_VERSIONS
+    )
+    assert tuple(
+        record.version for record in DORIS_PATCH_CERTIFICATION_MATRIX.evidence
+    ) == ("4.0.5",)
+    assert (
+        DORIS_PATCH_CERTIFICATION_MATRIX.evidence[0].evidence_sha256
+        == "2ac431322d6b550bd8449ca80312105f4cc9cfec57f9b89362c088a2f97d4e9a"
+    )
     assert {
         "DORIS_RELEASE_3_0_3",
         "DORIS_RELEASE_3_1_4",
         "DORIS_RELEASE_4_0_5",
         "DORIS_RELEASE_4_1_3",
     } <= {source.source_id for source in DORIS_FEATURE_MATRIX.sources}
+
+
+def test_certification_uses_three_part_core_for_rc_and_ga_builds() -> None:
+    rc_versions = _vector("4.0.5-rc01")
+    ga_versions = _vector("4.0.5")
+    rc_feature = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=rc_versions,
+    )
+    ga_feature = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=ga_versions,
+    )
+    rc_report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(rc_versions)
+    ga_report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(ga_versions)
+
+    assert rc_feature.certification_status is (
+        VersionCertificationStatus.CERTIFIED
+    )
+    assert ga_feature.certification_status is (
+        VersionCertificationStatus.CERTIFIED
+    )
+    assert rc_report.uniform_observed_version == "4.0.5"
+    assert ga_report.uniform_observed_version == "4.0.5"
+    assert rc_report.observed_fe_versions == ("4.0.5rc1",)
+    assert rc_report.observed_be_versions == ("4.0.5rc1",)
+    assert rc_report.status is VersionCertificationStatus.CERTIFIED
+    assert ga_report.status is VersionCertificationStatus.CERTIFIED
+    assert rc_report.evidence_ids == ("doris_4_0_5_linux_amd64",)
+    assert ga_report.evidence_ids == rc_report.evidence_ids
+
+
+def test_complete_real_host_evidence_certifies_its_three_part_patch() -> None:
+    evidence = _certification_evidence()
+    matrix = DorisPatchCertificationMatrix(
+        minimum_supported_version="3.0.0",
+        target_versions=CERTIFICATION_TARGET_VERSIONS,
+        evidence=(evidence,),
+    )
+    report = matrix.evaluate(_vector("4.1.2-rc03"))
+
+    assert matrix.certified_versions == ("4.1.2",)
+    assert report.uniform_observed_version == "4.1.2"
+    assert report.status is VersionCertificationStatus.CERTIFIED
+    assert report.targeted is True
+    assert report.certified is True
+    assert report.evidence_ids == ("doris_4_1_2_linux_amd64",)
+
+
+def test_patch_certification_fails_closed_for_unknown_or_mixed_components() -> None:
+    unknown = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(
+        DorisClusterVersionVector.from_comments(
+            master_fe="Doris version doris-4.1.2",
+            backends=(),
+        )
+    )
+    mixed = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(
+        _vector("4.1.2", backends=("4.1.1",))
+    )
+
+    assert unknown.status is VersionCertificationStatus.UNKNOWN
+    assert unknown.reason_code == "PATCH_CERTIFICATION_COMPONENT_VERSION_UNKNOWN"
+    assert mixed.status is VersionCertificationStatus.UNKNOWN
+    assert mixed.reason_code == "PATCH_CERTIFICATION_MIXED_COMPONENT_VERSIONS"
+    assert mixed.uniform_observed_version is None
+
+
+def test_patch_evidence_rejects_incomplete_host_or_component_proof() -> None:
+    evidence = _certification_evidence()
+    payload = evidence.model_dump(mode="python")
+    payload["cases"] = payload["cases"][:-1]
+    with pytest.raises(
+        ValidationError,
+        match="at least 4 items|each transport and exposure",
+    ):
+        PatchCertificationEvidence.model_validate(payload)
+
+    payload = evidence.model_dump(mode="python")
+    payload["backend_version_comments"] = (
+        "Doris version doris-4.1.1-43f06a5e26",
+    )
+    with pytest.raises(ValidationError, match="Doris core version 4.1.2"):
+        PatchCertificationEvidence.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -392,11 +528,9 @@ def test_compaction_child_keeps_a_degraded_legacy_variant() -> None:
 
     assert result.compatible is True
     assert result.matched_variants == ("legacy_compaction_summary",)
-    assert result.certification_status is (
-        VersionCertificationStatus.TARGET_UNCERTIFIED
-    )
-    assert result.certification_target is True
-    assert result.certified is False
+    assert result.certification_status is VersionCertificationStatus.CERTIFIED
+    assert result.certification_target is False
+    assert result.certified is True
 
 
 def test_lineage_native_and_audit_paths_are_both_explicit() -> None:

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -54,9 +54,6 @@ CERTIFICATION_TARGET_VERSIONS = (
     "4.1.2",
     "4.1.3",
 )
-
-# Certification is evidence-driven. V1-02 defines targets but certifies no patch.
-CERTIFIED_DORIS_VERSIONS: tuple[str, ...] = ()
 
 SourceIdentifier = Annotated[
     str,
@@ -251,7 +248,7 @@ class ChildFeatureDefinition(ContractModel):
 
 
 class VersionCertificationStatus(StrEnum):
-    """Certification relationship for one exact observed Doris patch."""
+    """Certification relationship for one observed three-part Doris patch."""
 
     CERTIFIED = "certified"
     TARGET_UNCERTIFIED = "target_uncertified"
@@ -347,6 +344,287 @@ EXPECTED_DOMAIN_CHILDREN: Mapping[str, tuple[str, ...]] = MappingProxyType(
         ),
     }
 )
+
+
+class PatchCertificationCase(ContractModel):
+    """One required Host and exposure-mode certification quadrant."""
+
+    transport: Literal["stdio", "streamable_http"]
+    exposure_mode: Literal["hierarchical", "flat"]
+    listed_tool_count: Annotated[int, Field(ge=1, le=64)]
+    domain_manifest_count: Annotated[int, Field(ge=0, le=8)]
+    read_only_query_passed: bool
+    write_operations_executed: Annotated[int, Field(ge=0, le=0)]
+
+    @model_validator(mode="after")
+    def _validate_case(self) -> Self:
+        expected_tools = 8 if self.exposure_mode == "hierarchical" else 47
+        expected_manifests = 8 if self.exposure_mode == "hierarchical" else 0
+        if self.listed_tool_count != expected_tools:
+            raise ValueError(
+                f"{self.exposure_mode} certification requires "
+                f"{expected_tools} listed tools"
+            )
+        if self.domain_manifest_count != expected_manifests:
+            raise ValueError(
+                f"{self.exposure_mode} certification requires "
+                f"{expected_manifests} domain manifests"
+            )
+        if not self.read_only_query_passed:
+            raise ValueError("certification requires a real read-only Doris query")
+        return self
+
+
+class PatchCertificationEvidence(ContractModel):
+    """Committed proof required before one three-part Doris patch is certified."""
+
+    certification_id: Identifier
+    version: NonEmptyText
+    master_fe_version_comment: NonEmptyText
+    follower_fe_version_comments: tuple[NonEmptyText, ...] = ()
+    backend_version_comments: Annotated[
+        tuple[NonEmptyText, ...],
+        Field(min_length=1),
+    ]
+    platform: Identifier
+    deployment_mode: Identifier
+    cases: Annotated[
+        tuple[PatchCertificationCase, ...],
+        Field(min_length=4, max_length=4),
+    ]
+    domain_names: Annotated[
+        tuple[Identifier, ...],
+        Field(min_length=8, max_length=8),
+    ]
+    child_contract_count: Annotated[int, Field(ge=47, le=47)]
+    evidence_sha256: Annotated[
+        str,
+        StringConstraints(
+            pattern=r"^[0-9a-f]{64}$",
+            strip_whitespace=True,
+        ),
+    ]
+    verified_on: date
+
+    @model_validator(mode="after")
+    def _validate_evidence(self) -> Self:
+        target = _parse_version_literal(self.version)
+        if target.prerelease is not None:
+            raise ValueError(
+                "certification evidence requires a three-part target version"
+            )
+        target_literal = _version_literal(target)
+        comments = (
+            self.master_fe_version_comment,
+            *self.follower_fe_version_comments,
+            *self.backend_version_comments,
+        )
+        for comment in comments:
+            observed = parse_doris_version_comment(comment)
+            if (
+                not observed.is_parsed
+                or observed.core != target_literal
+            ):
+                raise ValueError(
+                    "every certified FE and BE must report the Doris core "
+                    f"version {target_literal}"
+                )
+
+        expected_cases = {
+            ("stdio", "hierarchical"),
+            ("stdio", "flat"),
+            ("streamable_http", "hierarchical"),
+            ("streamable_http", "flat"),
+        }
+        actual_cases = {
+            (case.transport, case.exposure_mode) for case in self.cases
+        }
+        if actual_cases != expected_cases or len(actual_cases) != len(self.cases):
+            raise ValueError(
+                "certification evidence requires each transport and exposure "
+                "quadrant exactly once"
+            )
+        if self.domain_names != tuple(EXPECTED_DOMAIN_CHILDREN):
+            raise ValueError(
+                "certification evidence requires the exact ordered 8-domain "
+                "contract"
+            )
+        return self
+
+
+class PatchCertificationReport(ContractModel):
+    """Sanitized certification status for the currently observed cluster."""
+
+    minimum_supported_version: NonEmptyText
+    target_versions: tuple[NonEmptyText, ...]
+    certified_versions: tuple[NonEmptyText, ...]
+    observed_fe_versions: tuple[str | None, ...]
+    observed_be_versions: tuple[str | None, ...]
+    uniform_observed_version: str | None
+    status: VersionCertificationStatus
+    reason_code: ReasonCode
+    targeted: bool
+    certified: bool
+    evidence_ids: tuple[Identifier, ...]
+    limitations: tuple[NonEmptyText, ...] = ()
+
+
+class DorisPatchCertificationMatrix(ContractModel):
+    """Evidence-backed certification policy for three-part Doris patches."""
+
+    minimum_supported_version: NonEmptyText
+    target_versions: Annotated[
+        tuple[NonEmptyText, ...],
+        Field(min_length=1),
+    ]
+    evidence: tuple[PatchCertificationEvidence, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_matrix(self) -> Self:
+        minimum = _parse_version_literal(self.minimum_supported_version)
+        if minimum.prerelease is not None:
+            raise ValueError("minimum supported version must be stable")
+        targets = tuple(
+            _version_literal(_parse_version_literal(value))
+            for value in self.target_versions
+        )
+        if any(
+            _parse_version_literal(value).prerelease is not None
+            for value in self.target_versions
+        ):
+            raise ValueError(
+                "certification targets must use three-part versions"
+            )
+        _require_unique(targets, "patch certification targets")
+        evidence_versions = tuple(record.version for record in self.evidence)
+        _require_unique(evidence_versions, "patch certification evidence versions")
+        _require_unique(
+            tuple(record.certification_id for record in self.evidence),
+            "patch certification evidence IDs",
+        )
+        if not set(evidence_versions).issubset(targets):
+            raise ValueError(
+                "patch certification evidence must reference target versions"
+            )
+        return self
+
+    @property
+    def certified_versions(self) -> tuple[str, ...]:
+        """Return only patches backed by complete committed evidence."""
+        return tuple(record.version for record in self.evidence)
+
+    def evaluate(
+        self,
+        versions: DorisClusterVersionVector,
+    ) -> PatchCertificationReport:
+        """Evaluate three-part cluster-patch certification without guessing."""
+        fe_components = (versions.master_fe, *versions.follower_fes)
+        be_components = versions.backends
+        observed_fe = tuple(version.normalized for version in fe_components)
+        observed_be = tuple(version.normalized for version in be_components)
+        components = (*fe_components, *be_components)
+        if not be_components or any(not version.is_parsed for version in components):
+            return self._report(
+                observed_fe,
+                observed_be,
+                uniform_version=None,
+                status=VersionCertificationStatus.UNKNOWN,
+                reason_code="PATCH_CERTIFICATION_COMPONENT_VERSION_UNKNOWN",
+                limitations=(
+                    "Every FE and at least one BE must expose a parseable "
+                    "version before cluster-patch certification can be evaluated.",
+                ),
+            )
+
+        core_versions = tuple(version.core for version in components)
+        if len(set(core_versions)) != 1:
+            return self._report(
+                observed_fe,
+                observed_be,
+                uniform_version=None,
+                status=VersionCertificationStatus.UNKNOWN,
+                reason_code="PATCH_CERTIFICATION_MIXED_COMPONENT_VERSIONS",
+                limitations=(
+                    "Mixed FE or BE core versions are not covered by one patch "
+                    "certification.",
+                ),
+            )
+
+        observed = components[0]
+        literal = observed.core
+        if literal is None:
+            raise AssertionError("parsed Doris version must expose a core version")
+        target = literal in self.target_versions
+        matches = tuple(
+            record
+            for record in self.evidence
+            if record.version == literal
+        )
+        if matches:
+            return self._report(
+                observed_fe,
+                observed_be,
+                uniform_version=literal,
+                status=VersionCertificationStatus.CERTIFIED,
+                reason_code="PATCH_CERTIFICATION_EVIDENCE_VERIFIED",
+                targeted=True,
+                certified=True,
+                evidence_ids=tuple(
+                    record.certification_id for record in matches
+                ),
+            )
+        if target:
+            return self._report(
+                observed_fe,
+                observed_be,
+                uniform_version=literal,
+                status=VersionCertificationStatus.TARGET_UNCERTIFIED,
+                reason_code="PATCH_CERTIFICATION_TARGET_UNVERIFIED",
+                targeted=True,
+                limitations=(
+                    "This patch is a certification target, but no complete "
+                    "real-cluster evidence is committed.",
+                ),
+            )
+        return self._report(
+            observed_fe,
+            observed_be,
+            uniform_version=literal,
+            status=VersionCertificationStatus.OUTSIDE_TARGET,
+            reason_code="PATCH_CERTIFICATION_VERSION_OUTSIDE_TARGET",
+            limitations=(
+                "The observed three-part patch is outside the 1.0 "
+                "certification target set.",
+            ),
+        )
+
+    def _report(
+        self,
+        observed_fe: tuple[str | None, ...],
+        observed_be: tuple[str | None, ...],
+        *,
+        uniform_version: str | None,
+        status: VersionCertificationStatus,
+        reason_code: str,
+        targeted: bool = False,
+        certified: bool = False,
+        evidence_ids: tuple[str, ...] = (),
+        limitations: tuple[str, ...] = (),
+    ) -> PatchCertificationReport:
+        return PatchCertificationReport(
+            minimum_supported_version=self.minimum_supported_version,
+            target_versions=self.target_versions,
+            certified_versions=self.certified_versions,
+            observed_fe_versions=observed_fe,
+            observed_be_versions=observed_be,
+            uniform_observed_version=uniform_version,
+            status=status,
+            reason_code=reason_code,
+            targeted=targeted,
+            certified=certified,
+            evidence_ids=evidence_ids,
+            limitations=limitations,
+        )
 
 
 class DorisFeatureMatrix(ContractModel):
@@ -631,9 +909,9 @@ def _certification_status(
     version: DorisVersion | None,
     matrix: DorisFeatureMatrix,
 ) -> VersionCertificationStatus:
-    if version is None:
+    if version is None or version.core is None:
         return VersionCertificationStatus.UNKNOWN
-    literal = _version_literal(version)
+    literal = version.core
     if literal in matrix.certified_versions:
         return VersionCertificationStatus.CERTIFIED
     if literal in matrix.certification_targets:
@@ -1557,6 +1835,75 @@ FEATURE_DEFINITIONS = (
     ),
 )
 
+# Every record below is backed by a sanitized local evidence artifact whose
+# digest is committed here. Prerelease/build suffixes remain evidence only;
+# certification is keyed by the normalized three-part version.
+PATCH_CERTIFICATION_EVIDENCE: tuple[PatchCertificationEvidence, ...] = (
+    PatchCertificationEvidence(
+        certification_id="doris_4_0_5_linux_amd64",
+        version="4.0.5",
+        master_fe_version_comment=(
+            "doris version doris-4.0.5-rc01-59de8c4c524"
+        ),
+        backend_version_comments=(
+            "doris version doris-4.0.5-rc01-59de8c4c524",
+        ),
+        platform="linux_amd64",
+        deployment_mode="unknown",
+        cases=(
+            PatchCertificationCase(
+                transport="stdio",
+                exposure_mode="hierarchical",
+                listed_tool_count=8,
+                domain_manifest_count=8,
+                read_only_query_passed=True,
+                write_operations_executed=0,
+            ),
+            PatchCertificationCase(
+                transport="stdio",
+                exposure_mode="flat",
+                listed_tool_count=47,
+                domain_manifest_count=0,
+                read_only_query_passed=True,
+                write_operations_executed=0,
+            ),
+            PatchCertificationCase(
+                transport="streamable_http",
+                exposure_mode="hierarchical",
+                listed_tool_count=8,
+                domain_manifest_count=8,
+                read_only_query_passed=True,
+                write_operations_executed=0,
+            ),
+            PatchCertificationCase(
+                transport="streamable_http",
+                exposure_mode="flat",
+                listed_tool_count=47,
+                domain_manifest_count=0,
+                read_only_query_passed=True,
+                write_operations_executed=0,
+            ),
+        ),
+        domain_names=tuple(EXPECTED_DOMAIN_CHILDREN),
+        child_contract_count=47,
+        evidence_sha256=(
+            "2ac431322d6b550bd8449ca80312105f4"
+            "cc9cfec57f9b89362c088a2f97d4e9a"
+        ),
+        verified_on=SOURCE_VERIFIED_ON,
+    ),
+)
+
+DORIS_PATCH_CERTIFICATION_MATRIX = DorisPatchCertificationMatrix(
+    minimum_supported_version=PROJECT_MINIMUM_DORIS_VERSION,
+    target_versions=CERTIFICATION_TARGET_VERSIONS,
+    evidence=PATCH_CERTIFICATION_EVIDENCE,
+)
+
+CERTIFIED_DORIS_VERSIONS = (
+    DORIS_PATCH_CERTIFICATION_MATRIX.certified_versions
+)
+
 DORIS_FEATURE_MATRIX = DorisFeatureMatrix(
     minimum_supported_version=PROJECT_MINIMUM_DORIS_VERSION,
     certification_targets=CERTIFICATION_TARGET_VERSIONS,
@@ -1570,20 +1917,26 @@ __all__ = [
     "CERTIFICATION_TARGET_VERSIONS",
     "CERTIFIED_DORIS_VERSIONS",
     "DORIS_FEATURE_MATRIX",
+    "DORIS_PATCH_CERTIFICATION_MATRIX",
     "EXPECTED_DOMAIN_CHILDREN",
     "FEATURE_DEFINITIONS",
     "FEATURE_SOURCES",
+    "PATCH_CERTIFICATION_EVIDENCE",
     "PROJECT_MINIMUM_DORIS_VERSION",
     "PROJECT_SUPPORTED_RANGE",
     "CapabilityVersionScope",
     "ChildFeatureDefinition",
     "DorisClusterVersionVector",
     "DorisFeatureMatrix",
+    "DorisPatchCertificationMatrix",
     "DorisVersionConstraint",
     "DorisVersionRange",
     "FeatureSource",
     "FeatureSourceKind",
     "FeatureVersionEvaluation",
+    "PatchCertificationCase",
+    "PatchCertificationEvidence",
+    "PatchCertificationReport",
     "VersionCertificationStatus",
     "VersionRangeOperator",
     "matching_version_ranges",

@@ -1362,6 +1362,15 @@ async def test_real_doris_hierarchical_cluster_domain_is_read_only_and_live(
         )
         master_fe_version = runtime["data"]["versions"]["master_fe"]
         assert master_fe_version
+        patch_certification = runtime["data"]["patch_certification"]
+        assert patch_certification["uniform_observed_version"]
+        assert patch_certification["status"] in {
+            "certified",
+            "target_uncertified",
+            "outside_target",
+        }
+        assert patch_certification["target_versions"]
+        assert isinstance(patch_certification["certified_versions"], list)
 
         nodes = await _call_domain_child(
             client,

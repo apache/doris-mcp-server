@@ -125,6 +125,10 @@ under **Unreleased** until a new version is selected and published.
 - Enforced a 24 KiB hard budget for the stable eight-domain `tools/list`, with
   cross-domain and separate-worker determinism gates for Hosts that do not
   support dynamic tool re-registration.
+- Added an evidence-backed Doris patch certification matrix keyed by normalized
+  three-part versions, with complete Host-quadrant proof requirements and
+  fail-closed runtime disclosure for unknown or mixed component versions;
+  Doris `4.0.5` is the first certified target.
 
 ### Fixed
 
