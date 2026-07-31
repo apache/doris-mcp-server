@@ -29,12 +29,12 @@ current Apache Doris route. These are deliberately different concepts.
 
 Availability combines:
 
-1. **Catalog contract** — the child exists in the reviewed 8/47 catalog.
+1. **Catalog contract** — the child exists in the reviewed 8/55 catalog.
 2. **Normalized version** — the relevant active Doris component satisfies the
    declared `major.minor.patch` range.
 3. **Live feature probe** — required SQL metadata, system table, function, or
    allowlisted HTTP endpoint is observable.
-4. **Provider readiness** — optional ADBC, Ossie, or lineage provider is
+4. **Provider readiness** — optional ADBC, Ossie, MetricFlow, or lineage provider is
    configured and healthy.
 5. **Deployment mode** — required classic/cloud/compute behavior is compatible.
 6. **Route coherence** — active component versions and request route can be
@@ -123,6 +123,8 @@ This design lets the Host explain:
 - a required system table or function is absent;
 - a provider is disabled or unhealthy;
 - a companion lineage store is incomplete;
+- MetricFlow is disabled, its sidecar is unhealthy, or Doris SQL compilation is unavailable;
+- ADBC was not explicitly requested even though its provider is configured;
 - a route has mixed/unknown component versions;
 - the Doris identity cannot observe required metadata;
 - configuration is missing or invalid.
@@ -147,7 +149,7 @@ Hierarchical mode resolves availability during domain discovery. Flat mode
 also obtains each formal child from the current authorized manifest before
 returning it in `tools/list`. Both modes therefore share:
 
-- the same 47 children;
+- the same 55 children;
 - the same exact scopes;
 - the same dynamic availability;
 - the same schemas and dispatcher;
@@ -160,11 +162,17 @@ Flat mode is a Host compatibility fallback, not a capability bypass.
 Release certification records evidence gathered against named Doris patch
 targets. Runtime support is decided for the connected route.
 
-The 1.0 target set is `3.0.3`, `3.1.4`, `4.0.5`, `4.0.6`, `4.0.7`, `4.1.0`,
-`4.1.1`, `4.1.2`, and `4.1.3`. At the release boundary, `4.0.5` is the first
+The project baseline is Doris `2.0.0+`. The 1.0 target set is `2.0.15`,
+`2.1.11`, `3.0.3`, `3.1.4`, `4.0.5`, `4.0.6`, `4.0.7`, `4.1.0`, `4.1.1`,
+`4.1.2`, and `4.1.3`. At the release boundary, `4.0.5` is the first
 fully certified target. A target marked `target_uncertified` is not treated as
 automatically broken; its runtime manifests remain authoritative and honest
 about observed support.
+
+The baseline does not mean every child works on 2.0. Features introduced later
+remain discoverable with `callable=false`, a stable reason code, and the
+required version/provider/probe evidence. The reviewed release-note mapping is
+documented in the [Doris version capability matrix](doris-version-matrix.md).
 
 ## Example: lineage selection
 
@@ -181,6 +189,17 @@ For `trace_column_lineage`:
 This is the intended pattern for every version- and provider-dependent child:
 state the active evidence path, do not infer success from version alone, and
 never silently substitute one evidence class for another.
+
+## Example: ADBC selection
+
+- Doris 2.0 routes keep both ADBC children discoverable but not callable;
+- Doris 2.1.0 introduces Arrow Flight SQL, while 2.1.0-2.1.4 are reported as
+  degraded because later 2.1 patches fixed empty-result and metadata behavior;
+- provider installation, configured Flight endpoints, and live probes remain
+  mandatory on every eligible version;
+- a tool call must also carry `explicit_adbc=true`, which represents an end
+  user request that explicitly selected ADBC or Arrow Flight SQL;
+- an ordinary SQL request always uses `doris_query.execute_query`.
 
 ## Operator checklist
 

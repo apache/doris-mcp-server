@@ -11,7 +11,7 @@
 | `doris_search` | 4 | `readonly_domain_enabled` | `authorized_child_discovery` |
 | `doris_governance` | 8 | `readonly_domain_enabled` | `authorized_child_discovery` |
 | `doris_lakehouse` | 3 | `readonly_domain_enabled` | `authorized_child_discovery` |
-| `doris_semantic` | 4 | `readonly_domain_enabled` | `authorized_child_discovery` |
+| `doris_semantic` | 12 | `readonly_domain_enabled` | `authorized_child_discovery` |
 
 ## Formal child tools
 
@@ -64,6 +64,14 @@
 | `doris_semantic.get_semantic_model_summary` | `child:doris_semantic:get_semantic_model_summary` | `child:call:doris_semantic:get_semantic_model_summary` | `ossie_model_summary` |
 | `doris_semantic.get_semantic_context` | `child:doris_semantic:get_semantic_context` | `child:call:doris_semantic:get_semantic_context` | `ossie_semantic_context` |
 | `doris_semantic.get_semantic_mapping_status` | `child:doris_semantic:get_semantic_mapping_status` | `child:call:doris_semantic:get_semantic_mapping_status` | `ossie_doris_mapping` |
+| `doris_semantic.list_metricflow_models` | `child:doris_semantic:list_metricflow_models` | `child:call:doris_semantic:list_metricflow_models` | `metricflow_model_registry` |
+| `doris_semantic.get_metricflow_status` | `child:doris_semantic:get_metricflow_status` | `child:call:doris_semantic:get_metricflow_status` | `metricflow_model_status` |
+| `doris_semantic.list_metricflow_metrics` | `child:doris_semantic:list_metricflow_metrics` | `child:call:doris_semantic:list_metricflow_metrics` | `metricflow_metric_registry` |
+| `doris_semantic.get_metricflow_group_bys` | `child:doris_semantic:get_metricflow_group_bys` | `child:call:doris_semantic:get_metricflow_group_bys` | `metricflow_group_by_registry` |
+| `doris_semantic.list_metricflow_saved_queries` | `child:doris_semantic:list_metricflow_saved_queries` | `child:call:doris_semantic:list_metricflow_saved_queries` | `metricflow_saved_query_registry` |
+| `doris_semantic.get_metricflow_dimension_values` | `child:doris_semantic:get_metricflow_dimension_values` | `child:call:doris_semantic:get_metricflow_dimension_values` | `metricflow_dimension_value_query` |
+| `doris_semantic.compile_metricflow_query` | `child:doris_semantic:compile_metricflow_query` | `child:call:doris_semantic:compile_metricflow_query` | `metricflow_doris_compile` |
+| `doris_semantic.execute_metricflow_query` | `child:doris_semantic:execute_metricflow_query` | `child:call:doris_semantic:execute_metricflow_query` | `metricflow_compile_mcp_execute` |
 
 ## Pre-1.0 migration coverage
 

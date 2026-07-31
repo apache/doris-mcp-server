@@ -72,7 +72,7 @@ def _certification_cases() -> tuple[PatchCertificationCase, ...]:
         PatchCertificationCase(
             transport=transport,
             exposure_mode=mode,
-            listed_tool_count=8 if mode == "hierarchical" else 47,
+            listed_tool_count=8 if mode == "hierarchical" else 55,
             domain_manifest_count=8 if mode == "hierarchical" else 0,
             read_only_query_passed=True,
             write_operations_executed=0,
@@ -98,14 +98,14 @@ def _certification_evidence(
         deployment_mode="cloud",
         cases=_certification_cases(),
         domain_names=tuple(EXPECTED_DOMAIN_CHILDREN),
-        child_contract_count=47,
+        child_contract_count=55,
         evidence_sha256="a" * 64,
-        verified_on="2026-07-31",
+        verified_on="2026-08-01",
     )
 
 
-def test_matrix_contains_exact_8_domain_47_child_contract() -> None:
-    assert len(DORIS_FEATURE_MATRIX.features) == 47
+def test_matrix_contains_exact_8_domain_55_child_contract() -> None:
+    assert len(DORIS_FEATURE_MATRIX.features) == 55
     assert tuple(EXPECTED_DOMAIN_CHILDREN) == (
         "doris_catalog",
         "doris_query",
@@ -124,7 +124,7 @@ def test_matrix_contains_exact_8_domain_47_child_contract() -> None:
         "doris_search": 4,
         "doris_governance": 8,
         "doris_lakehouse": 3,
-        "doris_semantic": 4,
+        "doris_semantic": 12,
     }
     for domain, expected_children in EXPECTED_DOMAIN_CHILDREN.items():
         actual_children = tuple(
@@ -150,8 +150,70 @@ def test_adbc_is_inside_query_and_variant_is_inside_lakehouse() -> None:
     assert execute_adbc.support_contract.variants[0].required_probes == (
         "adbc_driver_ready",
         "flight_sql_reachable",
+        "adbc_release_maturity",
         "read_only_sql_guard_ready",
     )
+
+
+def test_doris_2_x_uses_per_feature_gates_instead_of_a_global_rejection() -> None:
+    baseline = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=_vector("2.0.0"),
+    )
+    adbc_20 = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_query",
+        child_name="execute_adbc_query",
+        versions=_vector("2.0.15"),
+    )
+    adbc_21 = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_query",
+        child_name="execute_adbc_query",
+        versions=_vector("2.1.0"),
+    )
+    variant_20 = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_lakehouse",
+        child_name="inspect_variant_column",
+        versions=_vector("2.0.15"),
+    )
+    variant_21 = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_lakehouse",
+        child_name="inspect_variant_column",
+        versions=_vector("2.1.0"),
+    )
+
+    assert baseline.compatible is True
+    assert adbc_20.compatible is False
+    assert adbc_20.reason_code == "VERSION_RANGE_NOT_MATCHED"
+    assert adbc_21.compatible is True
+    assert variant_20.compatible is False
+    assert variant_21.compatible is True
+
+
+def test_metricflow_consumer_operations_cover_the_official_command_surface() -> None:
+    semantic_children = EXPECTED_DOMAIN_CHILDREN["doris_semantic"]
+
+    assert semantic_children[4:] == (
+        "list_metricflow_models",
+        "get_metricflow_status",
+        "list_metricflow_metrics",
+        "get_metricflow_group_bys",
+        "list_metricflow_saved_queries",
+        "get_metricflow_dimension_values",
+        "compile_metricflow_query",
+        "execute_metricflow_query",
+    )
+    for child_name in semantic_children[4:]:
+        feature = DORIS_FEATURE_MATRIX.get_feature(
+            "doris_semantic",
+            child_name,
+        )
+        variant = feature.support_contract.variants[0]
+        assert variant.required_providers == ("metricflow_provider",)
+        assert {
+            "METRICFLOW_COMMANDS",
+            "METRICFLOW_ENGINE",
+        } <= set(variant.source_references)
 
 
 def test_search_prefers_vector_hybrid_and_keeps_text_fallback() -> None:
@@ -202,7 +264,7 @@ def test_lakehouse_prefers_4_1_capabilities_and_keeps_baseline_fallbacks() -> No
         "iceberg_row_lineage",
     )
     assert table_advanced.callable_when_degraded is True
-    assert table_baseline.supported_ranges == (">=3.0.0",)
+    assert table_baseline.supported_ranges == (">=2.0.0",)
 
     assert tuple(
         variant.name for variant in variant_feature.support_contract.variants
@@ -221,7 +283,7 @@ def test_lakehouse_prefers_4_1_capabilities_and_keeps_baseline_fallbacks() -> No
         "storage_v3",
     )
     assert variant_advanced.callable_when_degraded is True
-    assert variant_baseline.supported_ranges == (">=3.0.0",)
+    assert variant_baseline.supported_ranges == (">=2.1.0",)
 
 
 def test_every_contract_is_fail_closed_and_has_resolvable_sources() -> None:
@@ -243,7 +305,7 @@ def test_sources_are_https_authorities_with_branch_ranges() -> None:
     for source in DORIS_FEATURE_MATRIX.sources:
         assert source.url.startswith("https://")
         assert source.applicable_ranges
-        assert source.verified_on.isoformat() == "2026-07-31"
+        assert source.verified_on.isoformat() == "2026-08-01"
         for expression in source.applicable_ranges:
             assert DorisVersionRange(expression).expression == expression
 
@@ -256,7 +318,7 @@ def test_sources_are_https_authorities_with_branch_ranges() -> None:
 
 
 def test_only_evidence_backed_targets_are_claimed_as_certified() -> None:
-    assert PROJECT_MINIMUM_DORIS_VERSION == "3.0.0"
+    assert PROJECT_MINIMUM_DORIS_VERSION == "2.0.0"
     assert DORIS_FEATURE_MATRIX.certification_targets == (CERTIFICATION_TARGET_VERSIONS)
     assert DORIS_FEATURE_MATRIX.certified_versions == ("4.0.5",)
     assert CERTIFIED_DORIS_VERSIONS == ("4.0.5",)
@@ -268,7 +330,7 @@ def test_only_evidence_backed_targets_are_claimed_as_certified() -> None:
     ) == ("4.0.5",)
     assert (
         DORIS_PATCH_CERTIFICATION_MATRIX.evidence[0].evidence_sha256
-        == "2ac431322d6b550bd8449ca80312105f4cc9cfec57f9b89362c088a2f97d4e9a"
+        == "a8d63aa4b5070489e362cfbf57e793c9698f5d583c9cae19861eb73bca5c7a76"
     )
     assert {
         "DORIS_RELEASE_3_0_3",
@@ -313,7 +375,7 @@ def test_certification_uses_three_part_core_for_rc_and_ga_builds() -> None:
 def test_complete_real_host_evidence_certifies_its_three_part_patch() -> None:
     evidence = _certification_evidence()
     matrix = DorisPatchCertificationMatrix(
-        minimum_supported_version="3.0.0",
+        minimum_supported_version="2.0.0",
         target_versions=CERTIFICATION_TARGET_VERSIONS,
         evidence=(evidence,),
     )
@@ -542,7 +604,7 @@ def test_lineage_native_and_audit_paths_are_both_explicit() -> None:
     variants = {variant.name: variant for variant in feature.support_contract.variants}
 
     assert variants["audit_sql_inference_primary"].supported_ranges == (
-        ">=3.0.0,<4.0.6",
+        ">=2.0.0,<4.0.6",
     )
     assert variants["native_lineage_events"].supported_ranges == (">=4.0.6",)
     assert variants["audit_sql_inference_fallback"].supported_ranges == (">=4.0.6",)
@@ -740,16 +802,16 @@ def test_an_unparseable_component_version_fails_closed() -> None:
     )
 
 
-def test_version_below_3_0_0_is_rejected_before_child_evaluation() -> None:
+def test_version_below_2_0_0_is_rejected_before_child_evaluation() -> None:
     result = DORIS_FEATURE_MATRIX.evaluate(
         domain="doris_catalog",
         child_name="list_tables",
-        versions=_vector("2.1.8"),
+        versions=_vector("1.2.8"),
     )
 
     assert result.compatible is False
     assert result.reason_code == "DORIS_VERSION_BELOW_MINIMUM"
-    assert result.minimum_supported_version == "3.0.0"
+    assert result.minimum_supported_version == "2.0.0"
 
 
 def test_target_patch_is_distinct_from_certified_patch() -> None:
@@ -831,7 +893,7 @@ def test_matrix_rejects_missing_or_reordered_children() -> None:
     payload = _matrix_payload()
     payload["features"] = payload["features"][:-1]
 
-    with pytest.raises(ValidationError, match="8-domain/47-child"):
+    with pytest.raises(ValidationError, match="8-domain/55-child"):
         DorisFeatureMatrix.model_validate(payload)
 
 
@@ -954,6 +1016,6 @@ def test_matrix_wire_serialization_is_stable_and_immutable() -> None:
     second = DORIS_FEATURE_MATRIX.to_canonical_json()
 
     assert first == second
-    assert '"minimum_supported_version":"3.0.0"' in first
+    assert '"minimum_supported_version":"2.0.0"' in first
     with pytest.raises(ValidationError):
         DORIS_FEATURE_MATRIX.minimum_supported_version = "4.0.0"

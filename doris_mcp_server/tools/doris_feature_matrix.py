@@ -39,11 +39,13 @@ from .domain_models import (
 )
 from .doris_version import DorisVersion, parse_doris_version_comment
 
-PROJECT_MINIMUM_DORIS_VERSION = "3.0.0"
+PROJECT_MINIMUM_DORIS_VERSION = "2.0.0"
 PROJECT_SUPPORTED_RANGE = f">={PROJECT_MINIMUM_DORIS_VERSION}"
-SOURCE_VERIFIED_ON = date(2026, 7, 31)
+SOURCE_VERIFIED_ON = date(2026, 8, 1)
 
 CERTIFICATION_TARGET_VERSIONS = (
+    "2.0.15",
+    "2.1.11",
     "3.0.3",
     "3.1.4",
     "4.0.5",
@@ -341,8 +343,21 @@ EXPECTED_DOMAIN_CHILDREN: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "get_semantic_model_summary",
             "get_semantic_context",
             "get_semantic_mapping_status",
+            "list_metricflow_models",
+            "get_metricflow_status",
+            "list_metricflow_metrics",
+            "get_metricflow_group_bys",
+            "list_metricflow_saved_queries",
+            "get_metricflow_dimension_values",
+            "compile_metricflow_query",
+            "execute_metricflow_query",
         ),
     }
+)
+
+EXPECTED_TOP_LEVEL_DOMAIN_COUNT = len(EXPECTED_DOMAIN_CHILDREN)
+EXPECTED_FORMAL_CHILD_COUNT = sum(
+    len(children) for children in EXPECTED_DOMAIN_CHILDREN.values()
 )
 
 
@@ -358,8 +373,16 @@ class PatchCertificationCase(ContractModel):
 
     @model_validator(mode="after")
     def _validate_case(self) -> Self:
-        expected_tools = 8 if self.exposure_mode == "hierarchical" else 47
-        expected_manifests = 8 if self.exposure_mode == "hierarchical" else 0
+        expected_tools = (
+            EXPECTED_TOP_LEVEL_DOMAIN_COUNT
+            if self.exposure_mode == "hierarchical"
+            else EXPECTED_FORMAL_CHILD_COUNT
+        )
+        expected_manifests = (
+            EXPECTED_TOP_LEVEL_DOMAIN_COUNT
+            if self.exposure_mode == "hierarchical"
+            else 0
+        )
         if self.listed_tool_count != expected_tools:
             raise ValueError(
                 f"{self.exposure_mode} certification requires "
@@ -396,7 +419,13 @@ class PatchCertificationEvidence(ContractModel):
         tuple[Identifier, ...],
         Field(min_length=8, max_length=8),
     ]
-    child_contract_count: Annotated[int, Field(ge=47, le=47)]
+    child_contract_count: Annotated[
+        int,
+        Field(
+            ge=EXPECTED_FORMAL_CHILD_COUNT,
+            le=EXPECTED_FORMAL_CHILD_COUNT,
+        ),
+    ]
     evidence_sha256: Annotated[
         str,
         StringConstraints(
@@ -696,7 +725,7 @@ class DorisFeatureMatrix(ContractModel):
         }
         if actual != expected:
             raise ValueError(
-                "feature matrix must contain the exact ordered 8-domain/47-child "
+                "feature matrix must contain the exact ordered 8-domain/55-child "
                 "contract"
             )
         return self
@@ -988,6 +1017,69 @@ def _source(
 
 FEATURE_SOURCES = (
     _source(
+        "DORIS_DOCS_2_0",
+        FeatureSourceKind.DOCUMENTATION,
+        "Apache Doris 2.0 Documentation",
+        "https://doris.apache.org/docs/2.0/",
+        ">=2.0.0,<2.1.0",
+    ),
+    _source(
+        "DORIS_DOCS_2_1",
+        FeatureSourceKind.DOCUMENTATION,
+        "Apache Doris 2.1 Documentation",
+        "https://doris.apache.org/docs/2.1/",
+        ">=2.1.0,<3.0.0",
+    ),
+    _source(
+        "DORIS_RELEASE_2_0_0",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 2.0.0 Release Notes",
+        "https://doris.apache.org/docs/3.0/releasenotes/v2.0/release-2.0.0",
+        ">=2.0.0,<2.1.0",
+    ),
+    _source(
+        "DORIS_RELEASE_2_1_0",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 2.1.0 Release Notes",
+        "https://doris.apache.org/docs/3.x/releasenotes/v2.1/release-2.1.0/",
+        ">=2.1.0,<3.0.0",
+    ),
+    _source(
+        "DORIS_RELEASE_2_1_5",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 2.1.5 Release Notes",
+        "https://doris.apache.org/docs/3.x/releasenotes/v2.1/release-2.1.5/",
+        ">=2.1.5,<3.0.0",
+    ),
+    _source(
+        "DORIS_RELEASE_2_1_8",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 2.1.8 Release Notes",
+        "https://doris.apache.org/docs/3.x/releasenotes/v2.1/release-2.1.8/",
+        ">=2.1.8,<3.0.0",
+    ),
+    _source(
+        "DORIS_RELEASE_2_0_15",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 2.0.15 Release Notes",
+        "https://doris.apache.org/docs/2.0/releasenotes/v2.0/release-2.0.15",
+        "==2.0.15",
+    ),
+    _source(
+        "DORIS_RELEASE_2_1_11",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 2.1.11 Release Notes",
+        "https://doris.apache.org/releases/v2.1/release-2.1.11/",
+        "==2.1.11",
+    ),
+    _source(
+        "DORIS_ARROW_FLIGHT_SQL_GUIDE",
+        FeatureSourceKind.DOCUMENTATION,
+        "Apache Doris Arrow Flight SQL Guide",
+        ("https://doris.apache.org/docs/2.1/db-connect/arrow-flight-sql-connect/"),
+        ">=2.1.0",
+    ),
+    _source(
         "DORIS_DOCS_3X",
         FeatureSourceKind.DOCUMENTATION,
         "Apache Doris 3.x Documentation",
@@ -1000,6 +1092,20 @@ FEATURE_SOURCES = (
         "Apache Doris 4.x Documentation",
         "https://doris.apache.org/docs/4.x/",
         ">=4.0.0",
+    ),
+    _source(
+        "DORIS_RELEASE_3_0_0",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 3.0.0 Release Notes",
+        "https://doris.apache.org/docs/3.x/releasenotes/v3.0/release-3.0.0/",
+        ">=3.0.0,<3.1.0",
+    ),
+    _source(
+        "DORIS_RELEASE_3_1_0",
+        FeatureSourceKind.RELEASE_NOTE,
+        "Apache Doris 3.1.0 Release Notes",
+        "https://doris.apache.org/docs/4.x/releasenotes/v3.1/release-3.1.0/",
+        ">=3.1.0,<4.0.0",
     ),
     _source(
         "DORIS_RELEASE_3_0_3",
@@ -1120,6 +1226,20 @@ FEATURE_SOURCES = (
         ),
         PROJECT_SUPPORTED_RANGE,
     ),
+    _source(
+        "METRICFLOW_COMMANDS",
+        FeatureSourceKind.PROVIDER_SPECIFICATION,
+        "MetricFlow Command and Consumer Operations",
+        "https://docs.getdbt.com/docs/build/metricflow-commands",
+        PROJECT_SUPPORTED_RANGE,
+    ),
+    _source(
+        "METRICFLOW_ENGINE",
+        FeatureSourceKind.PROVIDER_SPECIFICATION,
+        "MetricFlow Engine",
+        "https://github.com/dbt-labs/metricflow",
+        PROJECT_SUPPORTED_RANGE,
+    ),
 )
 
 
@@ -1136,7 +1256,12 @@ def _variant(
     probes: tuple[str, ...],
     evidence_quality: str = "native",
     callable_when_degraded: bool = False,
-    sources: tuple[str, ...] = ("DORIS_DOCS_3X", "DORIS_DOCS_4X"),
+    sources: tuple[str, ...] = (
+        "DORIS_DOCS_2_0",
+        "DORIS_DOCS_2_1",
+        "DORIS_DOCS_3X",
+        "DORIS_DOCS_4X",
+    ),
 ) -> CapabilityVariant:
     return CapabilityVariant(
         name=name,
@@ -1294,10 +1419,22 @@ FEATURE_DEFINITIONS = (
         P,
         _variant(
             "adbc_flight_sql",
+            ranges=(">=2.1.0",),
             endpoints=("flight_sql",),
             providers=("adbc_provider",),
-            probes=("adbc_driver_ready", "flight_sql_reachable"),
-            sources=("ARROW_ADBC_FLIGHT_SQL",),
+            probes=(
+                "adbc_driver_ready",
+                "flight_sql_reachable",
+                "adbc_release_maturity",
+            ),
+            callable_when_degraded=True,
+            sources=(
+                "DORIS_RELEASE_2_1_0",
+                "DORIS_RELEASE_2_1_5",
+                "DORIS_RELEASE_2_1_8",
+                "DORIS_ARROW_FLIGHT_SQL_GUIDE",
+                "ARROW_ADBC_FLIGHT_SQL",
+            ),
         ),
     ),
     _feature(
@@ -1306,14 +1443,23 @@ FEATURE_DEFINITIONS = (
         P,
         _variant(
             "adbc_read_only",
+            ranges=(">=2.1.0",),
             endpoints=("flight_sql",),
             providers=("adbc_provider",),
             probes=(
                 "adbc_driver_ready",
                 "flight_sql_reachable",
+                "adbc_release_maturity",
                 "read_only_sql_guard_ready",
             ),
-            sources=("ARROW_ADBC_FLIGHT_SQL",),
+            callable_when_degraded=True,
+            sources=(
+                "DORIS_RELEASE_2_1_0",
+                "DORIS_RELEASE_2_1_5",
+                "DORIS_RELEASE_2_1_8",
+                "DORIS_ARROW_FLIGHT_SQL_GUIDE",
+                "ARROW_ADBC_FLIGHT_SQL",
+            ),
         ),
     ),
     _feature(
@@ -1642,7 +1788,7 @@ FEATURE_DEFINITIONS = (
         F,
         _variant(
             "audit_sql_inference_primary",
-            ranges=(">=3.0.0,<4.0.6",),
+            ranges=(">=2.0.0,<4.0.6",),
             providers=("audit_log_provider",),
             probes=("audit_log_readable",),
             evidence_quality="inferred",
@@ -1779,7 +1925,9 @@ FEATURE_DEFINITIONS = (
         ),
         _variant(
             "variant_type",
+            ranges=(">=2.1.0",),
             probes=("variant_column_type_readable",),
+            sources=("DORIS_RELEASE_2_1_0",),
         ),
     ),
     _feature(
@@ -1832,6 +1980,136 @@ FEATURE_DEFINITIONS = (
             sources=("APACHE_OSSIE_CORE_SPEC", "DORIS_DOCS_4X"),
         ),
     ),
+    _feature(
+        "doris_semantic",
+        "list_metricflow_models",
+        P,
+        _variant(
+            "metricflow_model_registry",
+            providers=("metricflow_provider",),
+            probes=("metricflow_provider_protocol_ready",),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
+    _feature(
+        "doris_semantic",
+        "get_metricflow_status",
+        P,
+        _variant(
+            "metricflow_model_status",
+            providers=("metricflow_provider",),
+            probes=(
+                "metricflow_provider_protocol_ready",
+                "explicit_metricflow_model_ref_valid",
+            ),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
+    _feature(
+        "doris_semantic",
+        "list_metricflow_metrics",
+        P,
+        _variant(
+            "metricflow_metric_registry",
+            providers=("metricflow_provider",),
+            probes=(
+                "metricflow_provider_protocol_ready",
+                "explicit_metricflow_model_ref_valid",
+                "metricflow_model_metadata_readable",
+            ),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
+    _feature(
+        "doris_semantic",
+        "get_metricflow_group_bys",
+        P,
+        _variant(
+            "metricflow_group_by_registry",
+            providers=("metricflow_provider",),
+            probes=(
+                "metricflow_provider_protocol_ready",
+                "explicit_metricflow_model_ref_valid",
+                "metricflow_model_metadata_readable",
+            ),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
+    _feature(
+        "doris_semantic",
+        "list_metricflow_saved_queries",
+        P,
+        _variant(
+            "metricflow_saved_query_registry",
+            providers=("metricflow_provider",),
+            probes=(
+                "metricflow_provider_protocol_ready",
+                "explicit_metricflow_model_ref_valid",
+                "metricflow_model_metadata_readable",
+            ),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
+    _feature(
+        "doris_semantic",
+        "get_metricflow_dimension_values",
+        P,
+        _variant(
+            "metricflow_dimension_value_query",
+            providers=("metricflow_provider",),
+            probes=(
+                "metricflow_provider_protocol_ready",
+                "explicit_metricflow_model_ref_valid",
+                "metricflow_compile_ready",
+                "metricflow_doris_dialect_ready",
+                "read_only_sql_guard_ready",
+            ),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
+    _feature(
+        "doris_semantic",
+        "compile_metricflow_query",
+        P,
+        _variant(
+            "metricflow_doris_compile",
+            providers=("metricflow_provider",),
+            probes=(
+                "metricflow_provider_protocol_ready",
+                "explicit_metricflow_model_ref_valid",
+                "metricflow_compile_ready",
+                "metricflow_doris_dialect_ready",
+                "read_only_sql_guard_ready",
+            ),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
+    _feature(
+        "doris_semantic",
+        "execute_metricflow_query",
+        P,
+        _variant(
+            "metricflow_compile_mcp_execute",
+            providers=("metricflow_provider",),
+            probes=(
+                "metricflow_provider_protocol_ready",
+                "explicit_metricflow_model_ref_valid",
+                "metricflow_compile_ready",
+                "metricflow_doris_dialect_ready",
+                "read_only_sql_guard_ready",
+                "query_execution_readable",
+            ),
+            callable_when_degraded=True,
+            sources=("METRICFLOW_COMMANDS", "METRICFLOW_ENGINE"),
+        ),
+    ),
 )
 
 # Every record below is backed by a sanitized local evidence artifact whose
@@ -1861,7 +2139,7 @@ PATCH_CERTIFICATION_EVIDENCE: tuple[PatchCertificationEvidence, ...] = (
             PatchCertificationCase(
                 transport="stdio",
                 exposure_mode="flat",
-                listed_tool_count=47,
+                listed_tool_count=EXPECTED_FORMAL_CHILD_COUNT,
                 domain_manifest_count=0,
                 read_only_query_passed=True,
                 write_operations_executed=0,
@@ -1877,17 +2155,17 @@ PATCH_CERTIFICATION_EVIDENCE: tuple[PatchCertificationEvidence, ...] = (
             PatchCertificationCase(
                 transport="streamable_http",
                 exposure_mode="flat",
-                listed_tool_count=47,
+                listed_tool_count=EXPECTED_FORMAL_CHILD_COUNT,
                 domain_manifest_count=0,
                 read_only_query_passed=True,
                 write_operations_executed=0,
             ),
         ),
         domain_names=tuple(EXPECTED_DOMAIN_CHILDREN),
-        child_contract_count=47,
+        child_contract_count=EXPECTED_FORMAL_CHILD_COUNT,
         evidence_sha256=(
-            "2ac431322d6b550bd8449ca80312105f4"
-            "cc9cfec57f9b89362c088a2f97d4e9a"
+            "a8d63aa4b5070489e362cfbf57e793c9"
+            "698f5d583c9cae19861eb73bca5c7a76"
         ),
         verified_on=SOURCE_VERIFIED_ON,
     ),
@@ -1917,7 +2195,9 @@ __all__ = [
     "CERTIFIED_DORIS_VERSIONS",
     "DORIS_FEATURE_MATRIX",
     "DORIS_PATCH_CERTIFICATION_MATRIX",
+    "EXPECTED_FORMAL_CHILD_COUNT",
     "EXPECTED_DOMAIN_CHILDREN",
+    "EXPECTED_TOP_LEVEL_DOMAIN_COUNT",
     "FEATURE_DEFINITIONS",
     "FEATURE_SOURCES",
     "PATCH_CERTIFICATION_EVIDENCE",

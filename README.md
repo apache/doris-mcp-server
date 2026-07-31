@@ -23,7 +23,7 @@ under the License.
 
 Apache Doris MCP Server exposes read-only Apache Doris capabilities to MCP
 Hosts and AI agents over MCP `2026-07-28`. Version 1.0 replaces a large flat
-tool surface with eight stable domains and forty-seven progressively disclosed
+tool surface with eight stable domains and fifty-five progressively disclosed
 child capabilities, while keeping runtime availability, authorization, input
 schemas, output schemas, and failure behavior explicit.
 
@@ -36,7 +36,7 @@ classifier remains **Beta**, and the documented deployment limits still apply.
 
 Before upgrading, read the [1.0 release notes](docs/release-notes-1.0.0.md),
 the [1.0 migration guide](docs/migration-1.0.0.md), and the generated
-[8-domain/47-child registry](docs/tool-registry.md). The detailed release
+[8-domain/55-child registry](docs/tool-registry.md). The detailed release
 record is [Issue #189](https://github.com/apache/doris-mcp-server/issues/189).
 
 ## Architecture at a glance
@@ -58,18 +58,18 @@ The default `hierarchical` mode exposes these domains:
 | Domain | Children | Responsibility |
 |---|---:|---|
 | `doris_catalog` | 5 | catalogs, databases, tables, table context, size |
-| `doris_query` | 7 | query, explain, profile, diagnosis, slow queries, ADBC |
+| `doris_query` | 7 | query, explain, profile, diagnosis, slow queries, explicit ADBC |
 | `doris_cluster` | 11 | nodes, tasks, metrics, memory, cache, compaction, workloads |
 | `doris_pipeline` | 5 | ingestion, materialized views, freshness, dependencies |
 | `doris_search` | 4 | text/vector/hybrid search, analyzers, indexes, diagnosis |
 | `doris_governance` | 8 | quality, storage, lineage, audit, UDFs, auth mapping |
 | `doris_lakehouse` | 3 | external catalogs, lakehouse tables, Variant |
-| `doris_semantic` | 4 | optional read-only Apache Ossie grounding |
+| `doris_semantic` | 12 | optional Apache Ossie grounding and MetricFlow consumption |
 
 Call a domain with `{}` to discover its authorized children and exact schemas.
 Call the same domain again with `child_tool`, `arguments`, and the returned
 `manifest_version`. Hosts that cannot use progressive disclosure may set
-`MCP_TOOL_EXPOSURE_MODE=flat` before startup; this exposes the same 47 children
+`MCP_TOOL_EXPOSURE_MODE=flat` before startup; this exposes the same 55 children
 under collision-free formal names and does not restore pre-1.0 aliases.
 
 See [Architecture](docs/architecture/overview.md),
@@ -81,7 +81,7 @@ See [Architecture](docs/architecture/overview.md),
 Requirements:
 
 - Python 3.12 or later;
-- Apache Doris 3.0.0 or later;
+- Apache Doris 2.0.0 or later;
 - network access to the Doris FE MySQL endpoint, normally port `9030`.
 
 Install the pinned release:
@@ -153,8 +153,10 @@ Schema validation, and sanitized trace propagation. Unsupported or
 misconfigured capabilities remain discoverable with `callable=false` and fail
 closed when called.
 
-Current limits include process-local Doris-backed OAuth, fail-closed ADBC on
-token-bound routes, optional read-only Ossie grounding, and best-effort native
+Current limits include process-local Doris-backed OAuth, explicit-only ADBC
+that is disabled by default and fail-closed on token-bound routes, optional
+read-only Ossie grounding, an optional MetricFlow compiler sidecar whose SQL
+must execute through the bounded MCP query runtime, and best-effort native
 lineage delivery. See [Reliability and limits](docs/operations/reliability.md).
 
 ## Documentation
@@ -171,6 +173,8 @@ Primary guides:
 - [Request and data flow](docs/architecture/request-lifecycle.md)
 - [Tool domains](docs/capabilities/tool-domains.md)
 - [Capability availability](docs/capabilities/availability.md)
+- [Doris version capability matrix](docs/capabilities/doris-version-matrix.md)
+- [MetricFlow integration](docs/integrations/metricflow.md)
 - [MCP 2026-07-28 contract](docs/protocol/mcp-2026-07-28.md)
 - [Security model](docs/security/security-model.md)
 - [Deployment](docs/operations/deployment.md)

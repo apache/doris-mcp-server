@@ -66,6 +66,7 @@ flowchart TB
     subgraph Backends["后端与可选 Provider"]
       Doris["Apache Doris FE / BE"]
       Ossie["Apache Ossie 模型仓库"]
+      MetricFlow["MetricFlow 编译 Sidecar"]
       Lineage["可查询血缘存储"]
       Flight["ADBC / Arrow Flight SQL"]
     end
@@ -73,6 +74,7 @@ flowchart TB
     Client --> Transport
     Routes --> Doris
     Runtime --> Ossie
+    Runtime --> MetricFlow
     Runtime --> Lineage
     Runtime --> Flight
 ```
@@ -145,13 +147,26 @@ Doris 对查询执行、元数据、Catalog 联邦、工作负载状态、存储
 
 外部业务 API 可以通过显式 Python Entry Point 与 `MCP_TOOL_PROVIDERS` Allowlist
 接入。Provider Tool 拥有独立生命周期、Schema、审计元数据和限流，不属于内置
-8/47 合同，也不能覆盖内置名称。
+8/55 合同，也不能覆盖内置名称。
 
 ### Apache Ossie
 
 Semantic 领域消费经过审查的 Ossie 模型进行只读 Grounding。模型仍归语义仓库
 管理。Server 要求精确 `model_ref` 和私有 Doris Binding Manifest，不会猜模型、
 编写模型、编译或执行语义表达式。
+
+### MetricFlow
+
+Semantic 领域还通过默认关闭的 Sidecar 协议消费 MetricFlow Model。Provider 负责
+加载模型和编译 Doris SQL；Server 要求精确 `model_ref`，并把 SQL 校验、Doris
+路由、RBAC、执行限额、审计和结果保留在 `DorisQueryRuntime` 内。Provider 不执行
+Doris SQL。
+
+### ADBC
+
+ADBC 是默认关闭的高级 Query Variant，不是自动查询路由。两个 ADBC Child 都要求
+终端用户明确指定 ADBC/Arrow Flight SQL 并传 `explicit_adbc=true`；普通 SQL
+继续使用 `execute_query`。
 
 ### 原生血缘
 
@@ -181,7 +196,7 @@ Rollback 等安全合同。
 
 ## 不变量
 
-- 内置能力严格为 8 个只读领域与 47 个 Child。
+- 内置能力严格为 8 个只读领域与 55 个 Child。
 - 每个 Child 只有一个精确 Handler 与授权标识。
 - Hierarchical、Flat、自动生成文档和测试共用同一目录。
 - 不保留旧名称 Alias 窗口。

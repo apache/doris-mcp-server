@@ -68,6 +68,7 @@ flowchart TB
     subgraph Backends["Backends and optional providers"]
       Doris["Apache Doris FE / BE"]
       Ossie["Apache Ossie model repository"]
+      MetricFlow["MetricFlow compiler sidecar"]
       Lineage["Queryable lineage store"]
       Flight["ADBC / Arrow Flight SQL"]
     end
@@ -75,6 +76,7 @@ flowchart TB
     Client --> Transport
     Routes --> Doris
     Runtime --> Ossie
+    Runtime --> MetricFlow
     Runtime --> Lineage
     Runtime --> Flight
 ```
@@ -161,7 +163,7 @@ step that returns exact child names and schemas.
 External business APIs can be added through explicit Python entry points and
 the `MCP_TOOL_PROVIDERS` allowlist. Provider tools have their own lifecycle,
 schemas, audit metadata, and rate limits. They are not members of the built-in
-8/47 contract and cannot shadow built-in names.
+8/55 contract and cannot shadow built-in names.
 
 ### Apache Ossie
 
@@ -169,6 +171,20 @@ The semantic domain consumes reviewed Ossie models for read-only grounding.
 Models remain owned by the semantic repository. The Server requires exact
 `model_ref` selection and a private Doris binding manifest; it does not guess,
 author, compile, or execute semantic expressions.
+
+### MetricFlow
+
+The semantic domain also consumes MetricFlow models through a default-off
+sidecar protocol. The provider owns model loading and Doris SQL compilation;
+the Server requires an exact `model_ref` and keeps SQL validation, Doris route,
+RBAC, execution limits, audit, and results inside `DorisQueryRuntime`. The
+provider does not execute Doris SQL.
+
+### ADBC
+
+ADBC is a default-off advanced Query variant, not an automatic query route.
+Both ADBC children require explicit end-user ADBC/Arrow Flight SQL intent and
+`explicit_adbc=true`; ordinary SQL remains on `execute_query`.
 
 ### Native lineage
 
@@ -200,7 +216,7 @@ preview/confirm/idempotency/rollback security contract.
 
 ## Invariants
 
-- Exactly eight built-in read-only domains and forty-seven built-in children.
+- Exactly eight built-in read-only domains and fifty-five built-in children.
 - One exact handler and authorization identifier per child.
 - One catalog drives hierarchical mode, flat mode, generated docs, and tests.
 - No old-name alias window.

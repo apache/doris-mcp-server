@@ -168,13 +168,17 @@ Policy/Catalog 状态。
 - Doris OAuth 在 1.0 必须单 Worker、单实例边界。
 - 内存 Custom-provider Quota 为每进程独立。
 - Cache 只是本地优化，正确性不能依赖共享 Cache。
-- Provider/Model/Binding File 必须在各 Replica 一致部署。
+- Provider/Model/Binding File 与 MetricFlow Sidecar Command/Project 必须在各
+  Replica 一致部署。
 
 ## 已知限制
 
 - `doris_admin` 不注册。
-- ADBC 在 Token 绑定路由上 Fail Closed。
+- ADBC 默认关闭，每次调用都要求终端用户明确指定 ADBC，并在 Token 绑定路由上
+  Fail Closed。
 - Ossie 只读 Grounding，不执行语义表达式。
+- MetricFlow 支持是 Provider 协议，不是内置 Doris Adapter；Provider 只编译，
+  SQL 执行留在有界 Query Runtime。
 - 原生血缘异步 Best-effort，需要可查询 Companion Provider/Store。
 - Audit 血缘/依赖证据是有界推导，可能不完整。
 - Runtime Capability Support 不等于 Release Certification。

@@ -1382,7 +1382,7 @@ async def test_real_doris_flat_tool_list_stays_bounded_and_callable(
             tool.name: tool
             for tool in (await client.list_tools(cache_mode="bypass")).tools
         }
-        assert len(tools) == 47
+        assert len(tools) == 55
         assert "doris_query_execute_query" in tools
 
         result = await client.call_tool(
@@ -1397,6 +1397,201 @@ async def test_real_doris_flat_tool_list_stays_bounded_and_callable(
         assert "4.0.5-rc01" in json.dumps(
             result.structured_content,
             ensure_ascii=False,
+        )
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_metricflow_provider_contract_is_guarded_and_live(
+    transport: str,
+    tmp_path: Path,
+) -> None:
+    """Exercise every MetricFlow child and execute compiled SQL on real Doris."""
+    settings = _real_doris_settings()
+    provider_script = tmp_path / "metricflow_provider.py"
+    provider_script.write_text(
+        """
+import json
+import sys
+
+request = json.loads(sys.stdin.read())
+operation = request["operation"]
+arguments = request["arguments"]
+responses = {
+    "list_models": {
+        "items": [{"model_ref": "acceptance/main", "revision": "v1"}],
+    },
+    "get_status": {
+        "model_ref": arguments.get("model_ref"),
+        "valid": True,
+        "dialect": "doris",
+    },
+    "list_metrics": {
+        "items": [{"name": "acceptance_count", "dimensions": ["segment"]}],
+    },
+    "get_group_bys": {
+        "dimensions": ["segment"],
+        "entities": [],
+    },
+    "list_saved_queries": {
+        "items": [{"name": "acceptance_saved_query"}],
+    },
+    "compile_dimension_values": {
+        "sql": "SELECT 'enterprise' AS segment",
+    },
+    "compile_query": {
+        "sql": "SELECT @@version_comment AS doris_version",
+    },
+}
+data = responses.get(operation)
+if data is None:
+    response = {
+        "protocol_version": request["protocol_version"],
+        "request_id": request["request_id"],
+        "ok": False,
+        "error": {"reason_code": "METRICFLOW_OPERATION_UNSUPPORTED"},
+    }
+else:
+    response = {
+        "protocol_version": request["protocol_version"],
+        "request_id": request["request_id"],
+        "ok": True,
+        "data": data,
+    }
+sys.stdout.write(json.dumps(response))
+""".strip(),
+        encoding="utf-8",
+    )
+    environment = _server_environment(
+        settings,
+        user=settings.user,
+        password=settings.password,
+    )
+    environment.update(
+        {
+            "MCP_TOOL_EXPOSURE_MODE": "hierarchical",
+            "METRICFLOW_ENABLED": "true",
+            "METRICFLOW_PROVIDER_COMMAND_JSON": json.dumps(
+                [sys.executable, str(provider_script)]
+            ),
+            "METRICFLOW_PROJECT_DIRECTORY": str(tmp_path),
+        }
+    )
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        manifest = await _discover_domain(client, "doris_semantic")
+        children = {child["name"]: child for child in manifest["children"]}
+        metricflow_children = {
+            name: child
+            for name, child in children.items()
+            if "metricflow" in name
+        }
+        assert len(metricflow_children) == 8
+        assert all(
+            child["availability"]["callable"]
+            for child in metricflow_children.values()
+        )
+        manifest_version = manifest["manifest_version"]
+
+        models = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="list_metricflow_models",
+            arguments={},
+            manifest_version=manifest_version,
+        )
+        assert models["data"]["items"][0]["model_ref"] == "acceptance/main"
+
+        status = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="get_metricflow_status",
+            arguments={"model_ref": "acceptance/main"},
+            manifest_version=manifest_version,
+        )
+        assert status["data"]["dialect"] == "doris"
+
+        metrics = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="list_metricflow_metrics",
+            arguments={
+                "model_ref": "acceptance/main",
+                "include_dimensions": True,
+                "limit": 20,
+            },
+            manifest_version=manifest_version,
+        )
+        assert metrics["data"]["items"][0]["name"] == "acceptance_count"
+
+        group_bys = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="get_metricflow_group_bys",
+            arguments={
+                "model_ref": "acceptance/main",
+                "metrics": ["acceptance_count"],
+            },
+            manifest_version=manifest_version,
+        )
+        assert group_bys["data"]["dimensions"] == ["segment"]
+
+        saved_queries = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="list_metricflow_saved_queries",
+            arguments={"model_ref": "acceptance/main", "limit": 20},
+            manifest_version=manifest_version,
+        )
+        assert saved_queries["data"]["items"][0]["name"] == (
+            "acceptance_saved_query"
+        )
+
+        dimension_values = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="get_metricflow_dimension_values",
+            arguments={
+                "model_ref": "acceptance/main",
+                "metrics": ["acceptance_count"],
+                "dimension": "segment",
+                "limit": 20,
+            },
+            manifest_version=manifest_version,
+        )
+        assert dimension_values["data"]["rows"][0]["segment"] == "enterprise"
+        assert dimension_values["metadata"]["semantic_provider"] == "metricflow"
+
+        compiled = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="compile_metricflow_query",
+            arguments={
+                "model_ref": "acceptance/main",
+                "request": {"metrics": ["acceptance_count"]},
+            },
+            manifest_version=manifest_version,
+        )
+        assert compiled["data"]["sql"].startswith("SELECT")
+
+        executed = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="execute_metricflow_query",
+            arguments={
+                "model_ref": "acceptance/main",
+                "request": {"saved_query": "acceptance_saved_query"},
+                "max_rows": 1,
+            },
+            manifest_version=manifest_version,
+        )
+        assert "4.0.5-rc01" in executed["data"]["rows"][0]["doris_version"]
+        assert executed["metadata"]["semantic_provider"] == "metricflow"
+        assert executed["metadata"]["compile_execution_boundary"] == (
+            "mcp_query_runtime"
         )
 
 

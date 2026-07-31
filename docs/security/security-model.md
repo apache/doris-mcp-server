@@ -111,7 +111,7 @@ Authorization is performed more than once:
 2. **Domain discovery:** whether the identity can learn about a child.
 3. **Child execution:** exact policy such as
    `child:call:doris_query:execute_query`.
-4. **Channel/provider:** whether Doris OAuth, semantic, ADBC, or custom
+4. **Channel/provider:** whether Doris OAuth, semantic, ADBC, MetricFlow, or custom
    provider access is enabled and allowlisted.
 5. **Doris RBAC:** whether the selected Doris identity can execute the actual
    statement or read the actual metadata.
@@ -196,8 +196,9 @@ caller-controlled SSRF targets.
 - Logs use redacted credential DTOs and safe representations.
 - Do not enable debug logging that serializes request headers or environment
   secrets at the reverse proxy or process supervisor.
-- `.env`, token files, OAuth client files, JWT keys, and private Ossie binding
-  manifests require owner-only access and must not be committed.
+- `.env`, token files, OAuth client files, JWT keys, private Ossie binding
+  manifests, and MetricFlow projects/provider commands require owner-only
+  access and must not be committed when they contain private definitions.
 
 ## Custom providers
 
@@ -213,8 +214,11 @@ extension.
 
 - Doris-backed OAuth is single-worker and process-local.
 - Process-local custom-provider rate limits are not a distributed quota.
-- ADBC is fail-closed for token-bound routes because the Flight client is
-  process-global.
+- ADBC is default-off, requires explicit user intent on every call, and is
+  fail-closed for token-bound routes because the Flight client is process-global.
+- The MetricFlow sidecar receives model requests but no Doris credentials. It
+  compiles SQL only; the MCP read-only guard, request route, Doris RBAC, and
+  result limits remain mandatory.
 - Native lineage delivery is asynchronous best effort; it is evidence, not a
   transactional authorization source.
 - Application-level SQL guards do not replace Doris grants and row policies.

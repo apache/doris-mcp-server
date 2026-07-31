@@ -148,6 +148,7 @@ class QueryToolHandlersMixin:
         if timeout_ms is None and arguments.get("timeout") is not None:
             timeout_ms = int(arguments["timeout"]) * 1000
         return await self.query_runtime.execute_adbc_query(
+            explicit_adbc=arguments.get("explicit_adbc") is True,
             sql=sql,
             max_rows=cast(int | None, arguments.get("max_rows")),
             timeout_ms=cast(int | None, timeout_ms),
@@ -164,8 +165,9 @@ class QueryToolHandlersMixin:
         self: _QueryHandlerOwner,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        del arguments
-        return await self.query_runtime.get_adbc_connection_info()
+        return await self.query_runtime.get_adbc_connection_info(
+            explicit_adbc=arguments.get("explicit_adbc") is True,
+        )
 
     async def _formal_doris_query_diagnose_query_performance_tool(
         self: _QueryHandlerOwner,

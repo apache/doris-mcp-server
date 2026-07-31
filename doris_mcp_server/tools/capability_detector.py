@@ -53,6 +53,9 @@ from .doris_version import (
 _NATIVE_LINEAGE_MINIMUM = parse_doris_version_comment(
     "Doris version doris-4.0.6"
 )
+_ADBC_RECOMMENDED_MINIMUM = parse_doris_version_comment(
+    "Doris version doris-2.1.5"
+)
 _LINEAGE_STORE_REQUIRED_COLUMNS = frozenset(
     {
         "event_id",
@@ -486,6 +489,9 @@ class DorisCapabilityDetector:
                     probes.update(evidence)
                 if domain_name == "doris_query":
                     probes.update(await self._probe_query_services(auth_context))
+                    probes["adbc_release_maturity"] = _adbc_release_maturity_probe(
+                        base.version_vector.master_fe
+                    )
                     probes["profile_or_audit_readable"] = _combine_query_evidence_probe(
                         probes
                     )
@@ -1694,6 +1700,27 @@ def _adbc_probe_evidence(
     }
 
 
+def _adbc_release_maturity_probe(
+    version: DorisVersion,
+) -> CapabilityProbeEvidence:
+    """Mark Doris 2.1.0-2.1.4 ADBC as early and runtime-gated."""
+    if not version.is_parsed:
+        status = CapabilityProbeStatus.UNKNOWN
+        reason = "DORIS_VERSION_UNKNOWN"
+    elif version.compare(_ADBC_RECOMMENDED_MINIMUM) < 0:
+        status = CapabilityProbeStatus.DEGRADED
+        reason = "ADBC_EARLY_2_1_RELEASE"
+    else:
+        status = CapabilityProbeStatus.SUPPORTED
+        reason = "ADBC_RECOMMENDED_RELEASE_BASELINE"
+    return CapabilityProbeEvidence(
+        probe_id="adbc_release_maturity",
+        status=status,
+        reason_code=reason,
+        evidence_sources=("doris_arrow_flight_sql_guide",),
+    )
+
+
 def _combine_query_evidence_probe(
     probes: Mapping[str, CapabilityProbeEvidence],
 ) -> CapabilityProbeEvidence:
@@ -2007,6 +2034,27 @@ def _semantic_adapter_evidence_probes() -> dict[str, CapabilityProbeEvidence]:
             status=CapabilityProbeStatus.DEGRADED,
             reason_code="SEMANTIC_TARGET_REQUIRES_CALL_TIME_VALIDATION",
             evidence_sources=("pinned_ossie_schema", "active_doris_route"),
+        )
+    derived["metricflow_provider_protocol_ready"] = CapabilityProbeEvidence(
+        probe_id="metricflow_provider_protocol_ready",
+        status=CapabilityProbeStatus.DEGRADED,
+        reason_code="METRICFLOW_PROVIDER_REQUIRES_CALL_TIME_VALIDATION",
+        evidence_sources=("provider_registry", "metricflow_provider_protocol"),
+    )
+    for probe_id in (
+        "explicit_metricflow_model_ref_valid",
+        "metricflow_model_metadata_readable",
+        "metricflow_compile_ready",
+        "metricflow_doris_dialect_ready",
+    ):
+        derived[probe_id] = CapabilityProbeEvidence(
+            probe_id=probe_id,
+            status=CapabilityProbeStatus.DEGRADED,
+            reason_code="METRICFLOW_TARGET_REQUIRES_CALL_TIME_VALIDATION",
+            evidence_sources=(
+                "metricflow_provider_protocol",
+                "active_doris_route",
+            ),
         )
     return derived
 

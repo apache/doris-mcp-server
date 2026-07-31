@@ -664,11 +664,15 @@ async def test_adbc_guard_runs_before_provider_and_normalizes_rows() -> None:
     runtime, _, _ = _runtime(adbc=adbc)
 
     with pytest.raises(QueryRuntimeFailure) as error:
-        await runtime.execute_adbc_query(sql="DROP TABLE customer")
+        await runtime.execute_adbc_query(
+            explicit_adbc=True,
+            sql="DROP TABLE customer",
+        )
     assert error.value.reason_code == "QUERY_READ_ONLY_VIOLATION"
     adbc.exec_adbc_query.assert_not_awaited()
 
     result = await runtime.execute_adbc_query(
+        explicit_adbc=True,
         sql="SELECT id FROM customer",
         max_rows=10,
         timeout_ms=2000,
@@ -686,6 +690,28 @@ async def test_adbc_guard_runs_before_provider_and_normalizes_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_adbc_requires_explicit_end_user_intent_before_provider() -> None:
+    adbc = SimpleNamespace(
+        exec_adbc_query=AsyncMock(),
+        get_adbc_connection_info=AsyncMock(),
+    )
+    runtime, _, _ = _runtime(adbc=adbc)
+
+    with pytest.raises(QueryRuntimeFailure) as query_error:
+        await runtime.execute_adbc_query(
+            explicit_adbc=False,
+            sql="SELECT 1",
+        )
+    with pytest.raises(QueryRuntimeFailure) as info_error:
+        await runtime.get_adbc_connection_info(explicit_adbc=False)
+
+    assert query_error.value.reason_code == "ADBC_EXPLICIT_USER_INTENT_REQUIRED"
+    assert info_error.value.reason_code == "ADBC_EXPLICIT_USER_INTENT_REQUIRED"
+    adbc.exec_adbc_query.assert_not_awaited()
+    adbc.get_adbc_connection_info.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_adbc_rejects_invalid_runtime_options_before_provider() -> None:
     adbc = SimpleNamespace(
         exec_adbc_query=AsyncMock(),
@@ -695,11 +721,13 @@ async def test_adbc_rejects_invalid_runtime_options_before_provider() -> None:
 
     with pytest.raises(QueryRuntimeFailure, match="format"):
         await runtime.execute_adbc_query(
+            explicit_adbc=True,
             sql="SELECT 1",
             result_format="csv",
         )
     with pytest.raises(QueryRuntimeFailure, match="timeout_ms"):
         await runtime.execute_adbc_query(
+            explicit_adbc=True,
             sql="SELECT 1",
             timeout_ms=0,
         )
@@ -735,7 +763,7 @@ async def test_adbc_connection_info_never_returns_endpoint_or_identity() -> None
     )
     runtime, _, _ = _runtime(adbc=adbc)
 
-    result = await runtime.get_adbc_connection_info()
+    result = await runtime.get_adbc_connection_info(explicit_adbc=True)
     serialized = repr(result)
 
     assert result["data"]["status"] == "ready"

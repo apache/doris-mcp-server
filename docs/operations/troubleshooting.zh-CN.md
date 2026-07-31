@@ -205,14 +205,22 @@ State Secret 不同或 Snapshot 改变。应不带 Cursor 重新开始 List。
 
 ### ADBC 不可用
 
-检查 `ADBC_ENABLED`、Arrow Flight SQL 端口、Provider 安装与实时连通。ADBC 在
-Token 绑定路由上故意 Fail Closed；适用时使用 MySQL 只读 Query Child。
+检查 `ADBC_ENABLED`、Arrow Flight SQL 端口、Provider 安装与实时连通。确认终端
+用户明确指定 ADBC，且调用包含 `explicit_adbc=true`。ADBC 在 Token 绑定路由上
+故意 Fail Closed；普通 SQL 使用 MySQL 只读 Query Child。
 
 ### Ossie Model 不可用
 
 检查 `OSSIE_ENABLED`、Model Directory、已审查 Schema Revision、精确
 `model_ref`、私有 Binding Manifest、Semantic Scope 和 Doris 可见性。Server
 不会猜模型。
+
+### MetricFlow Model 或编译不可用
+
+检查 `METRICFLOW_ENABLED`、绝对 Provider Command、Project Directory、Sidecar
+协议版本、精确 `model_ref`、Doris Dialect 支持、超时/输出上限、Semantic Scope
+和 Doris 可见性。Provider stderr 会故意隐藏；请在清除 Secret 后检查操作日志。
+Sidecar 只能编译，Doris SQL 执行属于 MCP Query Runtime。
 
 ### 原生血缘不可用
 

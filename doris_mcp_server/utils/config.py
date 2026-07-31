@@ -235,6 +235,25 @@ def _env_json_string_list_map(
     }
 
 
+def _env_json_string_list(name: str, default: list[str]) -> list[str]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise AuthConfigError(f"{name} must be a valid JSON array") from exc
+    if (
+        not isinstance(parsed, list)
+        or not parsed
+        or any(not isinstance(item, str) or not item.strip() for item in parsed)
+    ):
+        raise AuthConfigError(
+            f"{name} must be a non-empty JSON array of non-empty strings"
+        )
+    return [item.strip() for item in parsed]
+
+
 def _coerce_csv_config(value: Any) -> list[str]:
     if value is None:
         return []
@@ -809,7 +828,7 @@ class ADBCConfig:
     connection_timeout: int = 30
 
     # Whether to enable ADBC tools
-    enabled: bool = True
+    enabled: bool = False
 
 
 @dataclass
@@ -915,6 +934,11 @@ class SemanticConfig:
     context_hard_max_bytes: int = 64 * 1024
     oauth_tools_enabled: bool = False
     oauth_resources_enabled: bool = False
+    metricflow_enabled: bool = False
+    metricflow_provider_command: list[str] = field(default_factory=list)
+    metricflow_project_directory: str = ""
+    metricflow_timeout_seconds: int = 30
+    metricflow_max_output_bytes: int = 2 * 1024 * 1024
 
 
 @dataclass
@@ -1749,6 +1773,30 @@ class DorisConfig:
                 ).lower()
                 == "true"
             )
+        if "METRICFLOW_ENABLED" in os.environ:
+            config.semantic.metricflow_enabled = (
+                os.getenv("METRICFLOW_ENABLED", "false").lower() == "true"
+            )
+        if "METRICFLOW_PROVIDER_COMMAND_JSON" in os.environ:
+            config.semantic.metricflow_provider_command = _env_json_string_list(
+                "METRICFLOW_PROVIDER_COMMAND_JSON",
+                config.semantic.metricflow_provider_command,
+            )
+        if "METRICFLOW_PROJECT_DIRECTORY" in os.environ:
+            config.semantic.metricflow_project_directory = os.getenv(
+                "METRICFLOW_PROJECT_DIRECTORY",
+                "",
+            ).strip()
+        if "METRICFLOW_TIMEOUT_SECONDS" in os.environ:
+            config.semantic.metricflow_timeout_seconds = _env_int(
+                "METRICFLOW_TIMEOUT_SECONDS",
+                config.semantic.metricflow_timeout_seconds,
+            )
+        if "METRICFLOW_MAX_OUTPUT_BYTES" in os.environ:
+            config.semantic.metricflow_max_output_bytes = _env_int(
+                "METRICFLOW_MAX_OUTPUT_BYTES",
+                config.semantic.metricflow_max_output_bytes,
+            )
         if "MCP_STATE_HANDLE_SECRET" in os.environ:
             config.mcp_state_handle_secret = os.getenv(
                 "MCP_STATE_HANDLE_SECRET",
@@ -1965,6 +2013,19 @@ class DorisConfig:
                 "oauth_tools_enabled": self.semantic.oauth_tools_enabled,
                 "oauth_resources_enabled": (
                     self.semantic.oauth_resources_enabled
+                ),
+                "metricflow_enabled": self.semantic.metricflow_enabled,
+                "metricflow_provider_configured": bool(
+                    self.semantic.metricflow_provider_command
+                ),
+                "metricflow_project_directory": (
+                    self.semantic.metricflow_project_directory
+                ),
+                "metricflow_timeout_seconds": (
+                    self.semantic.metricflow_timeout_seconds
+                ),
+                "metricflow_max_output_bytes": (
+                    self.semantic.metricflow_max_output_bytes
                 ),
             },
             "database": {
@@ -2330,6 +2391,31 @@ class DorisConfig:
             errors.append(
                 "Ossie context byte limit must not exceed the hard byte limit"
             )
+        if self.semantic.metricflow_enabled:
+            command = self.semantic.metricflow_provider_command
+            if (
+                not isinstance(command, list)
+                or not command
+                or any(
+                    not isinstance(part, str) or not part.strip() for part in command
+                )
+            ):
+                errors.append("Enabled MetricFlow support requires a provider command")
+            elif not Path(command[0]).is_absolute():
+                errors.append(
+                    "MetricFlow provider executable must use an absolute path"
+                )
+        if (
+            self.semantic.metricflow_project_directory
+            and not Path(self.semantic.metricflow_project_directory).is_absolute()
+        ):
+            errors.append("MetricFlow project directory must use an absolute path")
+        if not 1 <= self.semantic.metricflow_timeout_seconds <= 120:
+            errors.append("MetricFlow timeout must be in the range 1-120 seconds")
+        if not 1024 <= self.semantic.metricflow_max_output_bytes <= 8 * 1024 * 1024:
+            errors.append(
+                "MetricFlow output byte limit must be in the range 1024-8388608"
+            )
 
         raw_tool_providers: Any = self.mcp_tool_providers
         if not isinstance(raw_tool_providers, list):
@@ -2529,6 +2615,10 @@ class DorisConfig:
                 "oauth_tools_enabled": self.semantic.oauth_tools_enabled,
                 "oauth_resources_enabled": (
                     self.semantic.oauth_resources_enabled
+                ),
+                "metricflow_enabled": self.semantic.metricflow_enabled,
+                "metricflow_provider_configured": bool(
+                    self.semantic.metricflow_provider_command
                 ),
             },
         }

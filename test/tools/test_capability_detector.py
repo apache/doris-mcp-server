@@ -541,10 +541,54 @@ async def test_detector_marks_adbc_callable_only_after_live_probes() -> None:
     assert query.probe("adbc_driver_ready").status is CapabilityProbeStatus.SUPPORTED
     assert query.probe("flight_sql_reachable").status is CapabilityProbeStatus.SUPPORTED
     assert query.probe("flight_sql").status is CapabilityProbeStatus.SUPPORTED
+    assert (
+        query.probe("adbc_release_maturity").status is CapabilityProbeStatus.SUPPORTED
+    )
     adbc_tools._import_adbc_modules.assert_awaited_once_with()
     adbc_tools._check_arrow_flight_ports.assert_awaited_once_with(
         connectivity_timeout=1.0
     )
+
+
+@pytest.mark.asyncio
+async def test_detector_marks_early_2_1_adbc_as_degraded() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides["SELECT @@version_comment;"] = [
+        {"@@version_comment": "Doris version doris-2.1.4-rc03-43f06a5e26"}
+    ]
+    connection.row_overrides["SHOW FRONTENDS"] = [
+        {
+            "Name": "fe-1",
+            "Role": "FOLLOWER",
+            "IsMaster": "true",
+            "Version": "doris-2.1.4-rc03-43f06a5e26",
+        }
+    ]
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {"BackendId": "1", "Version": "doris-2.1.4-rc03-43f06a5e26"}
+    ]
+    manager = _ProbeConnectionManager(connection)
+    manager.config.adbc.enabled = True
+    detector = DorisCapabilityDetector(
+        manager,  # type: ignore[arg-type]
+        adbc_query_tools=SimpleNamespace(
+            _import_adbc_modules=AsyncMock(return_value={"success": True}),
+            _check_arrow_flight_ports=AsyncMock(
+                return_value={"success": True, "be_available_count": 1}
+            ),
+        ),
+    )
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    query = await detector.detect_domain(base, "doris_query", None)
+
+    maturity = query.probe("adbc_release_maturity")
+    assert maturity.status is CapabilityProbeStatus.DEGRADED
+    assert maturity.reason_code == "ADBC_EARLY_2_1_RELEASE"
 
 
 @pytest.mark.asyncio

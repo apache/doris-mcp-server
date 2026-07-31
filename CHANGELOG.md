@@ -25,7 +25,25 @@ under **Unreleased** until a new version is selected and published.
 
 ## [Unreleased]
 
+### Added
+
+- Added eight default-off MetricFlow consumer children to `doris_semantic`
+  for exact-model discovery, status, metrics, group-bys, saved queries,
+  dimension values, Doris SQL compilation, and bounded execution through the
+  existing MCP Query runtime.
+- Added a bounded `doris-mcp-metricflow/v1` sidecar contract and bilingual
+  Doris 2.0+ version capability matrix.
+
 ### Changed
+
+- Expanded the stable public contract from 47 to 55 children while retaining
+  the same eight top-level domains and progressive-disclosure budgets.
+- Lowered the project-wide Doris baseline from 3.0.0 to 2.0.0 and moved
+  version-dependent behavior into per-child release, runtime-probe, provider,
+  route, and permission gates.
+- Made ADBC an advanced default-off path that requires explicit end-user
+  ADBC/Arrow Flight SQL intent and `explicit_adbc=true`; ordinary queries use
+  `doris_query.execute_query`.
 
 - Rebuilt the root English and Simplified Chinese READMEs as concise 1.0 entry
   points instead of mixing architecture, operations, integration, and release
@@ -36,7 +54,7 @@ under **Unreleased** until a new version is selected and published.
   guidance.
 - Published the detailed 1.0 release record in
   [Issue #189](https://github.com/apache/doris-mcp-server/issues/189), including
-  the complete 8-domain/47-child surface, capability detection, security,
+  the complete 8-domain/55-child surface, capability detection, security,
   reliability, compatibility, migration, and verification boundaries.
 - Added Simplified Chinese editions of the custom Tool Provider and Doris
   fine-grained access-control guides, and included the complete documentation
@@ -44,6 +62,12 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Kept the fully available 12-child Semantic manifest below the 16 KiB
+  progressive-disclosure budget by publishing only the child call signature;
+  the Server still applies the complete validation schema at execution time.
+- Added real Doris HTTP and stdio coverage for all eight MetricFlow consumer
+  children, including compile-only behavior and guarded execution of compiled
+  SQL through the standard Query runtime.
 - Migrated the opt-in real Doris process integration suite from removed legacy
   tool names to the 1.0 hierarchical domain discovery and exact Child
   execution contract across Streamable HTTP and stdio.
@@ -93,9 +117,9 @@ under **Unreleased** until a new version is selected and published.
 - A read-only Lakehouse domain with capability-gated external-catalog,
   lakehouse-table, snapshot, partition, pushdown, and Variant-shape
   inspection.
-- An experimental read-only Apache Ossie Core semantic-grounding domain with
-  four capability-gated children, revisioned model-summary resources, and
-  explicit server-private Doris binding manifests.
+- An experimental read-only Semantic domain with four Apache Ossie Core
+  grounding children, eight MetricFlow consumer children, revisioned
+  model-summary resources, and explicit server-private Doris bindings.
 - A fail-closed `doris_admin` architecture reservation that defines future
   high-risk action, scope, preview/execute, confirmation, idempotency, and
   rollback contracts without registering any management capability.
@@ -161,7 +185,7 @@ under **Unreleased** until a new version is selected and published.
   `major.minor.patch`; RC, GA, commit, and deployment metadata remain evidence
   only and never create a separate support result.
 - Published the 1.0 migration guide and release notes, and generated the exact
-  8-domain/47-child tool catalog from the runtime catalog as a checked-in,
+  8-domain/55-child tool catalog from the runtime catalog as a checked-in,
   CI-verified release artifact.
 
 ### Fixed

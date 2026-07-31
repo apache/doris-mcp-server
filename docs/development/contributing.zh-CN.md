@@ -85,7 +85,7 @@ uv run python generate_tool_catalog.py --check
 8. 重新生成目录并更新英文/中文文档。
 9. 同一 PR 更新 `CHANGELOG.md`。
 
-当前 Release 合同是 8 Domain / 47 Child。数量变化属于有意识 API 工作，不是
+当前 Release 合同是 8 Domain / 55 Child。数量变化属于有意识 API 工作，不是
 普通 Handler 修改的副作用。
 
 ## 自定义 Provider
@@ -185,7 +185,7 @@ Private Endpoint。
 ## Release 检查清单
 
 - Product Version、CLI Identity、Package Metadata、Release Doc、Changelog 一致。
-- 自动生成 8/47 Registry 与 Runtime 完全相同。
+- 自动生成 8/55 Registry 与 Runtime 完全相同。
 - 英文/中文文档链接有效。
 - Target Doris Patch Certification 与证据一致。
 - Known Limitation 保持明确。

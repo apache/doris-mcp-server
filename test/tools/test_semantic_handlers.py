@@ -53,9 +53,22 @@ class _Runtime:
         return {"operation": "mapping"}
 
 
+class _MetricFlowRuntime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __getattr__(self, operation: str):
+        async def call(**kwargs: Any) -> dict[str, Any]:
+            self.calls.append((operation, kwargs))
+            return {"operation": operation}
+
+        return call
+
+
 class _Owner(SemanticToolHandlersMixin):
     def __init__(self) -> None:
         self.semantic_runtime = _Runtime()  # type: ignore[assignment]
+        self.metricflow_runtime = _MetricFlowRuntime()  # type: ignore[assignment]
 
 
 @pytest.mark.asyncio
@@ -157,6 +170,95 @@ async def test_semantic_handler_defaults_do_not_guess_model() -> None:
             {
                 "model_ref": "retail/main",
                 "datasource": None,
+            },
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_metricflow_handlers_route_exact_models_and_query_arguments() -> None:
+    owner = _Owner()
+    request = {
+        "metrics": ["revenue"],
+        "group_by": ["metric_time"],
+        "order_by": ["-revenue"],
+    }
+
+    await owner._formal_doris_semantic_list_metricflow_models_tool({})
+    await owner._formal_doris_semantic_get_metricflow_status_tool(
+        {"model_ref": "sales/main"}
+    )
+    await owner._formal_doris_semantic_list_metricflow_metrics_tool(
+        {"model_ref": "sales/main"}
+    )
+    await owner._formal_doris_semantic_get_metricflow_group_bys_tool(
+        {"model_ref": "sales/main", "metrics": ["revenue"]}
+    )
+    await owner._formal_doris_semantic_list_metricflow_saved_queries_tool(
+        {"model_ref": "sales/main"}
+    )
+    await owner._formal_doris_semantic_get_metricflow_dimension_values_tool(
+        {
+            "model_ref": "sales/main",
+            "metrics": ["revenue"],
+            "dimension": "metric_time",
+        }
+    )
+    await owner._formal_doris_semantic_compile_metricflow_query_tool(
+        {"model_ref": "sales/main", "request": request}
+    )
+    await owner._formal_doris_semantic_execute_metricflow_query_tool(
+        {
+            "model_ref": "sales/main",
+            "request": request,
+            "max_rows": 100,
+            "timeout_ms": 5000,
+        }
+    )
+
+    assert owner.metricflow_runtime.calls == [
+        ("list_models", {}),
+        ("get_status", {"model_ref": "sales/main"}),
+        (
+            "list_metrics",
+            {
+                "model_ref": "sales/main",
+                "search": None,
+                "include_dimensions": True,
+                "limit": None,
+            },
+        ),
+        (
+            "get_group_bys",
+            {"model_ref": "sales/main", "metrics": ["revenue"]},
+        ),
+        (
+            "list_saved_queries",
+            {"model_ref": "sales/main", "search": None, "limit": None},
+        ),
+        (
+            "get_dimension_values",
+            {
+                "model_ref": "sales/main",
+                "metrics": ["revenue"],
+                "dimension": "metric_time",
+                "start_time": None,
+                "end_time": None,
+                "limit": None,
+                "timeout_ms": None,
+            },
+        ),
+        (
+            "compile_query",
+            {"model_ref": "sales/main", "request": request},
+        ),
+        (
+            "execute_query",
+            {
+                "model_ref": "sales/main",
+                "request": request,
+                "max_rows": 100,
+                "timeout_ms": 5000,
             },
         ),
     ]

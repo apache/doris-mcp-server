@@ -179,13 +179,17 @@ Limitations:
 - In-memory custom-provider quotas are per process.
 - Cache contents are local optimizations; correctness cannot depend on a shared
   cache.
-- Provider/model/binding files must be consistently deployed across replicas.
+- Provider/model/binding files and MetricFlow sidecar commands/projects must be
+  consistently deployed across replicas.
 
 ## Known limits
 
 - `doris_admin` is not registered.
-- ADBC query execution fails closed on token-bound routes.
+- ADBC is default-off, requires explicit end-user ADBC intent on every call,
+  and fails closed on token-bound routes.
 - Ossie is read-only grounding and does not execute semantic expressions.
+- MetricFlow support is a provider protocol, not a bundled Doris adapter. The
+  provider compiles only; SQL execution stays in the bounded Query runtime.
 - Native lineage delivery is asynchronous best effort and needs a queryable
   companion provider/store.
 - Audit-derived lineage/dependency evidence is bounded inference and may be

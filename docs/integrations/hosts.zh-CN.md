@@ -80,7 +80,7 @@ export MCP_TOOL_EXPOSURE_MODE=flat
 - `doris_query_execute_query`
 - `doris_cluster_get_cluster_overview`
 
-Flat 公开同一套经过授权的 47 Child Catalog 与 Availability。它不提供旧名称 Alias、
+Flat 公开同一套经过授权的 55 Child Catalog 与 Availability。它不提供旧名称 Alias、
 动态注册或安全绕过。上下文成本更高，因此优先 Hierarchical。
 
 ## stdio 配置
@@ -177,16 +177,16 @@ Host 应当：
 | 把发现 Child Schema 交给模型 | 必需 | 不需要 |
 | 处理 Structured Content | 推荐 | 推荐 |
 | 处理 Stale-manifest Rediscovery | 必需 | Flat Call 通常不发送 |
-| 47 Tool Context Budget | 不需要 | 必需 |
+| 55 Tool Context Budget | 不需要 | 必需 |
 | Exposure Mode 变化后重启 | 必需 | 必需 |
 
-如果 Host 既不能消费 Progressive Manifest，也容纳不了 47 个有界正式 Tool，它就
+如果 Host 既不能消费 Progressive Manifest，也容纳不了 55 个有界正式 Tool，它就
 暂时无法接入完整 1.0 工具面。不能用概率 Server-side Routing 规避这个问题。
 
 ## Host 测试序列
 
 1. 确认 `server/discover` Identity/Version。
-2. 确认 `tools/list` 返回 8 Domain（Hierarchical），或在授权过滤前符合 47 Formal
+2. 确认 `tools/list` 返回 8 Domain（Hierarchical），或在授权过滤前符合 55 Formal
    Child 基线（Flat）。
 3. 发现 Catalog 并调用 `list_tables`。
 4. 同一对话切换 Cluster，调用 Overview/Capabilities。

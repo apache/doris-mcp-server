@@ -27,7 +27,7 @@ Hierarchical Discovery 的调用形态。示例只使用回环地址与占位凭
 ## 1. 前置条件
 
 - Python 3.12 或更高版本。
-- Apache Doris 3.0.0 或更高版本。
+- Apache Doris 2.0.0 或更高版本；后续版本特性由运行时动态过滤。
 - 可以访问 FE MySQL 端口，通常为 `9030`。
 - 如需 Profile 与部分运维能力，可以访问 FE HTTP 端口，通常为 `8030`。
 - 如需 BE 级监控，需要显式配置允许访问的 BE HTTP 地址。
@@ -155,7 +155,7 @@ export MCP_TOOL_EXPOSURE_MODE=flat
 ```
 
 随后重启 Server 并让 Host 重新连接。Flat 模式使用
-`doris_catalog_list_tables` 等正式名称公开同样的 47 个 Child。
+`doris_catalog_list_tables` 等正式名称公开同样的 55 个 Child。
 
 ## 7. 验证安装
 

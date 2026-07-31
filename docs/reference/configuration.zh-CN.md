@@ -143,7 +143,7 @@ Lakehouse：
 
 | 变量 | 用途 |
 |---|---|
-| `ADBC_ENABLED` | 启用可选 ADBC Provider |
+| `ADBC_ENABLED` | 启用可选高级 ADBC Provider；默认 `false` |
 | `FE_ARROW_FLIGHT_SQL_PORT` | FE Flight SQL Port |
 | `BE_ARROW_FLIGHT_SQL_PORT` | 可选 BE Flight Port |
 | `ADBC_DEFAULT_MAX_ROWS` | 默认 ADBC 行数 |
@@ -151,7 +151,10 @@ Lakehouse：
 | `ADBC_DEFAULT_RETURN_FORMAT` | `arrow`、`pandas` 或 `dict` |
 | `ADBC_CONNECTION_TIMEOUT` | Flight 连接超时 |
 
-ADBC 仍受全局结果上限约束，1.0 在 Token 绑定路由上 Fail Closed。
+ADBC 仍受全局结果上限约束，1.0 在 Token 绑定路由上 Fail Closed。启用 Provider
+不代表允许自动选择：两个 ADBC Child 的 Schema 和运行时都会要求
+`explicit_adbc=true`，Host 只应在终端用户明确要求 ADBC 或 Arrow Flight SQL 时
+设置。普通查询使用 `doris_query.execute_query`。
 
 ## Apache Ossie 语义 Grounding
 
@@ -172,6 +175,21 @@ ADBC 仍受全局结果上限约束，1.0 在 Token 绑定路由上 Fail Closed�
 
 OAuth 模式还要求显式 Semantic Channel 和 `semantic:read`。每个 Model-specific
 调用仍需要精确 `model_ref`。
+
+## MetricFlow 语义消费
+
+| 变量 | 用途 |
+|---|---|
+| `METRICFLOW_ENABLED` | 启用默认关闭的 MetricFlow Consumer |
+| `METRICFLOW_PROVIDER_COMMAND_JSON` | 以 JSON String Array 配置绝对 Executable 和固定参数 |
+| `METRICFLOW_PROJECT_DIRECTORY` | 可选 Provider 绝对 Working Directory |
+| `METRICFLOW_TIMEOUT_SECONDS` | Provider 进程超时，`1-120` 秒 |
+| `METRICFLOW_MAX_OUTPUT_BYTES` | Provider stdout 上限，`1024-8388608` 字节 |
+
+MetricFlow 启用时必须提供非空 Command，且 Executable 必须为绝对路径。Server
+不经过 Shell，通过 `doris-mcp-metricflow/v1` 调用。Provider 可以读取 Model 与
+编译 Doris SQL；所有执行必须回到有界 MCP Query Runtime。详见
+[MetricFlow 接入](../integrations/metricflow.zh-CN.md)。
 
 ## 静态 Token 认证
 

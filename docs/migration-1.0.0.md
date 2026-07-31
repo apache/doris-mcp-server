@@ -39,13 +39,13 @@ next call:
 ```
 
 Hosts that cannot use progressive disclosure may set
-`MCP_TOOL_EXPOSURE_MODE=flat` before startup. Flat mode exposes 47
+`MCP_TOOL_EXPOSURE_MODE=flat` before startup. Flat mode exposes 55
 collision-free formal names such as `doris_catalog_list_tables` and
 `doris_query_execute_query`. Changing the mode requires a Server restart and a
 Host reconnect. Flat mode does not restore pre-1.0 names.
 
 The generated [tool catalog](tool-registry.md) is the authoritative list of
-all eight domains, 47 children, and 25 pre-1.0 migration inputs.
+all eight domains, 55 children, and 25 pre-1.0 migration inputs.
 
 ## Required Host changes
 
@@ -107,7 +107,7 @@ bounded protocol migration by setting `ENABLE_LEGACY_HTTP_ADAPTER=true`.
 
 ## Doris version handling
 
-The minimum supported Doris version is `3.0.0`. Patch certification uses only
+The minimum supported Doris version is `2.0.0`. Patch certification uses only
 the normalized `major.minor.patch` value. RC or GA labels, commit hashes, and
 deployment hints remain diagnostic evidence. They do not affect capability
 ranges or create separate certification buckets.
@@ -122,4 +122,4 @@ each connected cluster.
 Version 1.0.0 exposes read-only domains. The reserved `doris_admin` domain is
 not registered, and no management write operation is available. Custom
 providers remain explicit, allowlisted extensions rather than members of the
-built-in 8/47 contract.
+built-in 8/55 contract.

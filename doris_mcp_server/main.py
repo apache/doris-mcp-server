@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -70,7 +71,7 @@ def _multiworker_environment(
     workers: int,
 ) -> dict[str, str]:
     """Serialize resolved parent settings inherited by Uvicorn workers."""
-    return {
+    environment = {
         "DORIS_HOST": config.database.host,
         "DORIS_HOSTS": ",".join(config.database.hosts),
         "DORIS_PORT": str(config.database.port),
@@ -162,6 +163,16 @@ def _multiworker_environment(
         "DORIS_OAUTH_SEMANTIC_RESOURCES_ENABLED": str(
             config.semantic.oauth_resources_enabled
         ).lower(),
+        "METRICFLOW_ENABLED": str(config.semantic.metricflow_enabled).lower(),
+        "METRICFLOW_PROJECT_DIRECTORY": (
+            config.semantic.metricflow_project_directory
+        ),
+        "METRICFLOW_TIMEOUT_SECONDS": str(
+            config.semantic.metricflow_timeout_seconds
+        ),
+        "METRICFLOW_MAX_OUTPUT_BYTES": str(
+            config.semantic.metricflow_max_output_bytes
+        ),
         "MCP_STATE_HANDLE_SECRET": config.mcp_state_handle_secret,
         "MCP_STATE_HANDLE_TTL_SECONDS": str(config.mcp_state_handle_ttl_seconds),
         "SERVER_NAME": config.server_name,
@@ -171,6 +182,11 @@ def _multiworker_environment(
             config.security.allow_unauthenticated_non_loopback
         ).lower(),
     }
+    if config.semantic.metricflow_provider_command:
+        environment["METRICFLOW_PROVIDER_COMMAND_JSON"] = json.dumps(
+            config.semantic.metricflow_provider_command
+        )
+    return environment
 
 
 class DorisServer:
