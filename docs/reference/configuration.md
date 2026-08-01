@@ -84,7 +84,7 @@ All FE/BE destinations are operator configuration, never caller arguments.
 | `SERVER_NAME` | product instance name, not product version |
 | `MCP_ALLOWED_HOSTS` | validated HTTP Host policy inputs |
 | `MCP_ALLOWED_ORIGINS` | validated Origin policy inputs |
-| `ENABLE_LEGACY_HTTP_ADAPTER` | default-off `/mcp/legacy` adapter |
+| `ENABLE_LEGACY_HTTP_ADAPTER` | default-off `/mcp/legacy` adapter for validated `2025-06-18` and `2025-11-25` clients |
 | `MCP_LIST_PAGE_SIZE` | entries per protocol list page (`1`–`1000`) |
 | `MCP_STATE_HANDLE_SECRET` | shared HMAC secret for independent replicas |
 | `MCP_STATE_HANDLE_TTL_SECONDS` | explicit handle lifetime (`1`–`3600`) |

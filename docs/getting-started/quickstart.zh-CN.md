@@ -98,6 +98,10 @@ doris-mcp-server \
 POST http://127.0.0.1:3000/mcp
 ```
 
+对于已经验证的 Handshake-era Host，例如使用 MCP `2025-06-18` 的 Dify
+1.16.1，请设置 `ENABLE_LEGACY_HTTP_ADAPTER=true` 后重启，并把 Host URL 配置为
+`http://127.0.0.1:3000/mcp/legacy`。不能把旧协议流量发送到 `/mcp`。
+
 健康端点：
 
 ```bash

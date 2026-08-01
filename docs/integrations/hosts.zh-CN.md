@@ -133,6 +133,28 @@ Authorization: Bearer <token>
 
 不能把凭据放 URL。远程访问需要 HTTPS 与已校验 Host/Origin/Proxy Policy。
 
+## 协议端点兼容性
+
+应根据 Host 实现的 MCP 协议选择端点，不能依赖自动降级，也不能把旧初始化请求
+发送到现代端点。
+
+| Host Profile | 协议 | 端点 | 状态 |
+|---|---|---|---|
+| 现代 MCP Host | `2026-07-28` | `/mcp` | 首选且经过 Release Gate |
+| Dify 1.16.1 | `2025-06-18` | `/mcp/legacy` | 已验证初始化、Tool Discovery 与 Tool Call |
+| 旧 SDK v2 Client | `2025-11-25` | `/mcp/legacy` | 有回归测试的迁移路径 |
+
+显式开启兼容端点：
+
+```bash
+export ENABLE_LEGACY_HTTP_ADAPTER=true
+doris-mcp-server --transport http --host 127.0.0.1 --port 3000
+```
+
+Legacy 端点是同一 Server 上的协议 Adapter，不会恢复已删除的 Tool 名称、降低认证
+或授权、绕过 Doris 能力检查或改变只读执行。Tool Exposure Mode 是独立的启动级
+选择；除非 Host 明确要求 `flat`，否则应使用 `hierarchical`。
+
 ## 内置命令行 Client
 
 `doris-mcp-client` 用于连接与协议诊断。它不是 Server Executable，不能在 Host
@@ -172,7 +194,7 @@ Host 应当：
 
 | 要求 | Hierarchical | Flat |
 |---|---:|---:|
-| MCP `2026-07-28` Tool List/Call | 必需 | 必需 |
+| 在所选协议端点完成 Tool List/Call | 必需 | 必需 |
 | 用 `{}` 调用领域 | 必需 | 不需要 |
 | 把发现 Child Schema 交给模型 | 必需 | 不需要 |
 | 处理 Structured Content | 推荐 | 推荐 |

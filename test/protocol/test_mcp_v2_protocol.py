@@ -729,6 +729,81 @@ async def test_http_rejects_untrusted_origin_and_legacy_adapter_is_stateless():
 
 
 @pytest.mark.asyncio
+async def test_legacy_http_adapter_serves_2025_06_18_host_tools():
+    app = DorisMCPHTTPTransport(
+        app=create_test_server(),
+        security_settings=create_transport_security("127.0.0.1"),
+        legacy_adapter_enabled=True,
+    )
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "dify", "version": "1.16.1"},
+        },
+    }
+
+    async with (
+        app.run(),
+        httpx2.ASGITransport(app.handle_request) as transport,
+        httpx2.AsyncClient(
+            transport=transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        initialized = await client.post(
+            LEGACY_MCP_PATH,
+            json=initialize,
+            headers=headers,
+        )
+        assert initialized.status_code == 200
+        assert initialized.json()["result"]["protocolVersion"] == "2025-06-18"
+        assert "mcp-session-id" not in initialized.headers
+
+        listed = await client.post(
+            LEGACY_MCP_PATH,
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {},
+            },
+            headers={**headers, "MCP-Protocol-Version": "2025-06-18"},
+        )
+        assert listed.status_code == 200
+        assert [tool["name"] for tool in listed.json()["result"]["tools"]] == [
+            "echo",
+            "fail",
+        ]
+
+        called = await client.post(
+            LEGACY_MCP_PATH,
+            json={
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "echo",
+                    "arguments": {"value": "legacy"},
+                },
+            },
+            headers={**headers, "MCP-Protocol-Version": "2025-06-18"},
+        )
+        assert called.status_code == 200
+        assert called.json()["result"]["structuredContent"] == {
+            "name": "echo",
+            "arguments": {"value": "legacy"},
+        }
+
+
+@pytest.mark.asyncio
 async def test_http_validates_request_meta_and_required_client_capabilities():
     server = create_test_server(
         {

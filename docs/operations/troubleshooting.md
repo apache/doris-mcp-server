@@ -111,8 +111,9 @@ Ensure:
 
 ### Unsupported protocol (`-32022`)
 
-Use MCP `2026-07-28`. A `2025-11-25` HTTP client must use the explicitly
-enabled `/mcp/legacy` endpoint. HTTP+SSE clients must migrate.
+Use `/mcp` for MCP `2026-07-28`. Validated `2025-06-18` clients such as Dify
+1.16.1 and `2025-11-25` clients must use the explicitly enabled
+`/mcp/legacy` endpoint. HTTP+SSE clients must migrate.
 
 ## Authentication or authorization fails
 

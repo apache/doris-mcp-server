@@ -120,8 +120,9 @@ guess a model from the prompt.
 ## Protocol and transport
 
 MCP `2026-07-28` is the modern protocol on Streamable HTTP and stdio. The
-isolated `2025-11-25` HTTP migration adapter remains default-off at
-`/mcp/legacy` and does not restore pre-1.0 tool names. Enable it only for a
+isolated HTTP migration adapter remains default-off at `/mcp/legacy` and has
+regression coverage for `2025-06-18` (including Dify 1.16.1) and
+`2025-11-25`. It does not restore pre-1.0 tool names. Enable it only for a
 bounded protocol migration by setting `ENABLE_LEGACY_HTTP_ADAPTER=true`.
 
 ## Doris version handling

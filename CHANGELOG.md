@@ -27,6 +27,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Added
 
+- Added an explicit Dify 1.16.1 compatibility profile for MCP `2025-06-18`
+  through the default-off `/mcp/legacy` endpoint, with initialize, stateless
+  tool-discovery, and tool-call regression coverage.
 - Added eight default-off MetricFlow consumer children to `doris_semantic`
   for exact-model discovery, status, metrics, group-bys, saved queries,
   dimension values, Doris SQL compilation, and bounded execution through the
@@ -62,6 +65,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Documented the strict `/mcp` versus `/mcp/legacy` endpoint boundary in the
+  protocol, Host, quick-start, deployment, troubleshooting, migration, and
+  release guides without restoring pre-1.0 tool names or weakening security.
 - Added the Apache SkyWalking Eyes release gate, its bounded repository
   configuration, and the missing ASF license headers required for source
   release verification.
@@ -83,7 +89,7 @@ under **Unreleased** until a new version is selected and published.
 ### Added
 
 - MCP `2026-07-28` stateless protocol support on Streamable HTTP and stdio,
-  with a `2025-11-25` migration path.
+  with HTTP migration paths for `2025-06-18` and `2025-11-25`.
 - Doris-backed OAuth with per-user Doris connection pools and operation gates.
 - Client ID Metadata Document discovery for Doris-backed OAuth, including
   bounded retrieval, DNS pinning, cache-control handling, and consent-screen

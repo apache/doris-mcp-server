@@ -106,8 +106,9 @@ Proxy Rewrite、TLS Scheme 和 Trusted Proxy CIDR。不要全局信任 Forwarded
 
 ### 不支持协议（`-32022`）
 
-使用 MCP `2026-07-28`。`2025-11-25` HTTP Client 必须连接显式启用的
-`/mcp/legacy`；HTTP+SSE Client 必须迁移。
+MCP `2026-07-28` 使用 `/mcp`。Dify 1.16.1 等已经验证的 `2025-06-18`
+Client 和 `2025-11-25` Client 必须连接显式启用的 `/mcp/legacy`；HTTP+SSE
+Client 必须迁移。
 
 ## Authentication 或 Authorization 失败
 

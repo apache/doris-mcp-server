@@ -55,13 +55,13 @@ def _modern_headers() -> dict[str, str]:
     }
 
 
-def _legacy_initialize() -> dict:
+def _legacy_initialize(protocol_version: str = "2025-11-25") -> dict:
     return {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2025-11-25",
+            "protocolVersion": protocol_version,
             "capabilities": {},
             "clientInfo": {
                 "name": "legacy-http-boundary-test",
@@ -145,8 +145,11 @@ async def test_modern_core_is_exact_post_only_and_never_falls_back_to_legacy():
         assert inexact_path.status_code == 404
 
 
+@pytest.mark.parametrize("protocol_version", ["2025-06-18", "2025-11-25"])
 @pytest.mark.asyncio
-async def test_opt_in_legacy_adapter_accepts_only_handshake_era_traffic():
+async def test_opt_in_legacy_adapter_accepts_only_handshake_era_traffic(
+    protocol_version: str,
+):
     app = _transport(legacy_adapter_enabled=True)
 
     async with (
@@ -159,11 +162,11 @@ async def test_opt_in_legacy_adapter_accepts_only_handshake_era_traffic():
     ):
         initialized = await client.post(
             LEGACY_MCP_PATH,
-            json=_legacy_initialize(),
+            json=_legacy_initialize(protocol_version),
             headers=_legacy_headers(),
         )
         assert initialized.status_code == 200
-        assert initialized.json()["result"]["protocolVersion"] == "2025-11-25"
+        assert initialized.json()["result"]["protocolVersion"] == protocol_version
         assert "mcp-session-id" not in initialized.headers
 
         modern_on_legacy = await client.post(
