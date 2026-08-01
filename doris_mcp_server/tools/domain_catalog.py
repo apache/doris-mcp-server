@@ -1509,7 +1509,14 @@ DOMAIN_DEFINITIONS = (
                 "missing history.",
                 _input_schema(
                     {
-                        "resource": _string("Resource type."),
+                        "resource": _string(
+                            "Recorded resource series to analyze: storage uses "
+                            "partition creation evidence, query_volume counts "
+                            "audit-log queries, and user_activity counts distinct "
+                            "audit-log users. Omit to request every available "
+                            "series.",
+                            enum=("storage", "query_volume", "user_activity"),
+                        ),
                         "window_days": _integer(
                             "Lookback window in days.",
                             minimum=1,

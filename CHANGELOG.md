@@ -65,6 +65,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Declared the exact `storage`, `query_volume`, and `user_activity` selectors
+  for resource-growth analysis, including their recorded evidence sources, so
+  Hosts reject ambiguous values before dispatching a Doris query.
 - Updated JWT decoding type contracts for PyJWT 2.13 while preserving the
   existing signature, claim, audience, issuer, and unsafe-debug validation
   behavior.
