@@ -237,6 +237,13 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             ("SELECT `time` FROM internal.__internal_schema.audit_log LIMIT 1"),
             ("metrics_history_readable",),
         ),
+        (
+            (
+                "SELECT CREATE_TIME, DATA_LENGTH, INDEX_LENGTH "
+                "FROM information_schema.partitions LIMIT 1"
+            ),
+            ("resource_storage_history_readable",),
+        ),
     ),
     "doris_pipeline": (
         (
@@ -499,6 +506,7 @@ class DorisCapabilityDetector:
                     )
                 elif domain_name == "doris_cluster":
                     probes.update(await self._safe_probe_cluster_services(auth_context))
+                    probes.update(_combine_cluster_evidence_probes(probes))
                 elif domain_name == "doris_pipeline":
                     probes.update(_combine_pipeline_evidence_probes(probes))
                 elif domain_name == "doris_search":
@@ -1834,6 +1842,71 @@ def _combine_query_evidence_probe(
         reason_code=reason,
         evidence_sources=("runtime_probe",),
     )
+
+
+def _combine_cluster_evidence_probes(
+    probes: Mapping[str, CapabilityProbeEvidence],
+) -> dict[str, CapabilityProbeEvidence]:
+    audit = probes.get("metrics_history_readable")
+    storage = probes.get("resource_storage_history_readable")
+    full = (
+        _combine_all_evidence(
+            "resource_history_all_sources_readable",
+            (audit, storage),
+            supported_reason="ALL_RESOURCE_HISTORY_SOURCES_READABLE",
+        )
+        if audit is not None and storage is not None
+        else CapabilityProbeEvidence(
+            probe_id="resource_history_all_sources_readable",
+            status=CapabilityProbeStatus.UNKNOWN,
+            reason_code="CAPABILITY_PROBE_PENDING",
+            evidence_sources=("runtime_probe",),
+        )
+    )
+
+    def partial_source(
+        probe_id: str,
+        source: CapabilityProbeEvidence | None,
+        *,
+        reason_code: str,
+    ) -> CapabilityProbeEvidence:
+        if source is None:
+            return CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=CapabilityProbeStatus.UNKNOWN,
+                reason_code="CAPABILITY_PROBE_PENDING",
+                evidence_sources=("runtime_probe",),
+            )
+        return CapabilityProbeEvidence(
+            probe_id=probe_id,
+            status=(
+                CapabilityProbeStatus.DEGRADED
+                if source.status is CapabilityProbeStatus.SUPPORTED
+                else source.status
+            ),
+            reason_code=(
+                reason_code
+                if source.status is CapabilityProbeStatus.SUPPORTED
+                else source.reason_code
+            ),
+            evidence_sources=source.evidence_sources or ("runtime_probe",),
+        )
+
+    audit_only = partial_source(
+        "resource_growth_audit_history_readable",
+        audit,
+        reason_code="AUDIT_RESOURCE_HISTORY_ONLY",
+    )
+    storage_only = partial_source(
+        "resource_growth_storage_history_readable",
+        storage,
+        reason_code="PARTITION_CREATION_HISTORY_ONLY",
+    )
+    return {
+        full.probe_id: full,
+        audit_only.probe_id: audit_only,
+        storage_only.probe_id: storage_only,
+    }
 
 
 def _combine_pipeline_evidence_probes(

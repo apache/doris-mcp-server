@@ -1592,10 +1592,23 @@ FEATURE_DEFINITIONS = (
         "analyze_resource_growth",
         A,
         _variant(
-            "historical_resource_metrics",
+            "all_recorded_resource_history",
             providers=("metrics_history_provider",),
-            probes=("metrics_history_readable",),
+            probes=("resource_history_all_sources_readable",),
             evidence_quality="recorded",
+        ),
+        _variant(
+            "audit_resource_history",
+            providers=("metrics_history_provider",),
+            probes=("resource_growth_audit_history_readable",),
+            evidence_quality="partial",
+            callable_when_degraded=True,
+        ),
+        _variant(
+            "partition_creation_history",
+            probes=("resource_growth_storage_history_readable",),
+            evidence_quality="partial",
+            callable_when_degraded=True,
         ),
     ),
     _feature(

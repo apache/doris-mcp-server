@@ -68,6 +68,9 @@ under **Unreleased** until a new version is selected and published.
 - Declared the exact `storage`, `query_volume`, and `user_activity` selectors
   for resource-growth analysis, including their recorded evidence sources, so
   Hosts reject ambiguous values before dispatching a Doris query.
+- Kept resource-growth analysis callable in degraded mode when only audit-log
+  history or partition-creation history is readable, instead of hiding every
+  selector behind the audit-log capability probe.
 - Updated JWT decoding type contracts for PyJWT 2.13 while preserving the
   existing signature, claim, audience, issuer, and unsafe-debug validation
   behavior.
