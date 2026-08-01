@@ -153,6 +153,45 @@ def test_cluster_domain_binds_all_eleven_children() -> None:
     )
 
 
+def test_resource_growth_declares_exact_resource_selectors() -> None:
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_cluster",
+        "analyze_resource_growth",
+    )
+
+    assert child.input_schema["properties"]["resource"]["enum"] == (
+        "storage",
+        "query_volume",
+        "user_activity",
+    )
+
+
+@pytest.mark.asyncio
+async def test_resource_growth_rejects_ambiguous_selector_before_runtime() -> None:
+    manager = _manager("doris_cluster.analyze_resource_growth")
+    manager.cluster_runtime.analyze_resource_growth = AsyncMock()
+
+    result = await manager.domain_dispatcher.call_domain(
+        "doris_cluster",
+        {
+            "child_tool": "analyze_resource_growth",
+            "arguments": {
+                "resource": "query",
+                "window_days": 7,
+                "granularity": "day",
+            },
+        },
+        None,
+    )
+
+    assert result.mode == "error"
+    assert result.error.code is DomainErrorCode.CHILD_ARGUMENTS_INVALID
+    assert [dict(item) for item in result.error.details["violations"]] == [
+        {"instancePath": "/resource", "keyword": "enum"}
+    ]
+    manager.cluster_runtime.analyze_resource_growth.assert_not_awaited()
+
+
 def test_governance_domain_binds_all_eight_children() -> None:
     manager = _manager()
     bound = BoundHandlerAvailabilityProvider(manager)
