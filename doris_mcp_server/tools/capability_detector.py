@@ -1348,7 +1348,11 @@ def _classify_probe_error(
         (value for value in getattr(error, "args", ()) if isinstance(value, int)),
         None,
     )
-    if error_code in {1044, 1045, 1142, 1227}:
+    message = str(error).casefold()
+    if error_code in {1044, 1045, 1142, 1227} or any(
+        marker in message
+        for marker in ("access denied", "permission denied", "privilege")
+    ):
         return (
             CapabilityProbeStatus.UNKNOWN,
             "PROBE_PERMISSION_DENIED",

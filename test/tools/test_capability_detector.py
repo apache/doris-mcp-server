@@ -488,12 +488,25 @@ async def test_pipeline_probes_isolate_an_unsupported_source_connection() -> Non
     assert len({id(connection) for connection in manager.domain_connections}) == 7
 
 
+@pytest.mark.parametrize(
+    ("error_code", "message"),
+    (
+        (1142, "permission denied"),
+        (
+            1105,
+            "errCode = 2, detailMessage = Permission denied: user lacks privilege",
+        ),
+    ),
+)
 @pytest.mark.asyncio
-async def test_detector_marks_permission_failure_unknown_not_unsupported() -> None:
+async def test_detector_marks_permission_failure_unknown_not_unsupported(
+    error_code: int,
+    message: str,
+) -> None:
     connection = _ProbeConnection()
     connection.failures["SHOW BACKENDS"] = RuntimeError(
-        1142,
-        "permission denied",
+        error_code,
+        message,
     )
     detector = DorisCapabilityDetector(  # type: ignore[arg-type]
         _ProbeConnectionManager(connection)
