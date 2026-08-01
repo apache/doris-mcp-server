@@ -88,6 +88,17 @@ Endpoints:
 - `GET /health` — compatibility health view;
 - `/mcp/legacy` — default-off protocol migration adapter.
 
+Enable `/mcp/legacy` only for validated handshake-era clients such as Dify
+1.16.1 (`2025-06-18`) or SDK v2 clients using `2025-11-25`:
+
+```bash
+export ENABLE_LEGACY_HTTP_ADAPTER=true
+```
+
+Configure those Hosts with the exact `/mcp/legacy` URL. Keep modern
+`2026-07-28` Hosts on `/mcp`; the Server never silently downgrades that
+endpoint.
+
 Keep the Server on loopback until authentication, Host/Origin policy, proxy
 behavior, TLS termination, timeouts, and secret injection are tested together.
 

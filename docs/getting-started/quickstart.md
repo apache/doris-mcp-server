@@ -100,6 +100,11 @@ The modern MCP endpoint is:
 POST http://127.0.0.1:3000/mcp
 ```
 
+For a validated handshake-era Host such as Dify 1.16.1 using MCP
+`2025-06-18`, restart with `ENABLE_LEGACY_HTTP_ADAPTER=true` and configure the
+Host URL as `http://127.0.0.1:3000/mcp/legacy`. Do not send legacy traffic to
+`/mcp`.
+
 Health endpoints:
 
 ```bash

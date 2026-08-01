@@ -84,6 +84,16 @@ doris-mcp-server --transport http --host 127.0.0.1 --port 3000
 - `GET /health`——兼容健康视图；
 - `/mcp/legacy`——默认关闭的协议迁移 Adapter。
 
+只为已验证的 Handshake-era Client 开启 `/mcp/legacy`，例如 Dify 1.16.1
+（`2025-06-18`）或使用 `2025-11-25` 的 SDK v2 Client：
+
+```bash
+export ENABLE_LEGACY_HTTP_ADAPTER=true
+```
+
+这些 Host 必须配置精确的 `/mcp/legacy` URL；现代 `2026-07-28` Host 继续使用
+`/mcp`，Server 不会在该端点静默降级。
+
 在认证、Host/Origin、Proxy、TLS、Timeout 和 Secret 注入经过联合测试前，Server
 应保持回环绑定。
 

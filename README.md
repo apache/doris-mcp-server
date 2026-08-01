@@ -115,8 +115,14 @@ doris-mcp-server \
 Endpoints:
 
 - MCP: `POST http://127.0.0.1:3000/mcp`
+- legacy MCP (opt-in): `POST http://127.0.0.1:3000/mcp/legacy`
 - liveness: `GET http://127.0.0.1:3000/live`
 - Doris-backed readiness: `GET http://127.0.0.1:3000/ready`
+
+Hosts limited to handshake-era Streamable HTTP, including Dify 1.16.1 with
+MCP `2025-06-18`, must set `ENABLE_LEGACY_HTTP_ADAPTER=true` and connect to
+`/mcp/legacy`. The adapter changes only the protocol boundary; it preserves the
+same 1.0 tools, authorization, capability gates, and read-only execution.
 
 Or run stdio for a local Host:
 

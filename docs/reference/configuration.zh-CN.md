@@ -81,7 +81,7 @@ HTTP 安全：
 | `SERVER_NAME` | 产品实例名，不是产品版本 |
 | `MCP_ALLOWED_HOSTS` | 已校验 HTTP Host Policy 输入 |
 | `MCP_ALLOWED_ORIGINS` | 已校验 Origin Policy 输入 |
-| `ENABLE_LEGACY_HTTP_ADAPTER` | 默认关闭的 `/mcp/legacy` Adapter |
+| `ENABLE_LEGACY_HTTP_ADAPTER` | 默认关闭的 `/mcp/legacy` Adapter，用于已验证的 `2025-06-18` 和 `2025-11-25` Client |
 | `MCP_LIST_PAGE_SIZE` | 每个协议 List Page 条目数（`1`–`1000`） |
 | `MCP_STATE_HANDLE_SECRET` | 独立 Replica 共享 HMAC Secret |
 | `MCP_STATE_HANDLE_TTL_SECONDS` | 显式句柄有效期（`1`–`3600`） |

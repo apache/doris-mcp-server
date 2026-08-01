@@ -147,6 +147,30 @@ Authorization: Bearer <token>
 Do not put credentials in the URL. Remote access requires HTTPS and validated
 Host/Origin/proxy policy.
 
+## Protocol endpoint compatibility
+
+Choose the endpoint from the Host's implemented MCP protocol. Do not rely on
+automatic downgrade or send an old handshake to the modern endpoint.
+
+| Host profile | Protocol | Endpoint | Status |
+|---|---|---|---|
+| Modern MCP Host | `2026-07-28` | `/mcp` | Preferred and release-gated |
+| Dify 1.16.1 | `2025-06-18` | `/mcp/legacy` | Validated with initialize, tool discovery, and tool calls |
+| Legacy SDK v2 client | `2025-11-25` | `/mcp/legacy` | Regression-tested migration path |
+
+Enable the compatibility endpoint explicitly:
+
+```bash
+export ENABLE_LEGACY_HTTP_ADAPTER=true
+doris-mcp-server --transport http --host 127.0.0.1 --port 3000
+```
+
+The legacy endpoint is a protocol adapter over the same Server. It does not
+restore removed tool names, weaken authentication or authorization, bypass
+Doris capability checks, or change read-only execution. Tool exposure mode is
+an independent startup choice; use `hierarchical` unless the Host specifically
+requires `flat`.
+
 ## Built-in command-line client
 
 `doris-mcp-client` is useful for connection and protocol diagnostics. It is not
@@ -189,7 +213,7 @@ Hosts should:
 
 | Requirement | Hierarchical | Flat |
 |---|---:|---:|
-| MCP `2026-07-28` tool list/call | required | required |
+| tool list/call on the selected protocol endpoint | required | required |
 | call a domain with `{}` | required | not required |
 | feed discovered child schemas to model | required | not required |
 | handle structured content | recommended | recommended |

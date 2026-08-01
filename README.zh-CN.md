@@ -112,8 +112,14 @@ doris-mcp-server \
 服务端点：
 
 - MCP：`POST http://127.0.0.1:3000/mcp`
+- 旧版 MCP（显式开启）：`POST http://127.0.0.1:3000/mcp/legacy`
 - 存活检查：`GET http://127.0.0.1:3000/live`
 - Doris 就绪检查：`GET http://127.0.0.1:3000/ready`
+
+仅支持 Handshake-era Streamable HTTP 的 Host，包括使用 MCP `2025-06-18` 的
+Dify 1.16.1，需要设置 `ENABLE_LEGACY_HTTP_ADAPTER=true` 并连接
+`/mcp/legacy`。Adapter 只改变协议边界，仍使用相同的 1.0 Tool、授权、能力 Gate
+和只读执行链路。
 
 也可以为本地 Host 启动 stdio：
 
