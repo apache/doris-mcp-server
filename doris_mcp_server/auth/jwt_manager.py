@@ -23,10 +23,11 @@ Provides comprehensive JWT token management including generation, validation, re
 import asyncio
 import time
 import uuid
-from typing import Any, cast
+from typing import Any
 
 try:
     import jwt
+    from jwt.types import Options
 except ImportError:
     raise ImportError("PyJWT is required for JWT functionality. Install with: pip install PyJWT[crypto]")
 
@@ -243,7 +244,7 @@ class JWTManager:
                 security_config = self.config
 
             # JWT decoding options
-            options = {
+            options: Options = {
                 'verify_signature': security_config.jwt_verify_signature,
                 'verify_exp': security_config.jwt_require_exp,
                 'verify_iat': security_config.jwt_require_iat,
@@ -377,7 +378,7 @@ class JWTManager:
         """
         try:
             payload = jwt.decode(token, options={'verify_signature': False})
-            return cast(dict[str, Any], payload)
+            return payload
         except Exception as e:
             logger.error(f"Failed to decode token: {e}")
             raise
