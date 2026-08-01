@@ -65,6 +65,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Updated JWT decoding type contracts for PyJWT 2.13 while preserving the
+  existing signature, claim, audience, issuer, and unsafe-debug validation
+  behavior.
 - Documented the strict `/mcp` versus `/mcp/legacy` endpoint boundary in the
   protocol, Host, quick-start, deployment, troubleshooting, migration, and
   release guides without restoring pre-1.0 tool names or weakening security.
