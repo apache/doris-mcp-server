@@ -21,12 +21,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import quote
 
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.db import DorisConnection, DorisConnectionManager, DorisRouteIdentity
@@ -875,7 +877,36 @@ class DorisCapabilityDetector:
                 reason_code="PROFILE_API_CREDENTIAL_ROUTE_UNAVAILABLE",
                 evidence_sources=("credential_route_policy",),
             )
+        trace_id = uuid.uuid4().hex
         try:
+            route = self.route_identity(auth_context)
+            session_id = f"capability-profile:{route.fingerprint[:16]}"
+            async with (
+                self._connection_manager.get_connection_context_for_auth_context(
+                    session_id,
+                    auth_context,
+                ) as connection
+            ):
+                try:
+                    await connection.execute(
+                        f'SET session_context="trace_id:{trace_id}"',
+                        auth_context=None,
+                        mask_result=False,
+                    )
+                    await connection.execute(
+                        "SET enable_profile=true",
+                        auth_context=None,
+                        mask_result=False,
+                    )
+                    await connection.execute(
+                        "SELECT 1 AS capability_probe",
+                        auth_context=auth_context,
+                        mask_result=False,
+                        max_rows=1,
+                        max_bytes=1024,
+                    )
+                finally:
+                    connection.is_healthy = False
             config_resolver = getattr(
                 self._connection_manager,
                 "get_database_config_for_auth_context",
@@ -887,15 +918,28 @@ class DorisCapabilityDetector:
                 else database_config_for_request(self._connection_manager)
             )
             client = DorisHTTPClient.from_database_config(db_config)
+            hosts = configured_fe_http_hosts(db_config)
+            query_id = await self._resolve_profile_probe_query_id(
+                client,
+                hosts=hosts,
+                port=db_config.fe_http_port,
+                trace_id=trace_id,
+            )
+            if query_id is None:
+                return CapabilityProbeEvidence(
+                    probe_id="query_profile_api_readable",
+                    status=CapabilityProbeStatus.DEGRADED,
+                    reason_code="PROFILE_API_QUERY_ID_UNAVAILABLE",
+                    evidence_sources=("doris_fe_http", "runtime_probe"),
+                )
             response = await client.get_first_available(
                 role="fe",
-                hosts=configured_fe_http_hosts(db_config),
+                hosts=hosts,
                 port=db_config.fe_http_port,
-                path="/rest/v2/manager/query/query_info",
-                params={
-                    "query_id": ("0000000000000000-0000000000000000"),
-                    "is_all_node": "false",
-                },
+                path=(
+                    "/rest/v2/manager/query/profile/text/"
+                    f"{quote(query_id, safe='')}"
+                ),
                 headers={"Accept": "application/json, text/plain"},
             )
         except DorisHTTPPolicyError:
@@ -926,6 +970,37 @@ class DorisCapabilityDetector:
             reason_code=reason,
             evidence_sources=("doris_fe_http", "runtime_probe"),
         )
+
+    async def _resolve_profile_probe_query_id(
+        self,
+        client: DorisHTTPClient,
+        *,
+        hosts: tuple[str, ...],
+        port: int,
+        trace_id: str,
+    ) -> str | None:
+        for delay in (0.0, 0.2, 0.5):
+            if delay:
+                await asyncio.sleep(delay)
+            response = await client.get_first_available(
+                role="fe",
+                hosts=hosts,
+                port=port,
+                path=f"/rest/v2/manager/query/trace_id/{trace_id}",
+                headers={"Accept": "application/json"},
+            )
+            if response.status != 200:
+                continue
+            try:
+                payload = json.loads(response.text())
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, Mapping) or _profile_api_code(payload) != 0:
+                continue
+            query_id = payload.get("data")
+            if isinstance(query_id, str) and query_id.strip():
+                return query_id.strip()
+        return None
 
     async def _probe_lineage_plugin_status(
         self,
