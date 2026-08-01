@@ -52,6 +52,20 @@ Server 不会根据对话意图修改 Host 已注册的一级工具列表。8 �
 二级选择可以由模型完成，因为完整授权 Child 与精确 Schema 已经进入上下文。
 Server 不使用概率 Intent Routing 去猜 Child。
 
+### 单领域优先纪律
+
+Hierarchical Host 应先选择唯一最匹配的领域，再展开 Manifest。不能为了让答案看起来
+更完整而推测性地发现多个领域，否则每轮模型调用都会重复携带多份 Manifest。
+
+- 未限定范围的当前或历史集群运行问题，只从 `doris_cluster` 开始；
+- 只有用户明确要求对象元数据、SQL/查询历史、摄入任务或审计/血缘证据时，才增加
+  Catalog、Query、Pipeline 或 Governance；
+- 对未限定具体资源的集群历史问题，调用 `analyze_resource_growth` 时省略
+  `resource`，由 Server 保留当前所有可用记录序列，并分别报告不可用序列。
+
+这是确定性的 Host 编排规则，不是概率 Server-side Routing。用户下一轮改变问题后，
+仍可立即选择另一个已注册领域。
+
 ## 快速意图切换
 
 示例对话：

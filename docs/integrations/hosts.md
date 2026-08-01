@@ -60,6 +60,25 @@ The second-level selection can be model-driven because the full authorized
 child list and exact schemas are now present. The Server does not use
 probabilistic intent routing to guess a child.
 
+### Single-domain-first discipline
+
+A hierarchical Host should select one best-matching domain before it opens a
+manifest. It must not speculatively discover several domains merely to make an
+answer look more complete. This prevents repeated manifest payloads from being
+carried through every model step.
+
+- An unqualified current or historical cluster-operation question starts with
+  `doris_cluster` only.
+- Catalog, Query, Pipeline, and Governance are added only when the user
+  explicitly asks for object metadata, SQL/query history, ingestion, or
+  audit/lineage evidence.
+- For an unqualified cluster-history request, call
+  `analyze_resource_growth` without `resource`; the Server then preserves every
+  currently usable recorded series and reports unavailable series separately.
+
+This is a deterministic Host orchestration rule, not probabilistic Server-side
+routing. A later user turn can immediately select a different registered domain.
+
 ## Fast intent switching
 
 Example conversation:

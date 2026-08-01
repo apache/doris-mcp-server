@@ -65,6 +65,10 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Added explicit, mutually exclusive top-level domain boundaries and a
+  single-domain discovery rule, preventing Hosts from speculatively expanding
+  unrelated manifests for ambiguous operational questions. Unqualified cluster
+  history requests now preserve every usable recorded series.
 - Declared the exact `storage`, `query_volume`, and `user_activity` selectors
   for resource-growth analysis, including their recorded evidence sources, so
   Hosts reject ambiguous values before dispatching a Doris query.
