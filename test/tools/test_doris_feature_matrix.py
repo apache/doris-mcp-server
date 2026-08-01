@@ -596,6 +596,23 @@ def test_compaction_child_keeps_a_degraded_legacy_variant() -> None:
     assert result.certified is True
 
 
+def test_resource_growth_declares_full_and_partial_evidence_variants() -> None:
+    feature = DORIS_FEATURE_MATRIX.get_feature(
+        "doris_cluster",
+        "analyze_resource_growth",
+    )
+
+    assert tuple(
+        variant.name for variant in feature.support_contract.variants
+    ) == (
+        "all_recorded_resource_history",
+        "audit_resource_history",
+        "partition_creation_history",
+    )
+    assert feature.support_contract.variants[1].callable_when_degraded is True
+    assert feature.support_contract.variants[2].callable_when_degraded is True
+
+
 def test_lineage_native_and_audit_paths_are_both_explicit() -> None:
     feature = DORIS_FEATURE_MATRIX.get_feature(
         "doris_governance",

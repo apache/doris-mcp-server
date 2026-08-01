@@ -169,6 +169,7 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
     )
     query = await detector.detect_domain(base, "doris_query", None)
     catalog = await detector.detect_domain(base, "doris_catalog", None)
+    cluster = await detector.detect_domain(base, "doris_cluster", None)
 
     assert base.route.fingerprint == "route-a"
     assert base.capability_generation == 3
@@ -211,7 +212,43 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
         catalog.probe("table_partition_statistics_readable").status
         is CapabilityProbeStatus.SUPPORTED
     )
+    assert (
+        cluster.probe("resource_history_all_sources_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
     assert connection.statements.count("SELECT @@version_comment;") == 1
+
+
+@pytest.mark.asyncio
+async def test_cluster_history_keeps_storage_fallback_without_audit_access() -> None:
+    connection = _ProbeConnection()
+    audit_probe = (
+        "SELECT `time` FROM internal.__internal_schema.audit_log LIMIT 1"
+    )
+    connection.failures[audit_probe] = RuntimeError(
+        "Access denied; user lacks SELECT privilege"
+    )
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.cluster",
+    )
+
+    cluster = await detector.detect_domain(base, "doris_cluster", None)
+
+    assert (
+        cluster.probe("metrics_history_readable").status
+        is CapabilityProbeStatus.UNKNOWN
+    )
+    assert (
+        cluster.probe("resource_storage_history_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    storage = cluster.probe("resource_growth_storage_history_readable")
+    assert storage.status is CapabilityProbeStatus.DEGRADED
+    assert storage.reason_code == "PARTITION_CREATION_HISTORY_ONLY"
 
 
 @pytest.mark.asyncio

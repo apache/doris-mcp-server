@@ -57,7 +57,7 @@
 | `doris_cluster.get_compaction_status` | `child:doris_cluster:get_compaction_status` | `child:call:doris_cluster:get_compaction_status` | `compaction_task_tracker`, `legacy_compaction_summary` |
 | `doris_cluster.get_workload_group_status` | `child:doris_cluster:get_workload_group_status` | `child:call:doris_cluster:get_workload_group_status` | `workload_group_metrics` |
 | `doris_cluster.get_compute_group_status` | `child:doris_cluster:get_compute_group_status` | `child:call:doris_cluster:get_compute_group_status` | `compute_group` |
-| `doris_cluster.analyze_resource_growth` | `child:doris_cluster:analyze_resource_growth` | `child:call:doris_cluster:analyze_resource_growth` | `historical_resource_metrics` |
+| `doris_cluster.analyze_resource_growth` | `child:doris_cluster:analyze_resource_growth` | `child:call:doris_cluster:analyze_resource_growth` | `all_recorded_resource_history`, `audit_resource_history`, `partition_creation_history` |
 | `doris_cluster.get_runtime_capabilities` | `child:doris_cluster:get_runtime_capabilities` | `child:call:doris_cluster:get_runtime_capabilities` | `capability_snapshot` |
 | `doris_pipeline.get_ingestion_status` | `child:doris_pipeline:get_ingestion_status` | `child:call:doris_pipeline:get_ingestion_status` | `load_jobs`, `continuous_load` |
 | `doris_pipeline.diagnose_ingestion` | `child:doris_pipeline:diagnose_ingestion` | `child:call:doris_pipeline:diagnose_ingestion` | `deterministic_ingestion_diagnosis` |

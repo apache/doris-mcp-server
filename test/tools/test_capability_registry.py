@@ -415,6 +415,83 @@ def test_lakehouse_prefers_4_1_variants_and_falls_back_on_4_0() -> None:
     assert variant_410.callable is True
 
 
+@pytest.mark.parametrize(
+    ("partial_probe", "active_variant"),
+    [
+        (
+            "resource_growth_audit_history_readable",
+            "audit_resource_history",
+        ),
+        (
+            "resource_growth_storage_history_readable",
+            "partition_creation_history",
+        ),
+    ],
+)
+def test_resource_growth_keeps_each_partial_history_source_callable(
+    partial_probe: str,
+    active_variant: str,
+) -> None:
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(  # type: ignore[arg-type]
+            "doris_cluster.analyze_resource_growth"
+        ),
+    )
+    domain = DORIS_DOMAIN_CATALOG.resolve_domain("doris_cluster")
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_cluster",
+        "analyze_resource_growth",
+    )
+    probes = {
+        "resource_history_all_sources_readable": CapabilityProbeEvidence(
+            probe_id="resource_history_all_sources_readable",
+            status=CapabilityProbeStatus.UNKNOWN,
+            reason_code="PROBE_PERMISSION_DENIED",
+        ),
+        **{
+            probe_id: CapabilityProbeEvidence(
+                probe_id=probe_id,
+                status=(
+                    CapabilityProbeStatus.DEGRADED
+                    if probe_id == partial_probe
+                    else CapabilityProbeStatus.UNKNOWN
+                ),
+                reason_code=(
+                    "PARTIAL_RESOURCE_HISTORY_ONLY"
+                    if probe_id == partial_probe
+                    else "PROBE_PERMISSION_DENIED"
+                ),
+            )
+            for probe_id in (
+                "resource_growth_audit_history_readable",
+                "resource_growth_storage_history_readable",
+            )
+        },
+    }
+    providers = CapabilityProviderRegistry(
+        {
+            "metrics_history_provider": CapabilityProviderEvidence(
+                provider_id="metrics_history_provider",
+                status=CapabilityProbeStatus.SUPPORTED,
+                reason_code="PROVIDER_CONFIGURED",
+            )
+        }
+    ).snapshot()
+
+    availability = evaluator.evaluate(
+        snapshot=_snapshot(probes=probes),
+        providers=providers,
+        domain=domain,
+        child=child,
+        auth_context=None,
+    )
+
+    assert availability.callable is True
+    assert availability.status is AvailabilityStatus.DEGRADED
+    assert availability.active_variant == active_variant
+
+
 def test_evaluator_normalizes_system_object_probe_evidence_for_manifest() -> None:
     evaluator = CapabilityEvaluator(
         matrix=DORIS_FEATURE_MATRIX,
