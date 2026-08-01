@@ -56,9 +56,9 @@ MAX_TOP_LEVEL_TOOL_LIST_BYTES = 24 * 1024
 MANIFEST_FORMAT_VERSION = "1"
 
 DOMAIN_DISCOVERY_DESCRIPTION_SUFFIX = (
-    " Call with an empty object to discover the exact child tools and schemas "
-    "available in this domain. Then call this same tool with the returned "
-    "child_tool name and arguments."
+    " Choose one matching domain; do not speculatively open others. Call with "
+    "an empty object to discover its exact child tools and schemas, then call "
+    "it again with the returned child_tool and arguments."
 )
 
 DOMAIN_TOOL_INPUT_SCHEMA: dict[str, Any] = {

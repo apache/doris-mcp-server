@@ -149,6 +149,7 @@ def test_top_level_catalog_is_exactly_eight_stable_read_only_domains() -> None:
     for tool in tools:
         assert tool.description is not None
         assert tool.description.endswith(DOMAIN_DISCOVERY_DESCRIPTION_SUFFIX)
+        assert "do not speculatively open others" in tool.description
         assert tool.annotations is not None
         assert tool.annotations.read_only_hint is True
         assert tool.annotations.destructive_hint is False
@@ -156,6 +157,20 @@ def test_top_level_catalog_is_exactly_eight_stable_read_only_domains() -> None:
         assert tool.annotations.open_world_hint is False
         for child_name in EXPECTED_DOMAIN_CHILDREN[tool.name]:
             assert child_name not in tool.description
+
+    descriptions = {tool.name: tool.description for tool in tools}
+    assert "Default and sufficient for unqualified" in descriptions[
+        "doris_cluster"
+    ]
+    assert "current or historical Doris cluster-operation" in descriptions[
+        "doris_cluster"
+    ]
+    assert "Excludes general cluster operation or history" in descriptions[
+        "doris_governance"
+    ]
+    assert "Excludes general cluster health or history" in descriptions[
+        "doris_pipeline"
+    ]
 
 
 def test_manager_mixin_lazily_builds_discovery_service() -> None:

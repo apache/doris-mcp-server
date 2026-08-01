@@ -1029,8 +1029,9 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_catalog",
         "Doris Catalog",
-        "Explore Doris catalogs, databases, tables, schemas, comments, indexes, "
-        "key models, storage metadata, and object sizes.",
+        "Object metadata only: catalogs, databases, tables, schemas, comments, "
+        "indexes, key models, storage metadata, and sizes. Excludes SQL results, "
+        "cluster operations, pipelines, governance, search, and semantics.",
         (
             _child(
                 "doris_catalog",
@@ -1125,9 +1126,9 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_query",
         "Doris Query",
-        "Execute read-only Doris SQL, inspect plans and profiles, review slow "
-        "queries, and use advanced ADBC only when the end user explicitly "
-        "requests ADBC or Arrow Flight SQL.",
+        "Read-only SQL only: execution, plans, profiles, slow-query history, and "
+        "diagnosis. ADBC requires an explicit end-user request. Excludes general "
+        "cluster operations, pipelines, object discovery, and governance.",
         (
             _child(
                 "doris_query",
@@ -1365,8 +1366,10 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_cluster",
         "Doris Cluster",
-        "Inspect Doris health, nodes, tasks, monitoring, memory, cache, "
-        "compaction, workload, compute groups, and runtime capabilities.",
+        "Default and sufficient for unqualified current or historical Doris "
+        "cluster-operation questions: health, nodes, tasks, metrics, memory, "
+        "cache, compaction, workloads, compute groups, resource growth, and "
+        "capabilities. Open other domains only when explicitly requested.",
         (
             _child(
                 "doris_cluster",
@@ -1506,7 +1509,9 @@ DOMAIN_DEFINITIONS = (
                 "analyze_resource_growth",
                 "Analyze resource growth",
                 "Analyze recorded resource-growth evidence without inventing "
-                "missing history.",
+                "missing history. For an unqualified cluster-history request, "
+                "omit resource so every currently usable recorded series is "
+                "attempted and partial evidence is preserved.",
                 _input_schema(
                     {
                         "resource": _string(
@@ -1550,8 +1555,10 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_pipeline",
         "Doris Pipeline",
-        "Inspect ingestion, load health, materialized views, data freshness, "
-        "and upstream or downstream dependencies.",
+        "Data-pipeline operations only: ingestion and load health, "
+        "materialized-view refresh, data freshness, and dependencies. Excludes "
+        "general cluster health or history, arbitrary SQL, catalog discovery, "
+        "audit, and lineage.",
         (
             _child(
                 "doris_pipeline",
@@ -1676,8 +1683,9 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_search",
         "Doris Search",
-        "Search Doris data with text, vector, or hybrid retrieval and inspect "
-        "or diagnose search analyzers and indexes.",
+        "Search only: text, vector, or hybrid retrieval plus analyzer and index "
+        "diagnosis. Excludes catalog discovery, arbitrary SQL, cluster "
+        "operations, pipelines, governance, and semantic metrics.",
         (
             _child(
                 "doris_search",
@@ -1751,8 +1759,10 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_governance",
         "Doris Governance",
-        "Analyze columns and storage, inspect lineage and access evidence, "
-        "read audit metadata, and review UDF or authentication mappings.",
+        "Data governance only: column or table analysis, lineage, audit and "
+        "access evidence, UDF metadata, and authentication mappings. Excludes "
+        "general cluster operation or history, SQL performance, pipelines, and "
+        "catalog discovery.",
         (
             _child(
                 "doris_governance",
@@ -1904,8 +1914,10 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_lakehouse",
         "Doris Lakehouse",
-        "Inspect external catalogs, lakehouse tables, snapshots, partitions, "
-        "pushdown behavior, and Variant semi-structured columns.",
+        "External lakehouse objects only: catalogs, tables, snapshots, "
+        "partitions, pushdown, and Variant columns. Excludes internal catalog "
+        "discovery, arbitrary SQL, cluster operations, pipelines, governance, "
+        "and semantics.",
         (
             _child(
                 "doris_lakehouse",
@@ -1973,9 +1985,10 @@ DOMAIN_DEFINITIONS = (
     _domain(
         "doris_semantic",
         "Doris Semantic",
-        "Discover and use validated Ossie or MetricFlow models bound to Doris. "
-        "MetricFlow compiles SQL only; MCP executes it through the guarded "
-        "Doris Query runtime.",
+        "Semantic models only: an exact authorized Ossie or MetricFlow model is "
+        "required. MetricFlow compiles SQL; MCP executes it through guarded Doris "
+        "Query. Never infer a model. Excludes ordinary schema, SQL, and cluster "
+        "requests.",
         (
             _child(
                 "doris_semantic",

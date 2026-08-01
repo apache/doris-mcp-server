@@ -164,6 +164,8 @@ def test_resource_growth_declares_exact_resource_selectors() -> None:
         "query_volume",
         "user_activity",
     )
+    assert "unqualified cluster-history request" in child.canonical_description
+    assert "omit resource" in child.canonical_description
 
 
 @pytest.mark.asyncio
