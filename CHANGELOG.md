@@ -68,6 +68,9 @@ under **Unreleased** until a new version is selected and published.
 - Documented the strict `/mcp` versus `/mcp/legacy` endpoint boundary in the
   protocol, Host, quick-start, deployment, troubleshooting, migration, and
   release guides without restoring pre-1.0 tool names or weakening security.
+- Classified Doris runtime probe errors whose messages explicitly report
+  denied access or missing privileges as permission failures, including Doris
+  error 1105 responses, instead of exposing a generic probe failure.
 - Added the Apache SkyWalking Eyes release gate, its bounded repository
   configuration, and the missing ASF license headers required for source
   release verification.
