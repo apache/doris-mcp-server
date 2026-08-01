@@ -74,6 +74,9 @@ under **Unreleased** until a new version is selected and published.
 - Classified Doris runtime probe errors whose messages explicitly report
   denied access or missing privileges as permission failures, including Doris
   error 1105 responses, instead of exposing a generic probe failure.
+- Replaced the Query Profile capability check that used a synthetic query ID
+  with an owned, bounded profiled query and trace lookup, preventing valid Doris
+  Profile APIs from being hidden by a false-negative probe.
 - Added the Apache SkyWalking Eyes release gate, its bounded repository
   configuration, and the missing ASF license headers required for source
   release verification.

@@ -783,6 +783,71 @@ def test_profile_api_probe_classification_is_fail_closed(
 
 
 @pytest.mark.asyncio
+async def test_profile_api_probe_uses_an_owned_profiled_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = _ProbeConnection()
+    manager = _ProbeConnectionManager(connection)
+    database_config = SimpleNamespace(
+        user="reader",
+        password="secret",
+        host="fe-1",
+        hosts=["fe-1"],
+        fe_http_host="fe-1",
+        fe_http_hosts=["fe-1"],
+        fe_http_port=8030,
+    )
+    manager.config.database = database_config
+    manager.selected_database_config = database_config
+    calls: list[dict[str, Any]] = []
+
+    class _HTTPClient:
+        async def get_first_available(self, **kwargs: Any) -> DorisHTTPResponse:
+            calls.append(kwargs)
+            if "/trace_id/" in kwargs["path"]:
+                body = b'{"code":0,"data":"query/id"}'
+            else:
+                body = b'{"code":0,"data":"profile"}'
+            return DorisHTTPResponse(
+                status=200,
+                headers={"content-type": "application/json"},
+                body=body,
+                url=f"http://fe-1:8030{kwargs['path']}",
+            )
+
+    monkeypatch.setattr(
+        "doris_mcp_server.tools.capability_detector."
+        "DorisHTTPClient.from_database_config",
+        lambda _config: _HTTPClient(),
+    )
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+
+    query = await detector.detect_domain(base, "doris_query", None)
+
+    profile = query.probe("query_profile_api_readable")
+    assert profile is not None
+    assert profile.status is CapabilityProbeStatus.SUPPORTED
+    assert profile.reason_code == "PROFILE_API_READABLE"
+    assert any(
+        statement.startswith('SET session_context="trace_id:')
+        for statement in connection.statements
+    )
+    assert "SET enable_profile=true" in connection.statements
+    assert connection.is_healthy is False
+    assert len(calls) == 2
+    assert "/query/query_info" not in calls[0]["path"]
+    assert "/trace_id/" in calls[0]["path"]
+    assert calls[1]["path"].endswith("/profile/text/query%2Fid")
+    assert "params" not in calls[0]
+    assert "params" not in calls[1]
+
+
+@pytest.mark.asyncio
 async def test_detector_retains_visible_backend_with_unknown_version() -> None:
     connection = _ProbeConnection()
     connection.row_overrides["SHOW BACKENDS"] = [
