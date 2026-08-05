@@ -41,6 +41,18 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 MODERN_MCP_PATH: Final = "/mcp"
 LEGACY_MCP_PATH: Final = "/mcp/legacy"
+AUXILIARY_MAX_REQUEST_BODY_SIZE: Final = 64 * 1024
+
+
+def protect_auxiliary_http_app(
+    app: ASGIApp,
+    *,
+    max_request_body_size: int = AUXILIARY_MAX_REQUEST_BODY_SIZE,
+) -> ASGIApp:
+    """Bound form and JSON bodies before auxiliary handlers parse them."""
+    if max_request_body_size <= 0:
+        raise ValueError("max_request_body_size must be positive")
+    return RequestBodyLimitMiddleware(app, max_request_body_size)
 
 
 class DorisMCPHTTPTransport:

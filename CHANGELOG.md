@@ -65,6 +65,21 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Enforced the canonical read-only SQL allowlist again at the production
+  connection boundary, including calls without an authentication context, and
+  restricted internal session changes to an exact `USE`/`SWITCH`/profile
+  allowlist. Doris administrative, export, load, plugin, credential, backup,
+  restore, and other state-changing statements now fail closed before the
+  database driver.
+- Raised vulnerable runtime dependency floors and refreshed the lock file,
+  including `aiohttp`, `aiomysql`, `cryptography`, `python-multipart`,
+  `sqlparse`, `starlette`, and their affected transitive dependencies. Removed
+  the unused `python-jose` and `fastapi` dependency chains.
+- Bounded auxiliary OAuth and token-management POST bodies before form or JSON
+  parsing, and stopped trusting spoofable forwarding headers for token
+  management IP allowlists.
+- Bound direct Compose service ports to loopback and changed the MCP service's
+  default Doris identity from `root` to the dedicated `mcp_reader` account.
 - Added explicit, mutually exclusive top-level domain boundaries and a
   single-domain discovery rule, preventing Hosts from speculatively expanding
   unrelated manifests for ambiguous operational questions. Unqualified cluster

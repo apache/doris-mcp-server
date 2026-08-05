@@ -900,11 +900,13 @@ class DorisCapabilityDetector:
                         f'SET session_context="trace_id:{trace_id}"',
                         auth_context=None,
                         mask_result=False,
+                        internal_session_control=True,
                     )
                     await connection.execute(
                         "SET enable_profile=true",
                         auth_context=None,
                         mask_result=False,
+                        internal_session_control=True,
                     )
                     await connection.execute(
                         "SELECT 1 AS capability_probe",

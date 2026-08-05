@@ -68,8 +68,9 @@ class FakeRoutedConnection:
         max_rows=None,
         max_bytes=None,
         mask_result=True,
+        internal_session_control=False,
     ):
-        del mask_result
+        del mask_result, internal_session_control
         return await self.manager.execute_query(
             self.session_id,
             sql,

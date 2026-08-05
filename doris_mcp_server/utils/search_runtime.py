@@ -1038,6 +1038,7 @@ class DorisSearchRuntime:
                         mask_result=False,
                         max_rows=1,
                         max_bytes=1_024,
+                        internal_session_control=True,
                     )
                 return await connection.execute(
                     sql,

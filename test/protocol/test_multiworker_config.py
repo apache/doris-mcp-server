@@ -24,6 +24,7 @@ import pytest
 from starlette.responses import Response
 
 from doris_mcp_server import __version__
+from doris_mcp_server.http_transport import AUXILIARY_MAX_REQUEST_BODY_SIZE
 from doris_mcp_server.main import _multiworker_environment
 from doris_mcp_server.multiworker_app import (
     health_check,
@@ -693,3 +694,21 @@ async def test_multiworker_routes_legacy_path_only_when_adapter_is_enabled(
             SimpleNamespace(legacy_adapter_enabled=True),
         )
         assert (await client.post("/mcp/legacy")).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_multiworker_rejects_oversized_oauth_body_before_handler():
+    from doris_mcp_server import multiworker_app
+
+    transport = httpx.ASGITransport(app=multiworker_app.app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://127.0.0.1",
+    ) as client:
+        response = await client.post(
+            "/oauth/token",
+            content=b"x" * (AUXILIARY_MAX_REQUEST_BODY_SIZE + 1),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+
+    assert response.status_code == 413

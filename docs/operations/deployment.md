@@ -139,7 +139,9 @@ docker run --rm \
 
 Or review `docker-compose.yml` and `.env.example` before using Compose. The
 checked-in examples contain placeholders and security assertions; they are not
-production credentials.
+production credentials. Provision the default `mcp_reader` account with only
+the required Doris read privileges before starting the MCP service; do not
+replace it with `root` outside an isolated bootstrap environment.
 
 Container requirements:
 

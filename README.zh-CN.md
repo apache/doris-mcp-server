@@ -95,7 +95,7 @@ pip install doris-mcp-server==1.0.0
 ```bash
 export DORIS_HOST=127.0.0.1
 export DORIS_PORT=9030
-export DORIS_USER=root
+export DORIS_USER=mcp_reader
 export DORIS_PASSWORD='replace-me'
 export DORIS_DATABASE=information_schema
 ```

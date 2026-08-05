@@ -41,6 +41,7 @@ from .http_transport import (
     LEGACY_MCP_PATH,
     MODERN_MCP_PATH,
     DorisMCPHTTPTransport,
+    protect_auxiliary_http_app,
 )
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
@@ -496,6 +497,7 @@ class DorisServer:
                 routes=routes,
                 lifespan=lifespan,
             )
+            auxiliary_app = protect_auxiliary_http_app(starlette_app)
 
             from .auth.mcp_auth_middleware import MCPAuthASGIMiddleware
 
@@ -521,7 +523,7 @@ class DorisServer:
             ) -> None:
                 # Handle lifespan events
                 if scope["type"] == "lifespan":
-                    await starlette_app(scope, receive, send)
+                    await auxiliary_app(scope, receive, send)
                     return
 
                 # Handle HTTP requests
@@ -550,7 +552,7 @@ class DorisServer:
                             or path == "/doris-login"
                             or path.startswith("/api/auth/")
                         ):
-                            await starlette_app(scope, receive, send)
+                            await auxiliary_app(scope, receive, send)
                             return
 
                         if path == MODERN_MCP_PATH or (

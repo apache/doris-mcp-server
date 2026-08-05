@@ -479,7 +479,11 @@ class SQLAnalyzer:
                         )
 
                     for context_sql in context_statements:
-                        await connection.execute(context_sql, auth_context=auth_context)
+                        await connection.execute(
+                            context_sql,
+                            auth_context=auth_context,
+                            internal_session_control=True,
+                        )
                     result = await connection.execute(
                         explain_sql, auth_context=auth_context
                     )
@@ -636,7 +640,9 @@ class SQLAnalyzer:
                         return {"success": False, "error": f"Invalid catalog name: {e}"}
                     safe_catalog = quote_identifier(catalog_name, "catalog name")
                     await connection.execute(
-                        f"SWITCH {safe_catalog}", auth_context=auth_context
+                        f"SWITCH {safe_catalog}",
+                        auth_context=auth_context,
+                        internal_session_control=True,
                     )
                 if db_name:
                     try:
@@ -648,7 +654,9 @@ class SQLAnalyzer:
                         }
                     safe_db = quote_identifier(db_name, "database name")
                     await connection.execute(
-                        f"USE {safe_db}", auth_context=auth_context
+                        f"USE {safe_db}",
+                        auth_context=auth_context,
+                        internal_session_control=True,
                     )
 
                 # Set trace ID for the session using session variable
@@ -656,12 +664,15 @@ class SQLAnalyzer:
                 await connection.execute(
                     f'set session_context="trace_id:{trace_id}"',
                     auth_context=auth_context,
+                    internal_session_control=True,
                 )
                 logger.info(f"Set trace ID: {trace_id}")
 
                 # Enable profile
                 await connection.execute(
-                    "set enable_profile=true", auth_context=auth_context
+                    "set enable_profile=true",
+                    auth_context=auth_context,
+                    internal_session_control=True,
                 )
                 logger.info("Enabled profile")
 

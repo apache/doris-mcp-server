@@ -1137,6 +1137,21 @@ class SQLSecurityValidator:
                     )
                     return table_result
 
+            # The legacy validator remains in use below the formal Query
+            # runtime. Reuse the canonical fail-closed allowlist so unknown
+            # Doris statements cannot pass merely because they are absent
+            # from blocked_keywords.
+            from .query_runtime import QueryRuntimeFailure, ReadOnlySQLGuard
+
+            try:
+                ReadOnlySQLGuard.validate(sql)
+            except QueryRuntimeFailure as exc:
+                return ValidationResult(
+                    is_valid=False,
+                    error_message=f"Read-only SQL policy violation: {exc}",
+                    risk_level="high",
+                )
+
             return ValidationResult(is_valid=True)
 
         except Exception as e:

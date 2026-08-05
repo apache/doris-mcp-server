@@ -524,10 +524,6 @@ class OAuthClient:
         if not endpoint:
             raise ValueError("OAuth introspection endpoint is not configured")
 
-        auth = aiohttp.BasicAuth(
-            self.provider_config.introspection_client_id,
-            self.provider_config.introspection_client_secret,
-        )
         try:
             async with self._session.post(
                 endpoint,
@@ -535,9 +531,12 @@ class OAuthClient:
                     "token": access_token,
                     "token_type_hint": "access_token",
                 },
-                auth=auth,
                 headers={
                     "Accept": "application/json",
+                    "Authorization": aiohttp.encode_basic_auth(
+                        self.provider_config.introspection_client_id,
+                        self.provider_config.introspection_client_secret,
+                    ),
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
             ) as response:

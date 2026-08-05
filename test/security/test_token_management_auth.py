@@ -44,6 +44,7 @@ def _request(
     *,
     headers: dict[str, str] | None = None,
     query: dict[str, str] | None = None,
+    client_ip: str = "127.0.0.1",
 ) -> Request:
     encoded_headers = [
         (name.lower().encode(), value.encode())
@@ -55,7 +56,7 @@ def _request(
             "method": "GET",
             "scheme": "http",
             "server": ("127.0.0.1", 3000),
-            "client": ("127.0.0.1", 50000),
+            "client": (client_ip, 50000),
             "path": path,
             "raw_path": path.encode(),
             "query_string": urlencode(query or {}).encode(),
@@ -95,6 +96,28 @@ async def test_admin_query_token_is_rejected_and_headers_are_accepted():
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_proxy_headers_cannot_spoof_token_management_allowlist():
+    config = _config()
+    config.security.token_management_allowed_ips = ["203.0.113.7"]
+    middleware = TokenSecurityMiddleware(config)
+
+    denied = await middleware.check_token_management_access(
+        _request(
+            headers={
+                "Authorization": f"Bearer {ADMIN_TOKEN}",
+                "X-Forwarded-For": "203.0.113.7",
+                "X-Real-IP": "203.0.113.7",
+            },
+            client_ip="198.51.100.9",
+        )
+    )
+
+    assert denied is not None
+    assert denied.status_code == 403
+    assert b'"client_ip":"198.51.100.9"' in denied.body
 
 
 class _AuthProvider:

@@ -91,19 +91,8 @@ class TokenSecurityMiddleware:
         return networks
 
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP from request, considering proxies"""
-        # Check X-Forwarded-For header first (for proxy setups)
-        forwarded_for = request.headers.get('X-Forwarded-For')
-        if forwarded_for:
-            # Take the first IP (original client)
-            client_ip = forwarded_for.split(',')[0].strip()
-        elif real_ip := request.headers.get("X-Real-IP"):
-            client_ip = real_ip
-        else:
-            # Direct connection
-            client_ip = request.client.host if request.client else "unknown"
-
-        return client_ip
+        """Return the authenticated network peer, never an untrusted header."""
+        return request.client.host if request.client else "unknown"
 
     def _is_ip_allowed(self, client_ip: str) -> bool:
         """Check if client IP is in allowed networks"""
