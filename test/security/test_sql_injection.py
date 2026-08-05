@@ -196,8 +196,8 @@ class TestSQLSecurityValidator:
         assert not result.is_valid, "Hidden DELETE statement should be blocked"
 
     @pytest.mark.asyncio
-    async def test_allows_safe_multi_statement(self, dict_config, mock_auth_context):
-        """Test that multiple safe SELECT statements are allowed"""
+    async def test_blocks_safe_multi_statement(self, dict_config, mock_auth_context):
+        """Test that each request is constrained to exactly one statement."""
         from doris_mcp_server.utils.security import SQLSecurityValidator
 
         validator = SQLSecurityValidator(dict_config)
@@ -210,7 +210,8 @@ class TestSQLSecurityValidator:
 
         result = await validator.validate(safe_sql, mock_auth_context)
 
-        assert result.is_valid, f"Multiple safe SELECT statements should be allowed, got: {result.error_message}"
+        assert not result.is_valid
+        assert "exactly one" in result.error_message.lower()
 
     @pytest.mark.asyncio
     async def test_context_switch_injection_blocked(self, dict_config, mock_auth_context):

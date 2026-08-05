@@ -982,6 +982,7 @@ class DorisQueryRuntime:
                                 context_sql,
                                 auth_context=None,
                                 mask_result=False,
+                                internal_session_control=True,
                             )
                         return await connection.execute(
                             sql,
@@ -1036,11 +1037,13 @@ class DorisQueryRuntime:
                             f'SET session_context="trace_id:{trace_id}"',
                             auth_context=None,
                             mask_result=False,
+                            internal_session_control=True,
                         )
                         await connection.execute(
                             "SET enable_profile=true",
                             auth_context=None,
                             mask_result=False,
+                            internal_session_control=True,
                         )
                         return await connection.execute(
                             sql,

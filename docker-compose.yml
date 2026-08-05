@@ -22,12 +22,15 @@ services:
       dockerfile: Dockerfile
     container_name: doris-mcp-server
     ports:
-      - "${MCP_HTTP_PORT:-3000}:3000"  # Streamable HTTP, liveness, and readiness
+      - target: 3000
+        published: "${MCP_HTTP_PORT:-3000}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       # Database configuration
       - DORIS_HOST=doris-fe
       - DORIS_PORT=9030
-      - DORIS_USER=root
+      - DORIS_USER=${DORIS_USER:-mcp_reader}
       - DORIS_PASSWORD_FILE=/run/secrets/doris_password
       - DORIS_DATABASE=test_db
       
@@ -83,8 +86,14 @@ services:
     image: apache/doris:fe-3.0.8@sha256:749afa2be75cd58d54a0bdb3edaa805d5974646f67500f094912f8dbc4a96b8f
     container_name: doris-fe
     ports:
-      - "8030:8030"  # FE HTTP port
-      - "9030:9030"  # FE MySQL port
+      - target: 8030
+        published: "8030"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - target: 9030
+        published: "9030"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       - FE_SERVERS=fe1:doris-fe:9010
       - FE_ID=1
@@ -111,8 +120,14 @@ services:
     image: apache/doris:be-3.0.8@sha256:a337e2b17a65c86c22a1205467a825d46dc3380c94ba8024e53eea033641f12e
     container_name: doris-be
     ports:
-      - "8040:8040"  # BE HTTP port
-      - "9060:9060"  # BE heartbeat port
+      - target: 8040
+        published: "8040"
+        host_ip: 127.0.0.1
+        protocol: tcp
+      - target: 9060
+        published: "9060"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       - FE_SERVERS=doris-fe:9010
       - BE_ADDR=doris-be:9050
@@ -139,7 +154,10 @@ services:
     image: redis:7.4.10-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     container_name: doris-redis
     ports:
-      - "6379:6379"
+      - target: 6379
+        published: "6379"
+        host_ip: 127.0.0.1
+        protocol: tcp
     command:
       - /bin/sh
       - -ec
@@ -162,7 +180,10 @@ services:
     image: prom/prometheus:v3.13.0@sha256:c6b27ea434f8389bfe233fbc7be381cf50587c286e871bc842008f5a1b1908a7
     container_name: doris-prometheus
     ports:
-      - "9090:9090"
+      - target: 9090
+        published: "9090"
+        host_ip: 127.0.0.1
+        protocol: tcp
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
@@ -182,7 +203,10 @@ services:
     image: grafana/grafana:13.1.0@sha256:121a7a9ece6dc10b969f1f96eed64b4f07dfac0d0b8abc070f7cb83bbde86f63
     container_name: doris-grafana
     ports:
-      - "${GRAFANA_HTTP_PORT:-3003}:3000"
+      - target: 3000
+        published: "${GRAFANA_HTTP_PORT:-3003}"
+        host_ip: 127.0.0.1
+        protocol: tcp
     environment:
       - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
     volumes:

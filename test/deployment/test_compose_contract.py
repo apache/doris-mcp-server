@@ -88,7 +88,14 @@ def test_compose_does_not_reserve_a_fixed_bridge_subnet() -> None:
 def test_mcp_service_uses_one_real_listener_and_readiness_probe() -> None:
     service = _compose()["services"]["doris-mcp-server"]
 
-    assert service["ports"] == ["${MCP_HTTP_PORT:-3000}:3000"]
+    assert service["ports"] == [
+        {
+            "target": 3000,
+            "published": "${MCP_HTTP_PORT:-3000}",
+            "host_ip": "127.0.0.1",
+            "protocol": "tcp",
+        }
+    ]
     assert "SERVER_HOST=0.0.0.0" in service["environment"]
     assert "SERVER_PORT=3000" in service["environment"]
     assert (
@@ -112,7 +119,37 @@ def test_mcp_service_uses_one_real_listener_and_readiness_probe() -> None:
 def test_grafana_default_port_does_not_conflict_with_mcp() -> None:
     grafana = _compose()["services"]["grafana"]
 
-    assert grafana["ports"] == ["${GRAFANA_HTTP_PORT:-3003}:3000"]
+    assert grafana["ports"] == [
+        {
+            "target": 3000,
+            "published": "${GRAFANA_HTTP_PORT:-3003}",
+            "host_ip": "127.0.0.1",
+            "protocol": "tcp",
+        }
+    ]
+
+
+def test_direct_service_ports_are_loopback_only() -> None:
+    services = _compose()["services"]
+
+    for service_name in (
+        "doris-mcp-server",
+        "doris-fe",
+        "doris-be",
+        "redis",
+        "prometheus",
+        "grafana",
+    ):
+        assert all(
+            port["host_ip"] == "127.0.0.1" for port in services[service_name]["ports"]
+        )
+
+
+def test_compose_defaults_to_a_dedicated_doris_account() -> None:
+    environment = _compose()["services"]["doris-mcp-server"]["environment"]
+
+    assert "DORIS_USER=${DORIS_USER:-mcp_reader}" in environment
+    assert "DORIS_USER=root" not in environment
 
 
 def test_external_images_are_versioned_and_digest_pinned() -> None:

@@ -402,7 +402,11 @@ class DorisHTTPClient:
         )
         query = urlencode(params or {}, doseq=False)
         url = urlunsplit(("http", f"{host_for_url}:{validated_port}", path, query, ""))
-        auth = aiohttp.BasicAuth(self.user, self.password)
+        request_headers = dict(headers or {})
+        request_headers["Authorization"] = aiohttp.encode_basic_auth(
+            self.user,
+            self.password,
+        )
         try:
             async with aiohttp.ClientSession(
                 connector=connector,
@@ -412,9 +416,8 @@ class DorisHTTPClient:
             ) as session:
                 async with session.get(
                     url,
-                    auth=auth,
                     allow_redirects=False,
-                    headers=dict(headers or {}),
+                    headers=request_headers,
                 ) as response:
                     body = await self._read_bounded_body(response)
                     return DorisHTTPResponse(

@@ -64,7 +64,15 @@ class EmptyResourcesManager:
 
 
 class ProfileConnection:
-    async def execute(self, sql: str, params=None, auth_context=None) -> QueryResult:
+    async def execute(
+        self,
+        sql: str,
+        params=None,
+        auth_context=None,
+        *,
+        internal_session_control: bool = False,
+    ) -> QueryResult:
+        del internal_session_control
         return QueryResult(
             data=[{"one": 1}],
             metadata={"columns": ["one"]},

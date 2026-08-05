@@ -51,6 +51,22 @@ if TYPE_CHECKING:
     from .security import AuthContext, DorisSecurityManager
 
 _SQL_COMMENT_RE = re.compile(r"/\*.*?\*/|--[^\n]*", re.DOTALL)
+_QUOTED_IDENTIFIER_SQL = r"`(?:``|[^`])+`"
+_INTERNAL_SESSION_CONTROL_PATTERNS = (
+    re.compile(
+        rf"\AUSE\s+(?:CATALOG\s+)?{_QUOTED_IDENTIFIER_SQL}\s*;?\Z",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        rf"\ASWITCH\s+{_QUOTED_IDENTIFIER_SQL}\s*;?\Z",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\ASET\s+ENABLE_PROFILE\s*=\s*TRUE\s*;?\Z", re.IGNORECASE),
+    re.compile(
+        r'\ASET\s+SESSION_CONTEXT\s*=\s*"TRACE_ID:[0-9A-F-]{32,36}"\s*;?\Z',
+        re.IGNORECASE,
+    ),
+)
 
 
 def get_first_sql_keyword(sql: str) -> str:
@@ -66,6 +82,15 @@ def get_first_sql_keyword(sql: str) -> str:
     if not stripped:
         return ""
     return stripped.split(None, 1)[0].upper()
+
+
+def _validate_internal_session_control(sql: str) -> None:
+    """Allow only the fixed session controls required by trusted runtimes."""
+    if any(
+        pattern.fullmatch(sql.strip()) for pattern in _INTERNAL_SESSION_CONTROL_PATTERNS
+    ):
+        return
+    raise ValueError("SQL is not an approved internal session-control statement")
 
 
 @dataclass
@@ -188,32 +213,48 @@ class DorisConnection:
         mask_result: bool = True,
         max_rows: int | None = None,
         max_bytes: int | None = None,
+        internal_session_control: bool = False,
     ) -> QueryResult:
         """Execute SQL after validation, with optional result masking.
 
         ``mask_result=False`` is reserved for trusted internal control data
-        that must remain machine-readable after authorization.
+        that must remain machine-readable after authorization. Session state
+        changes require ``internal_session_control=True`` and must match the
+        fixed allowlist enforced below.
         """
         start_time = time.time()
         cursor: Any | None = None
         bounded_result = max_rows is not None or max_bytes is not None
 
         try:
-            # If security manager exists, perform SQL security check
+            # The production connection boundary is read-only even when a
+            # caller omits auth_context. Only tightly constrained, code-owned
+            # session controls can take the explicit internal path.
             security_result = None
-            if self.security_manager and auth_context:
-                validation_result = await self.security_manager.validate_sql_security(
-                    sql, auth_context
-                )
-                if not validation_result.is_valid:
-                    raise ValueError(
-                        f"SQL security validation failed: {validation_result.error_message}"
+            if internal_session_control:
+                _validate_internal_session_control(sql)
+            else:
+                # Local import avoids a module import cycle: query_runtime owns
+                # the canonical Query-domain read-only parser and imports db.
+                from .query_runtime import ReadOnlySQLGuard
+
+                ReadOnlySQLGuard.validate(sql)
+                if self.security_manager and auth_context:
+                    validation_result = (
+                        await self.security_manager.validate_sql_security(
+                            sql, auth_context
+                        )
                     )
-                security_result = {
-                    "is_valid": validation_result.is_valid,
-                    "risk_level": validation_result.risk_level,
-                    "blocked_operations": validation_result.blocked_operations,
-                }
+                    if not validation_result.is_valid:
+                        raise ValueError(
+                            "SQL security validation failed: "
+                            f"{validation_result.error_message}"
+                        )
+                    security_result = {
+                        "is_valid": validation_result.is_valid,
+                        "risk_level": validation_result.risk_level,
+                        "blocked_operations": validation_result.blocked_operations,
+                    }
 
             cursor_type = (
                 aiomysql.SSDictCursor if bounded_result else aiomysql.DictCursor

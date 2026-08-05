@@ -46,6 +46,7 @@ from .http_transport import (
     LEGACY_MCP_PATH,
     MODERN_MCP_PATH,
     DorisMCPHTTPTransport,
+    protect_auxiliary_http_app,
 )
 from .protocol import create_doris_mcp_server, create_transport_security
 from .tools.prompts_manager import DorisPromptsManager
@@ -612,6 +613,7 @@ basic_app = Starlette(
     ],
     lifespan=lifespan,
 )
+auxiliary_app = protect_auxiliary_http_app(basic_app)
 
 
 # Create main ASGI app that routes between basic app and MCP
@@ -640,7 +642,7 @@ async def app(scope: Scope, receive: Receive, send: Send) -> None:
         or path == "/doris-login"
         or path.startswith("/api/auth/")
     ):
-        await basic_app(scope, receive, send)
+        await auxiliary_app(scope, receive, send)
     else:
         # Handle other requests with basic Starlette app (includes auth endpoints)
-        await basic_app(scope, receive, send)
+        await auxiliary_app(scope, receive, send)

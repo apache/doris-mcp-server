@@ -767,6 +767,7 @@ class DorisQueryExecutor:
                     await connection.execute(
                         context_sql,
                         auth_context=auth_context,
+                        internal_session_control=True,
                     )
 
                 remaining_rows = limits.max_rows

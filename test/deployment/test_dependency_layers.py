@@ -45,6 +45,23 @@ REQUIRED_CI_TOOLS = {
     "pytest-cov",
     "ruff",
 }
+SECURE_RUNTIME_FLOORS = {
+    "aiohttp>=3.14.3",
+    "aiomysql>=0.3.0",
+    "click>=8.3.3",
+    "cryptography>=50.0.0",
+    "filelock>=3.20.3,<4.0.0",
+    "orjson>=3.11.6",
+    "pyarrow>=23.0.1",
+    "Pygments>=2.20.0",
+    "PyJWT>=2.13.0",
+    "python-dotenv>=1.2.2",
+    "python-multipart>=0.0.31",
+    "requests>=2.33.0",
+    "sqlparse>=0.5.4",
+    "starlette>=1.3.1",
+    "urllib3>=2.7.0,<3.0.0",
+}
 
 
 def _dependency_name(requirement: str) -> str:
@@ -74,6 +91,16 @@ def test_runtime_metadata_excludes_development_and_build_tools() -> None:
 
     assert runtime.isdisjoint(DEVELOPMENT_ONLY)
     assert pyproject["build-system"]["requires"] == ["hatchling"]
+
+
+def test_runtime_metadata_pins_known_vulnerability_floors() -> None:
+    runtime = set(_pyproject()["project"]["dependencies"])
+
+    assert SECURE_RUNTIME_FLOORS <= runtime
+    assert not any(
+        _dependency_name(requirement) in {"fastapi", "python-jose"}
+        for requirement in runtime
+    )
 
 
 def test_ci_development_group_owns_test_and_quality_dependencies() -> None:

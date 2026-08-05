@@ -45,51 +45,51 @@ dependencies = [
     # Core MCP dependencies
     "mcp>=2.0.0,<2.1.0",
     # Database drivers
-    "aiomysql>=0.2.0",
+    "aiomysql>=0.3.0",
     "PyMySQL>=1.1.0",
     # ADBC (Arrow Flight SQL) dependencies
     "adbc-driver-manager>=0.8.0",
     "adbc-driver-flightsql>=0.8.0",
-    "pyarrow>=14.0.0",
+    "pyarrow>=23.0.1",
     # Async and utility libraries
     "asyncio-mqtt>=0.16.0",
     "aiofiles>=23.0.0",
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.14.3",
     "aioredis>=2.0.0",
-    "filelock>=3.16.1,<4.0.0",
+    "filelock>=3.20.3,<4.0.0",
     # Data processing
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "python-dateutil>=2.8.0",
-    "orjson>=3.9.0",
+    "orjson>=3.11.6",
     # Configuration and serialization
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "jsonschema>=4.23.0,<5.0.0",
     "PyYAML>=6.0.0",
-    "python-dotenv>=1.0.0",
+    "python-dotenv>=1.2.2",
     # Security and authentication
-    "cryptography>=41.0.0",
-    "PyJWT>=2.8.0",
+    "cryptography>=50.0.0",
+    "PyJWT>=2.13.0",
     "passlib[bcrypt]>=1.7.0",
     "bcrypt>=4.1.0",
-    "sqlparse>=0.4.4",
-    "python-jose[cryptography]>=3.3.0",
-    "python-multipart>=0.0.6",
+    "sqlparse>=0.5.4",
+    "python-multipart>=0.0.31",
     # Monitoring and logging
     "prometheus-client>=0.19.0",
     "structlog>=23.2.0",
     "rich>=13.7.0",
+    "Pygments>=2.20.0",
     # HTTP and networking
     "httpx>=0.26.0",
     "websockets>=12.0",
     "uvicorn[standard]>=0.25.0",
-    "fastapi>=0.108.0",
-    "starlette>=0.27.0",
+    "starlette>=1.3.1",
     # CLI and runtime utilities
-    "click>=8.1.0",
+    "click>=8.3.3",
     "typer>=0.9.0",
-    "requests>=2.31.0",
+    "requests>=2.33.0",
+    "urllib3>=2.7.0,<3.0.0",
     "tqdm>=4.66.0",
 ]
 

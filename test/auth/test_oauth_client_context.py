@@ -159,8 +159,10 @@ async def test_introspection_uses_confidential_client_and_returns_context():
         "token": "access-secret",
         "token_type_hint": "access_token",
     }
-    assert kwargs["auth"].login == "oauth-client"
-    assert kwargs["auth"].password == "oauth-secret"
+    assert kwargs["headers"]["Authorization"] == (
+        "Basic b2F1dGgtY2xpZW50Om9hdXRoLXNlY3JldA=="
+    )
+    assert "auth" not in kwargs
     assert context.subject == "user-1"
     assert context.audiences == (RESOURCE,)
     assert context.scopes == (

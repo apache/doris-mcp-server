@@ -20,11 +20,16 @@ import anyio
 import httpx2
 import pytest
 from mcp.server import Server
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 
 from doris_mcp_server.http_transport import (
     LEGACY_MCP_PATH,
     MODERN_MCP_PATH,
     DorisMCPHTTPTransport,
+    protect_auxiliary_http_app,
 )
 
 
@@ -84,6 +89,37 @@ def _transport(*, legacy_adapter_enabled: bool = False) -> DorisMCPHTTPTransport
         security_settings=None,
         legacy_adapter_enabled=legacy_adapter_enabled,
     )
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_request_body_limit_runs_before_form_parsing():
+    handler_called = False
+
+    async def token_endpoint(request: Request) -> PlainTextResponse:
+        nonlocal handler_called
+        handler_called = True
+        await request.form()
+        return PlainTextResponse("ok")
+
+    app = protect_auxiliary_http_app(
+        Starlette(routes=[Route("/oauth/token", token_endpoint, methods=["POST"])]),
+        max_request_body_size=32,
+    )
+    async with (
+        httpx2.ASGITransport(app) as asgi_transport,
+        httpx2.AsyncClient(
+            transport=asgi_transport,
+            base_url="http://127.0.0.1:3000",
+        ) as client,
+    ):
+        response = await client.post(
+            "/oauth/token",
+            content=b"grant_type=" + (b"x" * 64),
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+
+    assert response.status_code == 413
+    assert handler_called is False
 
 
 @pytest.mark.asyncio
