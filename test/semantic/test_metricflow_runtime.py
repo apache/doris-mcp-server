@@ -226,11 +226,24 @@ async def test_metricflow_disabled_and_provider_failures_are_sanitized() -> None
 
 
 @pytest.mark.asyncio
-async def test_metricflow_sidecar_protocol_round_trip(tmp_path: Path) -> None:
+async def test_metricflow_sidecar_protocol_round_trip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_names = (
+        "DORIS_PASSWORD",
+        "MCP_STATE_HANDLE_SECRET",
+        "TOKEN_ADMIN",
+        "OAUTH_CLIENT_SECRET",
+        "JWT_SECRET",
+    )
+    for name in secret_names:
+        monkeypatch.setenv(name, f"secret-{name.lower()}")
     script = tmp_path / "provider.py"
     script.write_text(
         """
 import json
+import os
 import sys
 
 request = json.loads(sys.stdin.read())
@@ -238,7 +251,10 @@ response = {
     "protocol_version": request["protocol_version"],
     "request_id": request["request_id"],
     "ok": True,
-    "data": {"items": [{"model_ref": "sales/main"}]},
+    "data": {
+        "items": [{"model_ref": "sales/main"}],
+        "environment": dict(sorted(os.environ.items())),
+    },
 }
 sys.stdout.write(json.dumps(response))
 """.strip(),
@@ -251,7 +267,25 @@ sys.stdout.write(json.dumps(response))
 
     result = await provider.request("list_models", {})
 
-    assert result == {"items": [{"model_ref": "sales/main"}]}
+    assert result["items"] == [{"model_ref": "sales/main"}]
+    environment = result["environment"]
+    assert {
+        "LANG": environment["LANG"],
+        "LC_ALL": environment["LC_ALL"],
+        "PYTHONUNBUFFERED": environment["PYTHONUNBUFFERED"],
+    } == {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONUNBUFFERED": "1",
+    }
+    assert set(environment) <= {
+        "LANG",
+        "LC_ALL",
+        "PYTHONUNBUFFERED",
+        "__CF_USER_TEXT_ENCODING",
+    }
+    for name in secret_names:
+        assert name not in environment
 
 
 @pytest.mark.asyncio

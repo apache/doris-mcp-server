@@ -24,6 +24,7 @@ import re
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Protocol, cast
 
 from ..utils.query_runtime import DorisQueryRuntime, ReadOnlySQLGuard
@@ -41,6 +42,13 @@ _PROVIDER_OPERATIONS = frozenset(
         "list_saved_queries",
         "compile_dimension_values",
         "compile_query",
+    }
+)
+_SIDECAR_ENVIRONMENT: Mapping[str, str] = MappingProxyType(
+    {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONUNBUFFERED": "1",
     }
 )
 
@@ -145,6 +153,7 @@ class MetricFlowSidecarProvider:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._project_directory,
+                env=dict(_SIDECAR_ENVIRONMENT),
             )
         except (OSError, ValueError) as exc:
             raise MetricFlowProviderFailure(
