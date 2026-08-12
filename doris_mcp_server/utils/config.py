@@ -61,6 +61,7 @@ from .secret_policy import (
     normalize_token_hash_algorithm,
     validate_high_entropy_secret,
 )
+from .version_brands import normalize_version_brand_aliases
 
 
 class AuthConfigError(ValueError):
@@ -891,6 +892,10 @@ class CapabilityConfig:
     snapshot_ttl_seconds: int = 300
     probe_timeout_seconds: int = 5
     stale_grace_seconds: int = 900
+    # Extra @@version_comment brand tokens recognized as Doris-lineage
+    # distributions (for example a vendor distribution brand). Each token
+    # must be a single lowercase alphanumeric word.
+    version_brand_aliases: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -1665,6 +1670,12 @@ class DorisConfig:
                 config.capability.stale_grace_seconds,
             )
             _mark_source(config, "capability_stale_grace_seconds", "env")
+        if "CAPABILITY_VERSION_BRAND_ALIASES" in os.environ:
+            config.capability.version_brand_aliases = _env_csv(
+                "CAPABILITY_VERSION_BRAND_ALIASES",
+                config.capability.version_brand_aliases,
+            )
+            _mark_source(config, "capability_version_brand_aliases", "env")
         if "GOVERNANCE_MAX_SAMPLE_RATIO" in os.environ:
             config.governance.max_sample_ratio = float(
                 os.getenv(
@@ -1970,6 +1981,9 @@ class DorisConfig:
                 ),
                 "stale_grace_seconds": (
                     self.capability.stale_grace_seconds
+                ),
+                "version_brand_aliases": list(
+                    self.capability.version_brand_aliases
                 ),
             },
             "governance": {
@@ -2277,6 +2291,19 @@ class DorisConfig:
             errors.append(
                 "Capability stale grace must be in the range 0-86400 seconds"
             )
+        # JSON configuration can smuggle in non-list values despite the
+        # declared field type, so widen to object before the runtime check.
+        aliases: object = self.capability.version_brand_aliases
+        if not isinstance(aliases, list | tuple):
+            errors.append(
+                "Capability version brand aliases must be a list of strings, "
+                f"got: {type(aliases).__name__}"
+            )
+        else:
+            try:
+                normalize_version_brand_aliases(aliases)
+            except (TypeError, ValueError) as exc:
+                errors.append(str(exc))
         if not 0 < self.governance.max_sample_ratio <= 1:
             errors.append(
                 "Governance maximum sample ratio must be in the range (0, 1]"
@@ -2607,6 +2634,9 @@ class DorisConfig:
                 ),
                 "stale_grace_seconds": (
                     self.capability.stale_grace_seconds
+                ),
+                "version_brand_aliases": list(
+                    self.capability.version_brand_aliases
                 ),
             },
             "semantic": {

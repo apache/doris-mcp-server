@@ -118,6 +118,7 @@ HTTP 安全：
 | `CAPABILITY_SNAPSHOT_TTL_SECONDS` | 路由私有 Snapshot Lifetime |
 | `CAPABILITY_PROBE_TIMEOUT_SECONDS` | 有界 Probe Timeout |
 | `CAPABILITY_STALE_GRACE_SECONDS` | 最大 Stale Fallback Window |
+| `CAPABILITY_VERSION_BRAND_ALIASES` | 逗号分隔的额外 `@@version_comment` 品牌标识，用于 Doris 系发行版 |
 | `MCP_TOOL_PROVIDERS` | 逗号分隔的精确 Custom Provider Allowlist |
 
 Governance：

@@ -63,6 +63,7 @@ from .domain_manifest import (
     DomainManifestService,
 )
 from .doris_feature_matrix import DORIS_FEATURE_MATRIX
+from .doris_version import configure_version_brands
 from .governance_handlers import GovernanceToolHandlersMixin
 from .lakehouse_handlers import LakehouseToolHandlersMixin
 from .pipeline_handlers import PipelineToolHandlersMixin
@@ -142,6 +143,14 @@ class DorisToolsManager(
         if domain_availability_provider is None:
             bound_handlers = BoundHandlerAvailabilityProvider(self)
             capability_config = getattr(config, "capability", None)
+            # Register any configured @@version_comment brand aliases before
+            # the first probe parses a cluster version.
+            brand_aliases = getattr(
+                capability_config, "version_brand_aliases", ()
+            )
+            configure_version_brands(
+                brand_aliases if isinstance(brand_aliases, list | tuple) else ()
+            )
             detector = DorisCapabilityDetector(
                 connection_manager,
                 probe_timeout_seconds=getattr(

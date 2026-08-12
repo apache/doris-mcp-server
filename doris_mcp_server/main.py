@@ -109,6 +109,9 @@ def _multiworker_environment(
         "CAPABILITY_STALE_GRACE_SECONDS": str(
             config.capability.stale_grace_seconds
         ),
+        "CAPABILITY_VERSION_BRAND_ALIASES": ",".join(
+            config.capability.version_brand_aliases
+        ),
         "GOVERNANCE_MAX_SAMPLE_RATIO": str(
             config.governance.max_sample_ratio
         ),
