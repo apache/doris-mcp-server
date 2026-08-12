@@ -263,6 +263,54 @@ def test_semantic_content_children_require_explicit_model_ref() -> None:
         assert "model_ref" in schemas[name]["properties"]
 
 
+def test_semantic_model_ref_schemas_accept_revision_metadata() -> None:
+    semantic = DORIS_DOMAIN_CATALOG.resolve_domain("doris_semantic")
+    model_ref = "sales/commerce@2026.08.05+4f91c2a"
+
+    for child in semantic.children:
+        schema = _wire_input(child)
+        if "model_ref" not in schema.get("properties", {}):
+            continue
+        validator = Draft202012Validator(schema)
+        arguments: dict[str, object] = {"model_ref": model_ref}
+        if child.name == "get_semantic_context":
+            arguments["request"] = {"metrics": ["total_sales"]}
+        elif child.name == "get_metricflow_group_bys":
+            arguments["metrics"] = ["revenue"]
+        elif child.name == "get_metricflow_dimension_values":
+            arguments.update({"metrics": ["revenue"], "dimension": "metric_time"})
+        elif child.name in {
+            "compile_metricflow_query",
+            "execute_metricflow_query",
+        }:
+            arguments["request"] = {"metrics": ["revenue"]}
+
+        assert list(validator.iter_errors(arguments)) == []
+
+
+@pytest.mark.parametrize(
+    "model_ref",
+    (
+        "+sales/commerce@2026.08.05",
+        "sales/commerce@2026.08.05+",
+        "sales/commerce@2026.08.05++4f91c2a",
+    ),
+)
+def test_semantic_model_ref_schemas_reject_malformed_revision_metadata(
+    model_ref: str,
+) -> None:
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_semantic",
+        "get_semantic_model_summary",
+    )
+
+    errors = list(
+        Draft202012Validator(_wire_input(child)).iter_errors({"model_ref": model_ref})
+    )
+
+    assert len(errors) == 1
+
+
 def test_semantic_context_schema_requires_nonempty_unambiguous_selectors() -> None:
     child = DORIS_DOMAIN_CATALOG.resolve_child(
         "doris_semantic",

@@ -65,6 +65,8 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Accepted `+` revision metadata in exact Ossie and MetricFlow model
+  references across binding loading, runtime lookup, and public Child schemas.
 - Enforced the canonical read-only SQL allowlist again at the production
   connection boundary, including calls without an authentication context, and
   restricted internal session changes to an exact `USE`/`SWITCH`/profile

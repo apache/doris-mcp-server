@@ -1401,11 +1401,189 @@ async def test_real_doris_flat_tool_list_stays_bounded_and_callable(
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio"])
+async def test_real_doris_ossie_exact_revision_model_is_read_only_and_live(
+    transport: str,
+    doris_sandbox: DorisSandbox,
+    tmp_path: Path,
+) -> None:
+    """Resolve an exact ``+revision`` Ossie model over real Doris metadata."""
+    model_ref = "sales/commerce@2026.08.05+4f91c2a"
+    (tmp_path / "sales-commerce.yaml").write_text(
+        """
+version: "0.2.0.dev0"
+semantic_model:
+  - name: sales_commerce
+    description: Governed sales acceptance model
+    datasets:
+      - name: orders
+        source: commerce.orders
+        primary_key: [order_id]
+        fields:
+          - name: order_id
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: id
+            datatype: Integer
+          - name: order_marker
+            expression:
+              dialects:
+                - dialect: ANSI_SQL
+                  expression: marker
+            datatype: String
+    metrics:
+      - name: order_count
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(orders.order_id)
+        datatype: Integer
+""".strip(),
+        encoding="utf-8",
+    )
+    (tmp_path / "bindings.yaml").write_text(
+        f"""
+api_version: doris-mcp.apache.org/ossie-binding/v1alpha1
+model_sources:
+  {model_ref}:
+    model_file: sales-commerce.yaml
+    model_name: sales_commerce
+    namespace: commerce
+    tags: [certified]
+    route_profile: global
+    datasets:
+      orders:
+        catalog: internal
+        database: {doris_sandbox.settings.database}
+        object: {doris_sandbox.table}
+        kind: table
+""".strip(),
+        encoding="utf-8",
+    )
+    environment = _server_environment(
+        doris_sandbox.settings,
+        user=doris_sandbox.readonly_user,
+        password=doris_sandbox.readonly_password,
+    )
+    environment.update(
+        {
+            "OSSIE_ENABLED": "true",
+            "OSSIE_MODEL_DIRECTORY": str(tmp_path),
+            "OSSIE_BINDING_MANIFEST": str(tmp_path / "bindings.yaml"),
+            "METRICFLOW_ENABLED": "false",
+        }
+    )
+
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT COUNT(*) AS row_count FROM {doris_sandbox.qualified_table}"
+        )
+        rows_before = int(cursor.fetchone()[0])
+
+    async with _transport_client(
+        transport,
+        environment,
+        read_timeout_seconds=60,
+    ) as client:
+        manifest = await _discover_domain(client, "doris_semantic")
+        children = {child["name"]: child for child in manifest["children"]}
+        ossie_children = {
+            "list_semantic_models",
+            "get_semantic_model_summary",
+            "get_semantic_context",
+            "get_semantic_mapping_status",
+        }
+        metricflow_children = {name for name in children if "metricflow" in name}
+        assert len(children) == 12
+        assert len(metricflow_children) == 8
+        assert all(
+            children[name]["availability"]["callable"] for name in ossie_children
+        )
+        assert all(
+            not children[name]["availability"]["callable"]
+            for name in metricflow_children
+        )
+        manifest_version = manifest["manifest_version"]
+
+        listed = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="list_semantic_models",
+            arguments={},
+            manifest_version=manifest_version,
+        )
+        assert [item["model_ref"] for item in listed["data"]["items"]] == [model_ref]
+
+        summary = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="get_semantic_model_summary",
+            arguments={"model_ref": model_ref, "include_bindings": True},
+            manifest_version=manifest_version,
+        )
+        assert summary["data"]["model_ref"] == model_ref
+        assert summary["data"]["datasets"][0]["binding"] == {
+            "catalog": "internal",
+            "database": doris_sandbox.settings.database,
+            "object": doris_sandbox.table,
+            "kind": "table",
+        }
+
+        context = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="get_semantic_context",
+            arguments={
+                "model_ref": model_ref,
+                "request": {
+                    "question": "How many governed orders are available?",
+                    "metrics": ["order_count"],
+                    "dimensions": ["orders.order_marker"],
+                },
+            },
+            manifest_version=manifest_version,
+        )
+        assert context["data"]["context"]["metrics"][0]["name"] == "order_count"
+        assert context["data"]["execution_boundary"].endswith(
+            "Doris Query domain for SQL execution."
+        )
+
+        mapping = await _call_domain_child(
+            client,
+            domain="doris_semantic",
+            child_tool="get_semantic_mapping_status",
+            arguments={"model_ref": model_ref, "datasource": "orders"},
+            manifest_version=manifest_version,
+        )
+        assert mapping["data"]["mapping_status"] == "resolved"
+        assert mapping["data"]["datasets"][0]["visible_fields"] == [
+            {
+                "name": "order_id",
+                "physical_columns": ["id"],
+                "physical_types": ["BIGINT"],
+            },
+            {
+                "name": "order_marker",
+                "physical_columns": ["marker"],
+                "physical_types": ["VARCHAR"],
+            },
+        ]
+
+    with doris_sandbox.admin_connection.cursor() as cursor:
+        cursor.execute(
+            f"SELECT COUNT(*) AS row_count FROM {doris_sandbox.qualified_table}"
+        )
+        rows_after = int(cursor.fetchone()[0])
+    assert rows_after == rows_before
+
+
+@pytest.mark.parametrize("transport", ["http", "stdio"])
 async def test_real_doris_metricflow_provider_contract_is_guarded_and_live(
     transport: str,
     tmp_path: Path,
 ) -> None:
     """Exercise every MetricFlow child and execute compiled SQL on real Doris."""
+    model_ref = "sales/commerce@2026.08.05+4f91c2a"
     settings = _real_doris_settings()
     provider_script = tmp_path / "metricflow_provider.py"
     provider_script.write_text(
@@ -1418,7 +1596,7 @@ operation = request["operation"]
 arguments = request["arguments"]
 responses = {
     "list_models": {
-        "items": [{"model_ref": "acceptance/main", "revision": "v1"}],
+        "items": [{"model_ref": "sales/commerce@2026.08.05+4f91c2a", "revision": "v1"}],
     },
     "get_status": {
         "model_ref": arguments.get("model_ref"),
@@ -1503,13 +1681,13 @@ sys.stdout.write(json.dumps(response))
             arguments={},
             manifest_version=manifest_version,
         )
-        assert models["data"]["items"][0]["model_ref"] == "acceptance/main"
+        assert models["data"]["items"][0]["model_ref"] == model_ref
 
         status = await _call_domain_child(
             client,
             domain="doris_semantic",
             child_tool="get_metricflow_status",
-            arguments={"model_ref": "acceptance/main"},
+            arguments={"model_ref": model_ref},
             manifest_version=manifest_version,
         )
         assert status["data"]["dialect"] == "doris"
@@ -1519,7 +1697,7 @@ sys.stdout.write(json.dumps(response))
             domain="doris_semantic",
             child_tool="list_metricflow_metrics",
             arguments={
-                "model_ref": "acceptance/main",
+                "model_ref": model_ref,
                 "include_dimensions": True,
                 "limit": 20,
             },
@@ -1532,7 +1710,7 @@ sys.stdout.write(json.dumps(response))
             domain="doris_semantic",
             child_tool="get_metricflow_group_bys",
             arguments={
-                "model_ref": "acceptance/main",
+                "model_ref": model_ref,
                 "metrics": ["acceptance_count"],
             },
             manifest_version=manifest_version,
@@ -1543,7 +1721,7 @@ sys.stdout.write(json.dumps(response))
             client,
             domain="doris_semantic",
             child_tool="list_metricflow_saved_queries",
-            arguments={"model_ref": "acceptance/main", "limit": 20},
+            arguments={"model_ref": model_ref, "limit": 20},
             manifest_version=manifest_version,
         )
         assert saved_queries["data"]["items"][0]["name"] == (
@@ -1555,7 +1733,7 @@ sys.stdout.write(json.dumps(response))
             domain="doris_semantic",
             child_tool="get_metricflow_dimension_values",
             arguments={
-                "model_ref": "acceptance/main",
+                "model_ref": model_ref,
                 "metrics": ["acceptance_count"],
                 "dimension": "segment",
                 "limit": 20,
@@ -1570,7 +1748,7 @@ sys.stdout.write(json.dumps(response))
             domain="doris_semantic",
             child_tool="compile_metricflow_query",
             arguments={
-                "model_ref": "acceptance/main",
+                "model_ref": model_ref,
                 "request": {"metrics": ["acceptance_count"]},
             },
             manifest_version=manifest_version,
@@ -1582,7 +1760,7 @@ sys.stdout.write(json.dumps(response))
             domain="doris_semantic",
             child_tool="execute_metricflow_query",
             arguments={
-                "model_ref": "acceptance/main",
+                "model_ref": model_ref,
                 "request": {"saved_query": "acceptance_saved_query"},
                 "max_rows": 1,
             },

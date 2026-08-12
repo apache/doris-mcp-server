@@ -72,9 +72,10 @@ def _query_runtime() -> Any:
 
 @pytest.mark.asyncio
 async def test_metricflow_metadata_operations_require_exact_model_refs() -> None:
+    model_ref = "sales/commerce@2026.08.05+4f91c2a"
     provider = _Provider(
         {
-            "list_models": {"items": [{"model_ref": "sales/main"}]},
+            "list_models": {"items": [{"model_ref": model_ref}]},
             "get_status": {"valid": True, "dialect": "doris"},
             "list_metrics": {"items": [{"name": "revenue"}]},
             "get_group_bys": {"dimensions": ["metric_time"]},
@@ -88,31 +89,31 @@ async def test_metricflow_metadata_operations_require_exact_model_refs() -> None
     )
 
     models = await runtime.list_models()
-    status = await runtime.get_status(model_ref="sales/main")
+    status = await runtime.get_status(model_ref=model_ref)
     metrics = await runtime.list_metrics(
-        model_ref="sales/main",
+        model_ref=model_ref,
         search="rev",
         include_dimensions=True,
         limit=20,
     )
     group_bys = await runtime.get_group_bys(
-        model_ref="sales/main",
+        model_ref=model_ref,
         metrics=["revenue"],
     )
     saved = await runtime.list_saved_queries(
-        model_ref="sales/main",
+        model_ref=model_ref,
         search=None,
         limit=20,
     )
 
-    assert models["data"]["items"] == [{"model_ref": "sales/main"}]
+    assert models["data"]["items"] == [{"model_ref": model_ref}]
     assert status["data"]["dialect"] == "doris"
     assert metrics["data"]["items"] == [{"name": "revenue"}]
     assert group_bys["data"]["dimensions"] == ["metric_time"]
     assert saved["data"]["items"] == [{"name": "weekly_sales"}]
     assert provider.calls[1] == (
         "get_status",
-        {"model_ref": "sales/main"},
+        {"model_ref": model_ref},
     )
 
 

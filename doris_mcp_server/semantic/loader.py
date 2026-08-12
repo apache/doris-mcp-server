@@ -39,6 +39,7 @@ from .models import (
     OSSIE_BINDING_API_VERSION,
     OSSIE_SCHEMA_SHA256,
     OSSIE_SPEC_VERSION,
+    SEMANTIC_MODEL_REF_PATTERN,
     DatasetBinding,
     SemanticAIContext,
     SemanticDataset,
@@ -49,7 +50,7 @@ from .models import (
     SemanticRelationship,
 )
 
-_MODEL_REF_RE = re.compile(r"^[A-Za-z0-9_.:/@-]{1,192}$")
+_MODEL_REF_RE = re.compile(SEMANTIC_MODEL_REF_PATTERN)
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
 _SELECTOR_COMPONENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,127}$")
 _SOURCE_RE = re.compile(

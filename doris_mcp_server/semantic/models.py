@@ -29,6 +29,7 @@ OSSIE_SPEC_COMMIT = "9ffc3be3886e82fddc9bbf28722440864644d371"
 OSSIE_SCHEMA_SHA256 = "8ce9f82aa92080265f9ae119e31cda5bef062f489674d3c467245c2d4c5ff264"
 OSSIE_ADAPTER_VERSION = "doris-mcp-ossie/v1alpha1"
 OSSIE_BINDING_API_VERSION = "doris-mcp.apache.org/ossie-binding/v1alpha1"
+SEMANTIC_MODEL_REF_PATTERN = r"^(?=.{1,192}$)[A-Za-z0-9_.:/@-]+(?:\+[A-Za-z0-9_.-]+)*$"
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +196,7 @@ __all__ = [
     "ResolvedDataset",
     "ResolvedField",
     "ResolvedSemanticModel",
+    "SEMANTIC_MODEL_REF_PATTERN",
     "SemanticAIContext",
     "SemanticDataset",
     "SemanticExpression",

@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ..utils.query_runtime import DorisQueryRuntime, ReadOnlySQLGuard
+from .models import SEMANTIC_MODEL_REF_PATTERN
 from .runtime import SemanticRuntimeFailure
 
 METRICFLOW_PROVIDER_PROTOCOL = "doris-mcp-metricflow/v1"
-_MODEL_REF_RE = re.compile(r"^[A-Za-z0-9_.:/@-]{1,192}$")
+_MODEL_REF_RE = re.compile(SEMANTIC_MODEL_REF_PATTERN)
 _PROVIDER_OPERATIONS = frozenset(
     {
         "list_models",
