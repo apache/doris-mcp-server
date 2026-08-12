@@ -42,6 +42,7 @@ from .models import (
     OSSIE_SCHEMA_SHA256,
     OSSIE_SPEC_COMMIT,
     OSSIE_SPEC_VERSION,
+    SEMANTIC_MODEL_REF_PATTERN,
     DatasetBinding,
     ResolvedDataset,
     ResolvedField,
@@ -56,7 +57,7 @@ from .models import (
 
 _MAX_QUERY_ROWS = 2048
 _MAX_QUERY_BYTES = 2 * 1024 * 1024
-_MODEL_REF_RE = re.compile(r"^[A-Za-z0-9_.:/@-]{1,192}$")
+_MODEL_REF_RE = re.compile(SEMANTIC_MODEL_REF_PATTERN)
 _SELECTOR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
 _DIMENSION_SELECTOR_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_-]{0,127}"

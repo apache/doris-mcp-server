@@ -119,11 +119,11 @@ semantic_model:
 """.strip()
 
 
-def _binding_yaml() -> str:
-    return """
+def _binding_yaml(*, model_ref: str = "retail/main") -> str:
+    return f"""
 api_version: doris-mcp.apache.org/ossie-binding/v1alpha1
 model_sources:
-  retail/main:
+  {model_ref}:
     model_file: retail.yaml
     model_name: retail
     namespace: commerce
@@ -388,6 +388,24 @@ async def test_exact_model_route_and_selector_fail_closed(tmp_path: Path) -> Non
             request={"dimensions": ["customers.segment.extra"]},
         )
     assert dimension_failure.value.reason_code == "SEMANTIC_ARGUMENT_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_exact_model_ref_with_revision_metadata_is_resolved(
+    tmp_path: Path,
+) -> None:
+    model_ref = "sales/commerce@2026.08.05+4f91c2a"
+    (tmp_path / "retail.yaml").write_text(_model_yaml(), encoding="utf-8")
+    (tmp_path / "bindings.yaml").write_text(
+        _binding_yaml(model_ref=model_ref),
+        encoding="utf-8",
+    )
+    manager = _ConnectionManager(tmp_path, _metadata_responder)
+    runtime = DorisSemanticRuntime(manager)
+
+    summary = await runtime.get_semantic_model_summary(model_ref=model_ref)
+
+    assert summary["data"]["model_ref"] == model_ref
 
 
 @pytest.mark.asyncio

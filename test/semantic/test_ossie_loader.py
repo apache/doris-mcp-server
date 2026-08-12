@@ -79,11 +79,15 @@ semantic_model:
 """.strip()
 
 
-def _binding_yaml(model_file: str = "retail.yaml") -> str:
+def _binding_yaml(
+    model_file: str = "retail.yaml",
+    *,
+    model_ref: str = "retail/main",
+) -> str:
     return f"""
 api_version: doris-mcp.apache.org/ossie-binding/v1alpha1
 model_sources:
-  retail/main:
+  {model_ref}:
     model_file: {model_file}
     model_name: retail
     namespace: commerce
@@ -129,6 +133,43 @@ def test_loads_exact_model_and_pinned_schema(tmp_path: Path) -> None:
     )
     assert len(model.revision) == 16
     assert model.binding_id.startswith("binding.")
+
+
+def test_loads_exact_model_ref_with_revision_metadata(tmp_path: Path) -> None:
+    model_ref = "sales/commerce@2026.08.05+4f91c2a"
+    (tmp_path / "retail.yaml").write_text(_model_yaml(), encoding="utf-8")
+    (tmp_path / "bindings.yaml").write_text(
+        _binding_yaml(model_ref=model_ref),
+        encoding="utf-8",
+    )
+
+    registry = _loader(tmp_path).load()
+
+    assert registry.get(model_ref) is not None
+
+
+@pytest.mark.parametrize(
+    "model_ref",
+    (
+        "+sales/commerce@2026.08.05",
+        "sales/commerce@2026.08.05+",
+        "sales/commerce@2026.08.05++4f91c2a",
+    ),
+)
+def test_rejects_malformed_revision_metadata(
+    tmp_path: Path,
+    model_ref: str,
+) -> None:
+    (tmp_path / "retail.yaml").write_text(_model_yaml(), encoding="utf-8")
+    (tmp_path / "bindings.yaml").write_text(
+        _binding_yaml(model_ref=model_ref),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SemanticConfigurationError) as failure:
+        _loader(tmp_path).load()
+
+    assert failure.value.reason_code == "OSSIE_BINDING_INVALID"
 
 
 @pytest.mark.parametrize(

@@ -23,6 +23,7 @@ from typing import Annotated, Any, Self
 
 from pydantic import Field, model_validator
 
+from ..semantic.models import SEMANTIC_MODEL_REF_PATTERN
 from .domain_models import (
     ChildToolDefinition,
     CompositePlan,
@@ -528,7 +529,7 @@ def _metricflow_order_by_array() -> dict[str, Any]:
 def _metricflow_model_ref() -> dict[str, Any]:
     return _string(
         "Exact MetricFlow model reference returned by model discovery.",
-        pattern=r"^[A-Za-z0-9_.:/@-]+$",
+        pattern=SEMANTIC_MODEL_REF_PATTERN,
         max_length=192,
     )
 
@@ -2022,7 +2023,7 @@ DOMAIN_DEFINITIONS = (
                     {
                         "model_ref": _string(
                             "Exact semantic model reference.",
-                            pattern=r"^[A-Za-z0-9_.:/@-]+$",
+                            pattern=SEMANTIC_MODEL_REF_PATTERN,
                             max_length=192,
                         ),
                         "include_bindings": _boolean(
@@ -2042,7 +2043,7 @@ DOMAIN_DEFINITIONS = (
                     {
                         "model_ref": _string(
                             "Exact semantic model reference.",
-                            pattern=r"^[A-Za-z0-9_.:/@-]+$",
+                            pattern=SEMANTIC_MODEL_REF_PATTERN,
                             max_length=192,
                         ),
                         "request": {
@@ -2129,7 +2130,7 @@ DOMAIN_DEFINITIONS = (
                     {
                         "model_ref": _string(
                             "Exact semantic model reference.",
-                            pattern=r"^[A-Za-z0-9_.:/@-]+$",
+                            pattern=SEMANTIC_MODEL_REF_PATTERN,
                             max_length=192,
                         ),
                         "datasource": _string(
