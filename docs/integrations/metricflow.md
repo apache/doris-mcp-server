@@ -72,7 +72,10 @@ compiled SQL and send it through the same bounded runtime as
 
 The Server starts the configured executable without a shell, sends one JSON
 object on stdin, reads one bounded JSON object from stdout, and then waits for
-the process to exit. The protocol version is `doris-mcp-metricflow/v1`.
+the process to exit. The Server supplies only a fixed locale and unbuffered-I/O
+environment, so Doris credentials, bearer tokens, OAuth/JWT secrets, and
+unrelated server configuration are not inherited. The protocol version is
+`doris-mcp-metricflow/v1`.
 
 Request:
 

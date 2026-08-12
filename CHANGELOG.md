@@ -65,6 +65,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Prevented MetricFlow sidecar processes from inheriting Doris credentials,
+  bearer tokens, OAuth/JWT secrets, and unrelated MCP Server environment
+  configuration by launching each provider with a fixed minimal environment.
 - Accepted `+` revision metadata in exact Ossie and MetricFlow model
   references across binding loading, runtime lookup, and public Child schemas.
 - Enforced the canonical read-only SQL allowlist again at the production
