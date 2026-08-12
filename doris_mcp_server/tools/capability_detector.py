@@ -611,7 +611,7 @@ class DorisCapabilityDetector:
             frontend_rows,
             fallback=version,
         )
-        backends = _backend_versions(backend_rows)
+        backends = _backend_versions(backend_rows, default_brand=version.brand)
         versions = DorisClusterVersionVector(
             master_fe=master_fe,
             follower_fes=follower_fes,
@@ -2436,13 +2436,22 @@ def _nonnegative_int(value: Any | None) -> int:
     return max(0, parsed)
 
 
-def _component_version(value: Any) -> DorisVersion:
+def _component_version(
+    value: Any,
+    *,
+    default_brand: str | None = None,
+) -> DorisVersion:
     raw = "" if value is None else str(value).strip()
     if not raw:
         return parse_doris_version_comment("")
-    if "doris" not in raw.lower():
-        raw = f"Doris version doris-{raw}"
-    return parse_doris_version_comment(raw)
+    parsed = parse_doris_version_comment(raw)
+    if parsed.is_parsed:
+        return parsed
+    # Brandless component builds (for example "4.0.6" or "4.0.6-abc1234")
+    # carry no brand of their own; inherit the cluster brand observed in
+    # @@version_comment so distribution provenance is not lost.
+    brand = default_brand or "doris"
+    return parse_doris_version_comment(f"{brand} version {brand}-{raw}")
 
 
 def _truthy(value: Any) -> bool:
@@ -2460,7 +2469,10 @@ def _frontend_versions(
     for row in rows:
         if not _component_is_active(row):
             continue
-        version = _component_version(_row_value(row, "Version", "FeVersion"))
+        version = _component_version(
+            _row_value(row, "Version", "FeVersion"),
+            default_brand=fallback.brand,
+        )
         observed.append(
             (
                 version,
@@ -2485,9 +2497,14 @@ def _frontend_versions(
 
 def _backend_versions(
     rows: Sequence[Mapping[str, Any]],
+    *,
+    default_brand: str | None = None,
 ) -> tuple[DorisVersion, ...]:
     return tuple(
-        _component_version(_row_value(row, "Version", "BeVersion"))
+        _component_version(
+            _row_value(row, "Version", "BeVersion"),
+            default_brand=default_brand,
+        )
         for row in rows
         if _component_is_active(row)
     )

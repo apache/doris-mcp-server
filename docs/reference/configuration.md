@@ -123,6 +123,7 @@ Increasing one variable does not remove the absolute safety cap.
 | `CAPABILITY_SNAPSHOT_TTL_SECONDS` | route-private snapshot lifetime |
 | `CAPABILITY_PROBE_TIMEOUT_SECONDS` | bounded probe timeout |
 | `CAPABILITY_STALE_GRACE_SECONDS` | maximum stale fallback window |
+| `CAPABILITY_VERSION_BRAND_ALIASES` | comma-separated extra `@@version_comment` brand tokens for Doris-lineage distributions |
 | `MCP_TOOL_PROVIDERS` | comma-separated exact custom provider allowlist |
 
 Governance:
