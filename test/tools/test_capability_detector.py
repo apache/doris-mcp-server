@@ -1128,6 +1128,53 @@ async def test_detector_propagates_comment_brand_to_brandless_components(
 
 
 @pytest.mark.asyncio
+async def test_unknown_brand_keeps_brandless_components_unknown() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides["SELECT @@version_comment;"] = [
+        {"@@version_comment": "unregistereddb version 4.0.5"}
+    ]
+    connection.row_overrides["SHOW FRONTENDS"] = [
+        {
+            "Name": "fe-1",
+            "IsMaster": "true",
+            "Version": "4.0.5",
+        },
+    ]
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {
+            "BackendId": "1",
+            "Version": "4.0.5",
+        },
+    ]
+    detector = DorisCapabilityDetector(  # type: ignore[arg-type]
+        _ProbeConnectionManager(connection)
+    )
+
+    snapshot = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+    feature = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=snapshot.version_vector,
+    )
+    report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(snapshot.version_vector)
+
+    assert snapshot.version_vector.master_fe.is_parsed is False
+    assert snapshot.version_vector.master_fe.brand is None
+    assert snapshot.version_vector.backends[0].is_parsed is False
+    assert snapshot.version_vector.backends[0].brand is None
+    assert feature.compatible is False
+    assert feature.reason_code == "DORIS_VERSION_UNKNOWN"
+    assert feature.certified is False
+    assert report.status is VersionCertificationStatus.UNKNOWN
+    assert report.certified is False
+    assert report.evidence_ids == ()
+
+
+@pytest.mark.asyncio
 async def test_detector_does_not_treat_commit_substrings_as_brand_tokens() -> None:
     configure_version_brands(("db",))
     try:

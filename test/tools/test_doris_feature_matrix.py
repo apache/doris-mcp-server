@@ -567,6 +567,25 @@ def test_distribution_evidence_validates_comments_without_brand_registry() -> No
             PatchCertificationEvidence.model_validate(payload)
 
 
+def test_apache_evidence_rejects_distribution_comments_with_registered_alias(
+    enterprise_brand_alias: str,
+) -> None:
+    evidence = _certification_evidence("4.0.5")
+    payload = evidence.model_dump(mode="python")
+    payload["master_fe_version_comment"] = (
+        f"{enterprise_brand_alias} version 4.0.5"
+    )
+    payload["backend_version_comments"] = (
+        f"{enterprise_brand_alias}-4.0.5-abc1234",
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="Doris core version 4.0.5",
+    ):
+        PatchCertificationEvidence.model_validate(payload)
+
+
 def test_patch_evidence_rejects_incomplete_host_or_component_proof() -> None:
     evidence = _certification_evidence()
     payload = evidence.model_dump(mode="python")

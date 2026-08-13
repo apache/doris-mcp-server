@@ -47,14 +47,16 @@ _known_brands: tuple[str, ...] = (_DEFAULT_BRAND,)
 
 
 def _compile_version_pattern(brands: tuple[str, ...]) -> re.Pattern[str]:
-    brand_alternatives = "|".join((r"apache\s+doris", *brands))
-    prefix_alternatives = "|".join(brands)
+    brand_alternatives = "|".join(
+        (r"apache\s+doris", *(re.escape(brand) for brand in brands))
+    )
+    prefix_alternatives = "|".join(re.escape(brand) for brand in brands)
     return re.compile(
         rf"""
         (?<![A-Za-z0-9_])
         (?P<brand>{brand_alternatives})
         (?:\s*,?\s*version)?
-        (?:\s+(?:{prefix_alternatives})-|\s*-\s*|\s+)
+        (?:\s+(?P<version_brand>{prefix_alternatives})-|\s*-\s*|\s+)
         (?P<core>\d+\.\d+\.\d+)
         (?:-(?P<prerelease>rc\d+|alpha\d*|beta\d*))?
         (?:-(?P<commit>[0-9a-f]{{7,40}}))?
@@ -161,6 +163,11 @@ def parse_doris_version_comment(comment: str) -> DorisVersion:
     if match is None:
         return DorisVersion(raw=comment, deployment_hint=deployment_hint)
 
+    brand = _normalize_brand(match.group("brand"))
+    version_brand = match.group("version_brand")
+    if version_brand is not None and _normalize_brand(version_brand) != brand:
+        return DorisVersion(raw=comment, deployment_hint=deployment_hint)
+
     major, minor, patch = (int(part) for part in match.group("core").split("."))
     prerelease = match.group("prerelease")
     commit = match.group("commit")
@@ -173,7 +180,7 @@ def parse_doris_version_comment(comment: str) -> DorisVersion:
         prerelease=prerelease.lower() if prerelease else None,
         commit=commit.lower() if commit else None,
         deployment_hint=deployment_hint,
-        brand=_normalize_brand(match.group("brand")),
+        brand=brand,
         parse_status=DorisVersionParseStatus.PARSED,
     )
 

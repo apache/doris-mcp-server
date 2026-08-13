@@ -2450,7 +2450,9 @@ def _component_version(
     # Brandless component builds (for example "4.0.6" or "4.0.6-abc1234")
     # carry no brand of their own; inherit the cluster brand observed in
     # @@version_comment so distribution provenance is not lost.
-    brand = default_brand or "doris"
+    if default_brand is None:
+        return parsed
+    brand = default_brand
     return parse_doris_version_comment(f"{brand} version {brand}-{raw}")
 
 

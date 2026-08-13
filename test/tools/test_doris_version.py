@@ -130,6 +130,25 @@ def test_registered_brand_alias_comments_parse_three_part_version(
     assert version.brand_verified is False
 
 
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "Doris version enterprisedb-4.0.5",
+        "enterprisedb version doris-4.0.5",
+    ],
+)
+def test_mismatched_leading_and_version_brands_fail_closed(
+    comment: str,
+    enterprise_brand_alias: str,
+) -> None:
+    version = parse_doris_version_comment(comment)
+
+    assert version.parse_status is DorisVersionParseStatus.UNKNOWN
+    assert version.is_parsed is False
+    assert version.brand is None
+    assert version.core is None
+
+
 def test_brand_alias_configuration_replaces_previous_set(
     enterprise_brand_alias: str,
 ) -> None:
