@@ -204,9 +204,20 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
         (
             'SHOW PROC "/current_queries"',
             (
-                "legacy_task_views_readable",
+                "current_queries_proc_readable",
                 "unified_task_progress_readable",
             ),
+        ),
+        (
+            (
+                "SELECT 1 AS active_query_probe "
+                "FROM information_schema.active_queries LIMIT 1"
+            ),
+            ("active_queries_view_readable",),
+        ),
+        (
+            "SHOW FULL PROCESSLIST",
+            ("processlist_readable",),
         ),
         (
             (
@@ -1849,6 +1860,16 @@ def _combine_query_evidence_probe(
 def _combine_cluster_evidence_probes(
     probes: Mapping[str, CapabilityProbeEvidence],
 ) -> dict[str, CapabilityProbeEvidence]:
+    active_tasks = _combine_any_runtime_probe(
+        "legacy_task_views_readable",
+        probes,
+        (
+            "current_queries_proc_readable",
+            "active_queries_view_readable",
+            "processlist_readable",
+        ),
+        supported_reason="LEGACY_TASK_VIEW_READABLE",
+    )
     audit = probes.get("metrics_history_readable")
     storage = probes.get("resource_storage_history_readable")
     full = (
@@ -1905,6 +1926,7 @@ def _combine_cluster_evidence_probes(
         reason_code="PARTITION_CREATION_HISTORY_ONLY",
     )
     return {
+        active_tasks.probe_id: active_tasks,
         full.probe_id: full,
         audit_only.probe_id: audit_only,
         storage_only.probe_id: storage_only,

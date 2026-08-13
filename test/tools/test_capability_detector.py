@@ -252,6 +252,36 @@ async def test_cluster_history_keeps_storage_fallback_without_audit_access() -> 
 
 
 @pytest.mark.asyncio
+async def test_cluster_active_tasks_accepts_read_only_query_view_fallback() -> None:
+    connection = _ProbeConnection()
+    proc_probe = 'SHOW PROC "/current_queries"'
+    connection.failures[proc_probe] = RuntimeError(
+        "Access denied; user lacks ADMIN privilege"
+    )
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.cluster",
+    )
+
+    cluster = await detector.detect_domain(base, "doris_cluster", None)
+
+    assert (
+        cluster.probe("current_queries_proc_readable").status
+        is not CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        cluster.probe("active_queries_view_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    active_tasks = cluster.probe("legacy_task_views_readable")
+    assert active_tasks.status is CapabilityProbeStatus.SUPPORTED
+    assert active_tasks.reason_code == "LEGACY_TASK_VIEW_READABLE"
+
+
+@pytest.mark.asyncio
 async def test_lakehouse_probes_derive_target_sensitive_advanced_facets() -> None:
     connection = _ProbeConnection()
     manager = _ProbeConnectionManager(connection)

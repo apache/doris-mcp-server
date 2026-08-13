@@ -65,6 +65,12 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Aligned `doris_cluster.list_active_tasks` capability detection with its
+  read-only execution fallbacks, so restricted Doris accounts can use the
+  `information_schema.active_queries` or process-list source when
+  `SHOW PROC \"/current_queries\"` is unavailable. The public input schema now
+  advertises only the query and compaction task types implemented by the
+  runtime.
 - Prevented MetricFlow sidecar processes from inheriting Doris credentials,
   bearer tokens, OAuth/JWT secrets, and unrelated MCP Server environment
   configuration by launching each provider with a fixed minimal environment.
