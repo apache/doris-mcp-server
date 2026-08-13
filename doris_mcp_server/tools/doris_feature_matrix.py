@@ -462,29 +462,19 @@ class PatchCertificationEvidence(ContractModel):
             *self.backend_version_comments,
         )
         for comment in comments:
-            if self.brand == "doris":
-                observed = parse_doris_version_comment(comment)
-                if (
-                    not observed.is_parsed
-                    or observed.core != target_literal
-                ):
-                    raise ValueError(
-                        "every certified FE and BE must report the Doris core "
-                        f"version {target_literal}"
-                    )
-            else:
-                # Distribution evidence is validated without relying on the
-                # runtime brand registry: the comment must carry the declared
-                # brand token and the certified three-part core version.
-                if not _distribution_comment_matches(
-                    comment,
-                    brand=self.brand,
-                    core=target_literal,
-                ):
-                    raise ValueError(
-                        f"every certified FE and BE must report the {self.brand} "
-                        f"core version {target_literal}"
-                    )
+            # Evidence validation is independent of the mutable runtime brand
+            # registry. Every comment must carry the exact declared brand and
+            # three-part core version before it can certify that distribution.
+            if not _certification_comment_matches(
+                comment,
+                brand=self.brand,
+                core=target_literal,
+            ):
+                display_brand = "Doris" if self.brand == "doris" else self.brand
+                raise ValueError(
+                    f"every certified FE and BE must report the {display_brand} "
+                    f"core version {target_literal}"
+                )
 
         expected_cases = {
             ("stdio", "hierarchical"),
@@ -990,7 +980,7 @@ def _ordered_unique(values: Iterable[object]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(value) for value in values))
 
 
-def _distribution_comment_matches(
+def _certification_comment_matches(
     comment: str,
     *,
     brand: str,
@@ -998,11 +988,16 @@ def _distribution_comment_matches(
 ) -> bool:
     """Match one evidence brand and core without the mutable alias registry."""
     escaped_brand = re.escape(brand)
+    leading_brand = (
+        rf"(?:apache\s+{escaped_brand}|{escaped_brand})"
+        if brand == "doris"
+        else escaped_brand
+    )
     escaped_core = re.escape(core)
     pattern = re.compile(
         rf"""
         (?<![A-Za-z0-9_])
-        {escaped_brand}
+        {leading_brand}
         (?:\s*,?\s*version)?
         (?:\s+{escaped_brand}-|\s*-\s*|\s+)
         {escaped_core}

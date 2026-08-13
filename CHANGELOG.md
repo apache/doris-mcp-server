@@ -69,6 +69,10 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Preserved fail-closed distribution provenance across version parsing,
+  brandless FE/BE component fallback, and certification evidence validation,
+  preventing unknown or mismatched brands from inheriting Apache Doris
+  certification.
 - Updated the locked Marshmallow and Virtualenv transitive dependencies to
   releases that address CVE-2025-68480 and symlink-based TOCTOU vulnerabilities
   in development-environment creation.
