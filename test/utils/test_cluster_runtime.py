@@ -179,6 +179,41 @@ async def test_list_cluster_nodes_normalizes_real_fe_and_be_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_active_tasks_falls_back_to_read_only_active_queries_view() -> None:
+    proc_statement = 'SHOW PROC "/current_queries"'
+    view_statement = "SELECT * FROM information_schema.active_queries"
+    runtime, manager, _ = _runtime(
+        rows={
+            view_statement: [
+                {
+                    "QUERY_ID": "query-1",
+                    "STATE": "RUNNING",
+                    "COMMAND": "Query",
+                }
+            ]
+        },
+        failures={proc_statement: RuntimeError(1105, "access denied")},
+    )
+
+    result = await runtime.list_active_tasks(
+        task_types=["query"],
+        states=None,
+        limit=10,
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["items"] == [
+        {
+            "query_id": "query-1",
+            "state": "RUNNING",
+            "command": "Query",
+            "task_type": "query",
+        }
+    ]
+    assert manager.calls == [proc_statement, view_statement]
+
+
+@pytest.mark.asyncio
 async def test_memory_stats_only_returns_observed_metrics() -> None:
     runtime, _, _ = _runtime()
 

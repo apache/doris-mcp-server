@@ -1415,10 +1415,13 @@ DOMAIN_DEFINITIONS = (
                 "doris_cluster",
                 "list_active_tasks",
                 "List active tasks",
-                "List visible query, load, schema-change, and compaction tasks.",
+                "List visible active query and compaction tasks.",
                 _input_schema(
                     {
-                        "task_types": _string_array("Task types to include."),
+                        "task_types": _string_array(
+                            "Task types to include.",
+                            enum=("query", "compaction"),
+                        ),
                         "states": _string_array("Task states to include."),
                         "limit": _integer("Maximum results.", minimum=1),
                     }
