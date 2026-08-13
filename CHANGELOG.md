@@ -69,6 +69,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Updated the locked Marshmallow and Virtualenv transitive dependencies to
+  releases that address CVE-2025-68480 and symlink-based TOCTOU vulnerabilities
+  in development-environment creation.
 - Required at least two recorded time buckets before exposing or executing
   resource-growth analysis, so readable-but-empty audit and partition metadata
   no longer masquerade as historical evidence.
