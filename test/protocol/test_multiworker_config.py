@@ -130,16 +130,22 @@ def test_capability_cache_controls_are_explicit_and_validated(
     monkeypatch.setenv("CAPABILITY_SNAPSHOT_TTL_SECONDS", "120")
     monkeypatch.setenv("CAPABILITY_PROBE_TIMEOUT_SECONDS", "7")
     monkeypatch.setenv("CAPABILITY_STALE_GRACE_SECONDS", "480")
+    monkeypatch.setenv("CAPABILITY_VERSION_BRAND_ALIASES", "enterprisedb, forkdb")
 
     configured = DorisConfig.from_env()
 
     assert configured.capability.snapshot_ttl_seconds == 120
     assert configured.capability.probe_timeout_seconds == 7
     assert configured.capability.stale_grace_seconds == 480
+    assert configured.capability.version_brand_aliases == [
+        "enterprisedb",
+        "forkdb",
+    ]
     assert configured.to_dict()["capability"] == {
         "snapshot_ttl_seconds": 120,
         "probe_timeout_seconds": 7,
         "stale_grace_seconds": 480,
+        "version_brand_aliases": ["enterprisedb", "forkdb"],
     }
     assert configured.validate() == []
 
@@ -164,10 +170,30 @@ def test_capability_cache_controls_are_explicit_and_validated(
     from_file.capability.snapshot_ttl_seconds = 0
     from_file.capability.probe_timeout_seconds = 61
     from_file.capability.stale_grace_seconds = -1
+    from_file.capability.version_brand_aliases = ["bad-token!"]
     errors = from_file.validate()
     assert "Capability snapshot TTL must be in the range 1-86400 seconds" in errors
     assert "Capability probe timeout must be in the range 1-60 seconds" in errors
     assert "Capability stale grace must be in the range 0-86400 seconds" in errors
+    assert "Invalid Doris version brand alias: 'bad-token!'" in errors
+
+    # Reserved tokens and non-list JSON values fail the same contract that
+    # configure_version_brands() enforces at runtime.
+    from_file.capability.snapshot_ttl_seconds = 30
+    from_file.capability.probe_timeout_seconds = 3
+    from_file.capability.stale_grace_seconds = 60
+    from_file.capability.version_brand_aliases = ["version"]
+    assert "Invalid Doris version brand alias: 'version'" in from_file.validate()
+    from_file.capability.version_brand_aliases = ["apache"]
+    assert "Invalid Doris version brand alias: 'apache'" in from_file.validate()
+    from_file.capability.version_brand_aliases = ["enterprisedb", 42]
+    assert any(
+        "must be strings" in error for error in from_file.validate()
+    )
+    from_file.capability.version_brand_aliases = "enterprisedb"
+    assert any(
+        "must be a list of strings" in error for error in from_file.validate()
+    )
 
 
 def test_governance_runtime_controls_load_serialize_and_validate(

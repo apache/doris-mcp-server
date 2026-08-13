@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
@@ -43,7 +44,19 @@ from doris_mcp_server.tools.doris_feature_matrix import (
     VersionCertificationStatus,
     matching_version_ranges,
 )
-from doris_mcp_server.tools.doris_version import parse_doris_version_comment
+from doris_mcp_server.tools.doris_version import (
+    configure_version_brands,
+    parse_doris_version_comment,
+)
+
+
+@pytest.fixture
+def enterprise_brand_alias() -> Iterator[str]:
+    configure_version_brands(("enterprisedb",))
+    try:
+        yield "enterprisedb"
+    finally:
+        configure_version_brands(())
 
 
 def _vector(
@@ -100,6 +113,26 @@ def _certification_evidence(
         domain_names=tuple(EXPECTED_DOMAIN_CHILDREN),
         child_contract_count=55,
         evidence_sha256="a" * 64,
+        verified_on="2026-08-01",
+    )
+
+
+def _distribution_certification_evidence(
+    brand: str,
+    version: str = "4.0.5",
+) -> PatchCertificationEvidence:
+    return PatchCertificationEvidence(
+        certification_id=f"{brand}_{version.replace('.', '_')}_linux_amd64",
+        version=version,
+        brand=brand,
+        master_fe_version_comment=f"{brand} version {version}",
+        backend_version_comments=(f"{brand}-{version}-abc1234",),
+        platform="linux_amd64",
+        deployment_mode="unknown",
+        cases=_certification_cases(),
+        domain_names=tuple(EXPECTED_DOMAIN_CHILDREN),
+        child_contract_count=55,
+        evidence_sha256="b" * 64,
         verified_on="2026-08-01",
     )
 
@@ -405,6 +438,133 @@ def test_patch_certification_fails_closed_for_unknown_or_mixed_components() -> N
     assert mixed.status is VersionCertificationStatus.UNKNOWN
     assert mixed.reason_code == "PATCH_CERTIFICATION_MIXED_COMPONENT_VERSIONS"
     assert mixed.uniform_observed_version is None
+
+
+def test_distribution_brand_does_not_inherit_apache_certification(
+    enterprise_brand_alias: str,
+) -> None:
+    versions = DorisClusterVersionVector.from_comments(
+        master_fe=f"{enterprise_brand_alias} version 4.0.5",
+        backends=(f"{enterprise_brand_alias}-4.0.5-abc1234",),
+    )
+
+    feature = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=versions,
+    )
+    assert feature.compatible is True
+    assert feature.reason_code == "VERSION_RANGE_MATCHED"
+    assert feature.certification_status is (
+        VersionCertificationStatus.TARGET_UNCERTIFIED
+    )
+    assert feature.certified is False
+
+    report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(versions)
+    assert report.uniform_observed_version == "4.0.5"
+    assert report.status is VersionCertificationStatus.TARGET_UNCERTIFIED
+    assert report.reason_code == "PATCH_CERTIFICATION_DISTRIBUTION_UNVERIFIED"
+    assert report.targeted is True
+    assert report.certified is False
+    assert report.evidence_ids == ()
+
+
+def test_mixed_brand_components_are_not_apache_certified(
+    enterprise_brand_alias: str,
+) -> None:
+    versions = DorisClusterVersionVector.from_comments(
+        master_fe="Doris version doris-4.0.5",
+        backends=(f"{enterprise_brand_alias}-4.0.5-abc1234",),
+    )
+
+    report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(versions)
+    assert report.status is VersionCertificationStatus.TARGET_UNCERTIFIED
+    assert report.reason_code == "PATCH_CERTIFICATION_DISTRIBUTION_UNVERIFIED"
+    assert report.certified is False
+
+    # Feature-level certification also checks provenance across the whole
+    # version vector, not just the scope-effective component.
+    feature = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=versions,
+    )
+    assert feature.certification_status is (
+        VersionCertificationStatus.TARGET_UNCERTIFIED
+    )
+    assert feature.certified is False
+
+
+def test_distribution_evidence_certifies_only_its_own_brand(
+    enterprise_brand_alias: str,
+) -> None:
+    matrix = DorisPatchCertificationMatrix(
+        minimum_supported_version="2.0.0",
+        target_versions=CERTIFICATION_TARGET_VERSIONS,
+        evidence=(
+            _certification_evidence("4.0.5"),
+            _distribution_certification_evidence(enterprise_brand_alias),
+        ),
+    )
+
+    distribution = matrix.evaluate(
+        DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} version 4.0.5",
+            backends=(f"{enterprise_brand_alias}-4.0.5-abc1234",),
+        )
+    )
+    assert distribution.status is VersionCertificationStatus.CERTIFIED
+    assert distribution.certified is True
+    assert distribution.evidence_ids == ("enterprisedb_4_0_5_linux_amd64",)
+
+    apache = matrix.evaluate(_vector("4.0.5"))
+    assert apache.status is VersionCertificationStatus.CERTIFIED
+    assert apache.evidence_ids == ("doris_4_1_2_linux_amd64",)
+
+    apache_only = DorisPatchCertificationMatrix(
+        minimum_supported_version="2.0.0",
+        target_versions=CERTIFICATION_TARGET_VERSIONS,
+        evidence=(_certification_evidence("4.0.5"),),
+    )
+    cross_brand = apache_only.evaluate(
+        DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} version 4.0.5",
+            backends=(f"{enterprise_brand_alias}-4.0.5-abc1234",),
+        )
+    )
+    assert cross_brand.status is VersionCertificationStatus.TARGET_UNCERTIFIED
+    assert cross_brand.certified is False
+
+
+def test_distribution_evidence_validates_comments_without_brand_registry() -> None:
+    evidence = _distribution_certification_evidence("enterprisedb")
+    assert evidence.brand == "enterprisedb"
+
+    payload = evidence.model_dump(mode="python")
+    payload["backend_version_comments"] = ("enterprisedb-4.1.1-abc1234",)
+    with pytest.raises(
+        ValidationError,
+        match="enterprisedb core version 4.0.5",
+    ):
+        PatchCertificationEvidence.model_validate(payload)
+
+    payload = evidence.model_dump(mode="python")
+    payload["brand"] = "EnterpriseDB"
+    with pytest.raises(ValidationError, match="canonical lowercase brand token"):
+        PatchCertificationEvidence.model_validate(payload)
+
+    for invalid_comment in (
+        "notenterprisedb version 4.0.5",
+        "enterprisedb version 14.0.50",
+        "notenterprisedb-14.0.50-abc1234",
+    ):
+        payload = evidence.model_dump(mode="python")
+        payload["backend_version_comments"] = (invalid_comment,)
+        with pytest.raises(
+            ValidationError,
+            match="enterprisedb core version 4.0.5",
+        ):
+            PatchCertificationEvidence.model_validate(payload)
 
 
 def test_patch_evidence_rejects_incomplete_host_or_component_proof() -> None:
@@ -819,6 +979,21 @@ def test_an_unparseable_component_version_fails_closed() -> None:
     )
 
 
+def test_unparseable_observed_component_prevents_feature_certification() -> None:
+    result = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe="Doris version doris-4.0.5",
+            backends=("unknown-build",),
+        ),
+    )
+
+    assert result.compatible is True
+    assert result.certification_status is VersionCertificationStatus.TARGET_UNCERTIFIED
+    assert result.certified is False
+
+
 def test_version_below_2_0_0_is_rejected_before_child_evaluation() -> None:
     result = DORIS_FEATURE_MATRIX.evaluate(
         domain="doris_catalog",
@@ -829,6 +1004,84 @@ def test_version_below_2_0_0_is_rejected_before_child_evaluation() -> None:
     assert result.compatible is False
     assert result.reason_code == "DORIS_VERSION_BELOW_MINIMUM"
     assert result.minimum_supported_version == "2.0.0"
+
+
+def test_enterprise_brand_versions_flow_through_every_version_gate(
+    enterprise_brand_alias: str,
+) -> None:
+    below_minimum = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} version 1.2.8",
+        ),
+    )
+    assert below_minimum.compatible is False
+    assert below_minimum.reason_code == "DORIS_VERSION_BELOW_MINIMUM"
+
+    base = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} version 2.1.5",
+        ),
+    )
+    assert base.compatible is True
+    assert base.reason_code == "VERSION_RANGE_MATCHED"
+
+    # Patch ranges stay enforced on distribution brands: the native lineage
+    # variant requires >=4.0.6, so a 2.1.5 distribution cluster falls back
+    # to the audit variant instead of exposing the native one.
+    native_lineage = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_governance",
+        child_name="trace_column_lineage",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} version 2.1.5",
+        ),
+        variant_name="native_lineage_events",
+    )
+    assert native_lineage.compatible is False
+    assert native_lineage.reason_code == "VERSION_RANGE_NOT_MATCHED"
+
+    audit_lineage = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_governance",
+        child_name="trace_column_lineage",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} version 2.1.5",
+        ),
+        variant_name="audit_sql_inference_primary",
+    )
+    assert audit_lineage.compatible is True
+
+    # Mixed-component evaluation uses the same conservative minimum for
+    # distribution brands.
+    mixed = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_cluster",
+        child_name="get_cache_status",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} version 4.1.3",
+            backends=(f"{enterprise_brand_alias}-4.0.5-abc1234",),
+        ),
+        variant_name="advanced_cache_types",
+    )
+    assert mixed.compatible is False
+    assert mixed.reason_code == "VERSION_RANGE_NOT_MATCHED"
+    assert mixed.effective_version == "4.0.5"
+
+
+def test_unrecognized_distribution_comment_format_still_fails_closed(
+    enterprise_brand_alias: str,
+) -> None:
+    result = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=DorisClusterVersionVector.from_comments(
+            master_fe=f"{enterprise_brand_alias} pro 2.1.5",
+        ),
+    )
+
+    assert result.compatible is False
+    assert result.reason_code == "DORIS_VERSION_UNKNOWN"
 
 
 def test_target_patch_is_distinct_from_certified_patch() -> None:
