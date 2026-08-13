@@ -244,17 +244,6 @@ _DOMAIN_PROBES: Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
             "SHOW COMPUTE GROUPS",
             ("compute_group_metadata_readable",),
         ),
-        (
-            ("SELECT `time` FROM internal.__internal_schema.audit_log LIMIT 1"),
-            ("metrics_history_readable",),
-        ),
-        (
-            (
-                "SELECT CREATE_TIME, DATA_LENGTH, INDEX_LENGTH "
-                "FROM information_schema.partitions LIMIT 1"
-            ),
-            ("resource_storage_history_readable",),
-        ),
     ),
     "doris_pipeline": (
         (
@@ -516,6 +505,9 @@ class DorisCapabilityDetector:
                         probes
                     )
                 elif domain_name == "doris_cluster":
+                    probes.update(
+                        await self._probe_cluster_history_sources(auth_context)
+                    )
                     probes.update(await self._safe_probe_cluster_services(auth_context))
                     probes.update(_combine_cluster_evidence_probes(probes))
                 elif domain_name == "doris_pipeline":
@@ -752,6 +744,76 @@ class DorisCapabilityDetector:
             evidence_sources=profile.evidence_sources,
         )
         return probes
+
+    async def _probe_cluster_history_sources(
+        self,
+        auth_context: Any | None,
+    ) -> dict[str, CapabilityProbeEvidence]:
+        """Require recorded history, not merely readable metadata objects."""
+        contracts = (
+            (
+                "metrics_history_readable",
+                "SELECT COUNT(DISTINCT DATE(`time`)) AS evidence_bucket_count "
+                "FROM internal.__internal_schema.audit_log "
+                "WHERE `time` >= DATE_SUB(NOW(), INTERVAL 3650 DAY)",
+                "AUDIT_HISTORY_RECORDED",
+                "AUDIT_HISTORY_INSUFFICIENT",
+            ),
+            (
+                "resource_storage_history_readable",
+                "SELECT COUNT(DISTINCT DATE(CREATE_TIME)) "
+                "AS evidence_bucket_count "
+                "FROM information_schema.partitions "
+                "WHERE CREATE_TIME >= DATE_SUB(NOW(), INTERVAL 3650 DAY)",
+                "PARTITION_CREATION_HISTORY_RECORDED",
+                "PARTITION_CREATION_HISTORY_INSUFFICIENT",
+            ),
+        )
+        evidence: dict[str, CapabilityProbeEvidence] = {}
+        route = self.route_identity(auth_context)
+        for index, (
+            probe_id,
+            statement,
+            supported_reason,
+            insufficient_reason,
+        ) in enumerate(contracts):
+            session_id = (
+                f"capability-cluster:history:{index}:"
+                f"{route.fingerprint[:12]}"
+            )
+            async with (
+                self._connection_manager.get_connection_context_for_auth_context(
+                    session_id,
+                    auth_context,
+                ) as connection
+            ):
+                rows, probe = await self._probe_rows(
+                    connection,
+                    statement,
+                    probe_id,
+                )
+            if probe.status is CapabilityProbeStatus.SUPPORTED:
+                bucket_count = _nonnegative_int(
+                    _row_value(rows[0], "evidence_bucket_count")
+                    if rows
+                    else None
+                )
+                probe = CapabilityProbeEvidence(
+                    probe_id=probe_id,
+                    status=(
+                        CapabilityProbeStatus.SUPPORTED
+                        if bucket_count >= 2
+                        else CapabilityProbeStatus.UNKNOWN
+                    ),
+                    reason_code=(
+                        supported_reason
+                        if bucket_count >= 2
+                        else insufficient_reason
+                    ),
+                    evidence_sources=("recorded_history_probe",),
+                )
+            evidence[probe_id] = probe
+        return evidence
 
     async def _probe_search_match_syntax(
         self,
@@ -1886,6 +1948,16 @@ def _combine_cluster_evidence_probes(
             evidence_sources=("runtime_probe",),
         )
     )
+    if audit is not None and storage is not None and not any(
+        source.status is CapabilityProbeStatus.SUPPORTED
+        for source in (audit, storage)
+    ):
+        full = CapabilityProbeEvidence(
+            probe_id=full.probe_id,
+            status=full.status,
+            reason_code="RESOURCE_HISTORY_UNAVAILABLE",
+            evidence_sources=full.evidence_sources,
+        )
 
     def partial_source(
         probe_id: str,
@@ -2347,6 +2419,21 @@ def _row_value(
         if name.lower() in lowered:
             return lowered[name.lower()]
     return None
+
+
+def _nonnegative_int(value: Any | None) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return 0
+    else:
+        return 0
+    return max(0, parsed)
 
 
 def _component_version(value: Any) -> DorisVersion:

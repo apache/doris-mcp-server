@@ -44,6 +44,16 @@ _SEARCH_TARGET_DISCOVERY_SQL = (
     "AND TABLE_SCHEMA NOT IN ('information_schema', 'mysql') "
     "ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION LIMIT 8"
 )
+_AUDIT_HISTORY_PROBE_SQL = (
+    "SELECT COUNT(DISTINCT DATE(`time`)) AS evidence_bucket_count "
+    "FROM internal.__internal_schema.audit_log "
+    "WHERE `time` >= DATE_SUB(NOW(), INTERVAL 3650 DAY)"
+)
+_STORAGE_HISTORY_PROBE_SQL = (
+    "SELECT COUNT(DISTINCT DATE(CREATE_TIME)) AS evidence_bucket_count "
+    "FROM information_schema.partitions "
+    "WHERE CREATE_TIME >= DATE_SUB(NOW(), INTERVAL 3650 DAY)"
+)
 
 
 class _ProbeConnection:
@@ -113,6 +123,8 @@ class _ProbeConnection:
                     "DATA_LENGTH": 8,
                 }
             ],
+            _AUDIT_HISTORY_PROBE_SQL: [{"evidence_bucket_count": 3}],
+            _STORAGE_HISTORY_PROBE_SQL: [{"evidence_bucket_count": 2}],
         }
         return SimpleNamespace(data=self.row_overrides.get(sql, rows.get(sql, [])))
 
@@ -222,10 +234,7 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
 @pytest.mark.asyncio
 async def test_cluster_history_keeps_storage_fallback_without_audit_access() -> None:
     connection = _ProbeConnection()
-    audit_probe = (
-        "SELECT `time` FROM internal.__internal_schema.audit_log LIMIT 1"
-    )
-    connection.failures[audit_probe] = RuntimeError(
+    connection.failures[_AUDIT_HISTORY_PROBE_SQL] = RuntimeError(
         "Access denied; user lacks SELECT privilege"
     )
     manager = _ProbeConnectionManager(connection)
@@ -249,6 +258,43 @@ async def test_cluster_history_keeps_storage_fallback_without_audit_access() -> 
     storage = cluster.probe("resource_growth_storage_history_readable")
     assert storage.status is CapabilityProbeStatus.DEGRADED
     assert storage.reason_code == "PARTITION_CREATION_HISTORY_ONLY"
+
+
+@pytest.mark.asyncio
+async def test_cluster_history_requires_two_recorded_time_buckets() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides[_AUDIT_HISTORY_PROBE_SQL] = [
+        {"evidence_bucket_count": 1}
+    ]
+    connection.row_overrides[_STORAGE_HISTORY_PROBE_SQL] = [
+        {"evidence_bucket_count": 0}
+    ]
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.cluster",
+    )
+
+    cluster = await detector.detect_domain(base, "doris_cluster", None)
+
+    audit = cluster.probe("metrics_history_readable")
+    storage = cluster.probe("resource_storage_history_readable")
+    assert audit is not None
+    assert audit.status is CapabilityProbeStatus.UNKNOWN
+    assert audit.reason_code == "AUDIT_HISTORY_INSUFFICIENT"
+    assert storage is not None
+    assert storage.status is CapabilityProbeStatus.UNKNOWN
+    assert storage.reason_code == "PARTITION_CREATION_HISTORY_INSUFFICIENT"
+    assert (
+        cluster.probe("resource_history_all_sources_readable").status
+        is CapabilityProbeStatus.UNKNOWN
+    )
+    assert (
+        cluster.probe("resource_history_all_sources_readable").reason_code
+        == "RESOURCE_HISTORY_UNAVAILABLE"
+    )
 
 
 @pytest.mark.asyncio

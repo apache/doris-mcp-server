@@ -346,3 +346,33 @@ async def test_resource_growth_rejects_unknown_resource_before_sql() -> None:
 
     assert error.value.reason_code == "CLUSTER_ARGUMENT_INVALID"
     assert manager.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [{"bucket": "2026-07-31", "value": 15}],
+    ],
+)
+async def test_resource_growth_rejects_insufficient_recorded_history(
+    rows: list[dict[str, Any]],
+) -> None:
+    query_sql = (
+        "SELECT DATE(`time`) AS bucket, COUNT(*) AS value "
+        "FROM internal.__internal_schema.audit_log "
+        "WHERE `time` >= DATE_SUB(NOW(), INTERVAL %s DAY) "
+        "GROUP BY bucket ORDER BY bucket"
+    )
+    runtime, manager, _ = _runtime(rows={query_sql: rows})
+
+    with pytest.raises(ClusterRuntimeFailure) as error:
+        await runtime.analyze_resource_growth(
+            resource="query_volume",
+            window_days=30,
+            granularity="day",
+        )
+
+    assert error.value.reason_code == "RESOURCE_HISTORY_UNAVAILABLE"
+    assert manager.calls == [query_sql]

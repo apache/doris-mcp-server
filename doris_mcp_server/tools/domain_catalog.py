@@ -1513,7 +1513,8 @@ DOMAIN_DEFINITIONS = (
                 "analyze_resource_growth",
                 "Analyze resource growth",
                 "Analyze recorded resource-growth evidence without inventing "
-                "missing history. For an unqualified cluster-history request, "
+                "missing history. A series requires at least two recorded time "
+                "buckets. For an unqualified cluster-history request, "
                 "omit resource so every currently usable recorded series is "
                 "attempted and partial evidence is preserved.",
                 _input_schema(
