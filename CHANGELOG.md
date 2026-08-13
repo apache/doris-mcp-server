@@ -65,6 +65,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Required at least two recorded time buckets before exposing or executing
+  resource-growth analysis, so readable-but-empty audit and partition metadata
+  no longer masquerade as historical evidence.
 - Aligned `doris_cluster.list_active_tasks` capability detection with its
   read-only execution fallbacks, so restricted Doris accounts can use the
   `information_schema.active_queries` or process-list source when

@@ -749,7 +749,22 @@ class DorisClusterRuntime:
                     "value": _number(_row_lookup(row, "value")),
                 }
                 for row in rows
+                if _row_lookup(row, "bucket") is not None
             ]
+            if len(points) < 2:
+                warnings.append(
+                    f"{resource_name} history has fewer than two recorded "
+                    "time buckets."
+                )
+                evidence.append(
+                    {
+                        "resource": resource_name,
+                        "success": False,
+                        "reason_code": "RESOURCE_HISTORY_INSUFFICIENT",
+                        "points": len(points),
+                    }
+                )
+                continue
             series[resource_name] = points
             evidence.append(
                 {
