@@ -39,6 +39,10 @@ under **Unreleased** until a new version is selected and published.
 
 ### Changed
 
+- Refreshed the locked authentication and development toolchain by upgrading
+  Authlib to 1.6.12, Pytest to 9.0.3, and Black to 26.3.1, with the complete
+  quality, test, protocol-conformance, and wheel-smoke gates rerun on the
+  combined dependency graph.
 - Expanded the stable public contract from 47 to 55 children while retaining
   the same eight top-level domains and progressive-disclosure budgets.
 - Lowered the project-wide Doris baseline from 3.0.0 to 2.0.0 and moved
