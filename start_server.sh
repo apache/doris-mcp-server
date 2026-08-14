@@ -46,8 +46,10 @@ find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find . -type f -name "*.pyc" -delete 2>/dev/null || true
 echo -e "${CYAN}Cleaning temporary files...${NC}"
 rm -rf .pytest_cache 2>/dev/null || true
-echo -e "${CYAN}Cleaning log files...${NC}"
-find ./logs -type f -name "*.log" -delete 2>/dev/null || true
+
+# NOTE: Old log files are intentionally NOT deleted on startup so that logs
+# from a previous run are preserved. The server's LogCleanupManager handles
+# aged logs on its own schedule (see doris_mcp_server/utils/logger.py).
 
 # Create necessary directories
 mkdir -p logs

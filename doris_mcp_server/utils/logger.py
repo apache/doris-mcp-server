@@ -29,6 +29,7 @@ import logging.handlers
 import os
 import sys
 import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -48,13 +49,20 @@ class TimestampedFormatter(logging.Formatter):
         style: Literal["%", "{", "$"] = "%",
     ) -> None:
         if fmt is None:
-            fmt = "%(asctime)s.%(msecs)03d %(level_aligned)s %(name)s:%(lineno)d - %(message)s"
+            fmt = "%(asctime)s.%(msecs)03d %(level_aligned)s [user=%(user)s token=%(token_id)s ip=%(client_ip)s] %(name)s:%(lineno)d - %(message)s"
         if datefmt is None:
             datefmt = "%Y-%m-%d %H:%M:%S"
         super().__init__(fmt, datefmt, style)
 
     def format(self, record: logging.LogRecord) -> str:
         """Format log record with enhanced information and proper alignment"""
+        # Ensure request-auth fields always resolve. RequestAuthContextFilter
+        # normally sets them on every record; setdefault is a safety net for
+        # records that somehow bypassed the filter, so format() never KeyErrors.
+        record.__dict__.setdefault("user", "-")
+        record.__dict__.setdefault("token_id", "-")
+        record.__dict__.setdefault("client_ip", "-")
+
         # Add process info if available
         if hasattr(record, 'process') and record.process:
             record.process_info = f"[PID:{record.process}]"
@@ -75,6 +83,103 @@ class TimestampedFormatter(logging.Formatter):
         record.level_aligned = f"[{level_name}]{' ' * padding}"
 
         return super().format(record)
+
+
+class RequestAuthContextFilter(logging.Filter):
+    """Inject the current request's user identity into every log record.
+
+    Reads ``AuthContext`` from the ``mcp_auth_context_var`` ContextVar (set
+    per-request by the auth middleware / HTTP entrypoints) and exposes
+    ``user`` / ``token_id`` / ``client_ip`` on the record so the formatter
+    can include them. Falls back to '-' when no request is in flight
+    (stdio mode, startup logs, background threads).
+
+    Attach to a Handler (not a Logger) so it runs for records emitted by any
+    submodule. ``Filter.filter()`` runs before ``Formatter.format()``, so the
+    ``%(user)s`` / ``%(token_id)s`` / ``%(client_ip)s`` placeholders resolve.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            # Lazy import avoids a circular dependency (security imports
+            # logger helpers for its own logging).
+            from .security import mcp_auth_context_var
+
+            ctx = mcp_auth_context_var.get()
+        except Exception:
+            ctx = None
+        record.user = getattr(ctx, "user_id", "") or "-"
+        record.token_id = getattr(ctx, "token_id", "") or "-"
+        record.client_ip = getattr(ctx, "client_ip", "") or "-"
+        return True
+
+
+class TimestampRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """Size-based rotating handler whose backups are stamped with the rollover time.
+
+    Rotates by file size exactly like ``RotatingFileHandler``, but instead of
+    producing ``file.log.1``, ``file.log.2`` ... it renames the current file to
+    ``file_<YYYYmmdd_HHMMSS>.log`` on each rollover and keeps only the most
+    recent ``backupCount`` backups (oldest-by-mtime are pruned).
+    """
+
+    _TS_FMT = "%Y%m%d_%H%M%S"
+
+    def _rotated_path(self, ts: str) -> str:
+        base = self.baseFilename
+        if base.endswith(".log"):
+            return f"{base[:-len('.log')]}_{ts}.log"
+        return f"{base}_{ts}"
+
+    def _backup_files(self) -> list[str]:
+        """List rotated backup files owned by this handler (excludes the live file)."""
+        base = self.baseFilename
+        parent = os.path.dirname(base) or "."
+        if base.endswith(".log"):
+            stem = os.path.basename(base[:-len(".log")])
+        else:
+            stem = os.path.basename(base)
+        prefix = f"{stem}_"
+        files: list[str] = []
+        try:
+            for name in os.listdir(parent):
+                if name.startswith(prefix) and name.endswith(".log"):
+                    files.append(os.path.join(parent, name))
+        except OSError:
+            return []
+        return files
+
+    def doRollover(self) -> None:
+        """Rotate the current log to a timestamped backup, pruning old backups."""
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        ts = datetime.now().strftime(self._TS_FMT)
+        rotated = self._rotated_path(ts)
+        # Disambiguate same-second rollovers with a millisecond suffix
+        if os.path.exists(rotated):
+            ms = int(time.time() * 1000) % 1000
+            rotated = self._rotated_path(f"{ts}_{ms:03d}")
+
+        if os.path.exists(self.baseFilename):
+            try:
+                os.rename(self.baseFilename, rotated)
+            except OSError:
+                pass
+
+        # Prune oldest backups beyond backupCount (keep newest by mtime)
+        if self.backupCount > 0:
+            backups = self._backup_files()
+            backups.sort(key=lambda p: os.path.getmtime(p))
+            for stale in backups[:-self.backupCount]:
+                try:
+                    os.remove(stale)
+                except OSError:
+                    pass
+
+        if not self.delay:
+            self.stream = self._open()
 
 
 class LevelBasedFileHandler(logging.Handler):
@@ -109,7 +214,7 @@ class LevelBasedFileHandler(logging.Handler):
 
         for level, filename in level_files.items():
             file_path = self.log_dir / f"{self.base_name}_{filename}"
-            handler = logging.handlers.RotatingFileHandler(
+            handler = TimestampRotatingFileHandler(
                 file_path,
                 maxBytes=self.max_bytes,
                 backupCount=self.backup_count,
@@ -138,7 +243,8 @@ class LevelBasedFileHandler(logging.Handler):
 class LogCleanupManager:
     """Log file cleanup manager for automatic maintenance"""
 
-    def __init__(self, log_dir: str, max_age_days: int = 30, cleanup_interval_hours: int = 24):
+    def __init__(self, log_dir: str, max_age_days: int = 30, cleanup_interval_hours: int = 24,
+                 cleanup_at_startup: bool = False):
         """
         Initialize log cleanup manager.
 
@@ -146,10 +252,15 @@ class LogCleanupManager:
             log_dir: Directory containing log files
             max_age_days: Maximum age of log files in days (default: 30 days)
             cleanup_interval_hours: Cleanup interval in hours (default: 24 hours)
+            cleanup_at_startup: If True, run a cleanup pass immediately when the
+                scheduler starts. When False (default) the first cleanup waits one
+                full interval, so logs left from a previous run are not purged on
+                boot.
         """
         self.log_dir = Path(log_dir)
         self.max_age_days = max_age_days
         self.cleanup_interval_hours = cleanup_interval_hours
+        self.cleanup_at_startup = cleanup_at_startup
         self.cleanup_thread: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.logger: logging.Logger | None = None
@@ -178,10 +289,21 @@ class LogCleanupManager:
                 self.logger.info("Log cleanup scheduler stopped")
 
     def _cleanup_loop(self) -> None:
-        """Background loop for periodic cleanup"""
+        """Background loop for periodic cleanup.
+
+        When ``cleanup_at_startup`` is False (the default), the loop waits one
+        full interval before its first cleanup pass, so logs from a previous
+        run are not purged the moment the server boots.
+        """
+        first_pass = True
         while not self.stop_event.is_set():
             try:
-                self.cleanup_old_logs()
+                # Skip the immediate cleanup on the very first pass unless
+                # cleanup_at_startup was explicitly requested.
+                if first_pass and not self.cleanup_at_startup:
+                    first_pass = False
+                else:
+                    self.cleanup_old_logs()
                 # Sleep for the specified interval, but check stop event every 60 seconds
                 for _ in range(self.cleanup_interval_hours * 60):  # Convert hours to minutes
                     if self.stop_event.wait(60):  # Wait 60 seconds or until stop event
@@ -300,6 +422,7 @@ class DorisLoggerManager:
     def setup_logging(self,
                      level: str = "INFO",
                      log_dir: str = "logs",
+                     base_name: str = "doris_mcp_server",
                      enable_console: bool = True,
                      enable_file: bool = True,
                      enable_audit: bool = True,
@@ -315,6 +438,8 @@ class DorisLoggerManager:
         Args:
             level: Base logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
             log_dir: Directory for log files
+            base_name: Base name for log files (e.g. "doris_mcp_server_3000"
+                when running multiple instances on different ports)
             enable_console: Enable console output
             enable_file: Enable file logging
             enable_audit: Enable audit logging
@@ -359,8 +484,9 @@ class DorisLoggerManager:
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(getattr(logging, level.upper()))
             console_handler.addFilter(_sensitive_data_filter)
+            console_handler.addFilter(RequestAuthContextFilter())
             console_formatter = TimestampedFormatter(
-                fmt="%(asctime)s.%(msecs)03d %(level_aligned)s %(name)s - %(message)s",
+                fmt="%(asctime)s.%(msecs)03d %(level_aligned)s [user=%(user)s token=%(token_id)s ip=%(client_ip)s] %(name)s - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S"
             )
             console_handler.setFormatter(console_formatter)
@@ -370,18 +496,21 @@ class DorisLoggerManager:
         if enable_file:
             level_handler = LevelBasedFileHandler(
                 log_dir=str(self.log_dir),
-                base_name="doris_mcp_server",
+                base_name=base_name,
                 max_bytes=max_file_size,
                 backup_count=backup_count
             )
             level_handler.setLevel(logging.DEBUG)  # Accept all levels
             level_handler.addFilter(_sensitive_data_filter)
+            # Attach to the composite handler (not the per-level sub-handlers):
+            # sub-handlers receive records via emit(), which bypasses their filters.
+            level_handler.addFilter(RequestAuthContextFilter())
             handlers.append(level_handler)
 
         # Combined application log (all levels in one file)
         if enable_file:
-            app_log_file = self.log_dir / "doris_mcp_server_all.log"
-            app_handler = logging.handlers.RotatingFileHandler(
+            app_log_file = self.log_dir / f"{base_name}_all.log"
+            app_handler = TimestampRotatingFileHandler(
                 app_log_file,
                 maxBytes=max_file_size,
                 backupCount=backup_count,
@@ -395,7 +524,7 @@ class DorisLoggerManager:
 
         # Audit logger (separate from main logging)
         if enable_audit:
-            audit_file_path = audit_file or str(self.log_dir / "doris_mcp_server_audit.log")
+            audit_file_path = audit_file or str(self.log_dir / f"{base_name}_audit.log")
             audit_logger = logging.getLogger("audit")
             audit_logger.setLevel(logging.INFO)
 
@@ -403,15 +532,16 @@ class DorisLoggerManager:
             for handler in audit_logger.handlers[:]:
                 audit_logger.removeHandler(handler)
 
-            audit_handler = logging.handlers.RotatingFileHandler(
+            audit_handler = TimestampRotatingFileHandler(
                 audit_file_path,
                 maxBytes=max_file_size,
                 backupCount=backup_count,
                 encoding='utf-8'
             )
             audit_handler.addFilter(_sensitive_data_filter)
+            audit_handler.addFilter(RequestAuthContextFilter())
             audit_formatter = TimestampedFormatter(
-                fmt="%(asctime)s.%(msecs)03d [AUDIT] %(name)s - %(message)s",
+                fmt="%(asctime)s.%(msecs)03d [AUDIT] [user=%(user)s token=%(token_id)s ip=%(client_ip)s] %(name)s - %(message)s",
                 datefmt="%Y-%m-%d %H:%M:%S"
             )
             audit_handler.setFormatter(audit_formatter)
@@ -563,6 +693,7 @@ _logger_manager = DorisLoggerManager()
 
 def setup_logging(level: str = "INFO",
                  log_dir: str = "logs",
+                 base_name: str = "doris_mcp_server",
                  enable_console: bool = True,
                  enable_file: bool = True,
                  enable_audit: bool = True,
@@ -578,6 +709,7 @@ def setup_logging(level: str = "INFO",
     Args:
         level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
         log_dir: Directory for log files
+        base_name: Base name for log files (e.g. "doris_mcp_server_3000")
         enable_console: Enable console output
         enable_file: Enable file logging
         enable_audit: Enable audit logging
@@ -591,6 +723,7 @@ def setup_logging(level: str = "INFO",
     _logger_manager.setup_logging(
         level=level,
         log_dir=log_dir,
+        base_name=base_name,
         enable_console=enable_console,
         enable_file=enable_file,
         enable_audit=enable_audit,

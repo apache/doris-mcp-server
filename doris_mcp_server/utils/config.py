@@ -3177,10 +3177,19 @@ class ConfigManager:
             not sys.stdout.isatty()  # Not a terminal (likely piped/redirected)
         )
 
+        # Include the listening port in log filenames so multi-instance
+        # deployments (multiple HTTP servers on different ports) do not collide.
+        # In stdio mode there is no listener, so keep the plain base name.
+        if self.config.transport == "http" and getattr(self.config, "server_port", None):
+            log_base_name = f"doris_mcp_server_{self.config.server_port}"
+        else:
+            log_base_name = "doris_mcp_server"
+
         # Setup enhanced logging with cleanup functionality
         setup_logging(
             level=self.config.logging.level,
             log_dir=log_dir,
+            base_name=log_base_name,
             enable_console=not is_stdio_mode,  # Disable console logging in stdio mode
             enable_file=True,
             enable_audit=self.config.logging.enable_audit,
