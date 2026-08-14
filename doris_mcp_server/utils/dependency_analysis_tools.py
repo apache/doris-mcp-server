@@ -68,6 +68,7 @@ class DependencyAnalysisTools:
         Returns:
             Comprehensive dependency analysis results
         """
+        connection = None
         try:
             start_time = time.time()
             connection = await self.connection_manager.get_connection("query")
@@ -125,6 +126,14 @@ class DependencyAnalysisTools:
                 "error": str(e),
                 "analysis_timestamp": datetime.now().isoformat()
             }
+        finally:
+            # 🔧 FIX: release the connection on every exit path (success,
+            # error-dict return, and exception) to prevent pool exhaustion.
+            release_connection = getattr(
+                self.connection_manager, "release_connection", None
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
 
     # ==================== Private Helper Methods ====================
 
