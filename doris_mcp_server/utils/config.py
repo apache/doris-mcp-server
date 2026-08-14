@@ -963,6 +963,10 @@ class DorisConfig:
     transport: str = "stdio"
     workers: int = 1
 
+    # Route prefix for reverse-proxy deployments (e.g. "/doris-mcp" for an
+    # nginx location of /doris-mcp/). Normalized to "/<segment>" or "".
+    route_prefix: str = ""
+
     # Temporary files configuration
     temp_files_dir: str = "tmp"  # Temporary files directory for Explain and Profile outputs
 
@@ -1601,6 +1605,13 @@ class DorisConfig:
         server_port = os.getenv("SERVER_PORT", "").strip()
         if server_port and server_port.isdigit():
             config.server_port = int(server_port)
+        # Normalize the route prefix to "/<segment>" (or empty). Must match the
+        # normalization in main.update_configuration so from_env() is
+        # self-consistent when worker processes rebuild the config.
+        route_prefix = os.getenv("ROUTE_PREFIX", config.route_prefix).strip().strip("/")
+        config.route_prefix = ("/" + route_prefix) if route_prefix else ""
+        if config.route_prefix:
+            _mark_source(config, "route_prefix", "env")
         if "MCP_ALLOWED_HOSTS" in os.environ:
             config.mcp_allowed_hosts = [
                 value.strip()

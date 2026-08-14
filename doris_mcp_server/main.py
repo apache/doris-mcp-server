@@ -86,6 +86,7 @@ def _multiworker_environment(
         "DORIS_BE_WEBSERVER_PORT": str(config.database.be_webserver_port),
         "SERVER_HOST": host,
         "SERVER_PORT": str(port),
+        "ROUTE_PREFIX": config.route_prefix,
         "MCP_ALLOWED_HOSTS": ",".join(config.mcp_allowed_hosts),
         "MCP_ALLOWED_ORIGINS": ",".join(config.mcp_allowed_origins),
         "ENABLE_LEGACY_HTTP_ADAPTER": str(
@@ -395,6 +396,25 @@ class DorisServer:
                 )
                 return JSONResponse(payload, status_code=status_code)
 
+            # Root info endpoint
+            async def root_info(request: Request) -> Response:
+                route_prefix = self.config.route_prefix
+                return JSONResponse(
+                    {
+                        "service": self.config.server_name,
+                        "version": __version__,
+                        "mode": "single-worker",
+                        "mcp_initialized": True,
+                        "route_prefix": route_prefix or None,
+                        "endpoints": {
+                            "health": f"{route_prefix}/health"
+                            if route_prefix
+                            else "/health",
+                            "mcp": f"{route_prefix}/mcp" if route_prefix else "/mcp",
+                        },
+                    }
+                )
+
             # OAuth endpoints
             from .auth.oauth_handlers import OAuthHandlers
 
@@ -460,6 +480,7 @@ class DorisServer:
 
             effective_auth = get_effective_auth_config(self.config)
             routes = [
+                Route("/", root_info, methods=["GET"]),
                 Route("/health", health_check, methods=["GET"]),
                 Route("/live", live_check, methods=["GET"]),
                 Route("/ready", readiness_check, methods=["GET"]),
@@ -529,6 +550,18 @@ class DorisServer:
                 # Handle HTTP requests
                 if scope["type"] == "http":
                     path = scope.get("path", "")
+
+                    # Strip the configured route prefix (reverse-proxy deployments)
+                    # before internal routing. We deliberately do NOT pass
+                    # uvicorn's own root_path option: it *prepends* the prefix
+                    # to scope["path"] rather than letting us strip it here.
+                    route_prefix = self.config.route_prefix
+                    if route_prefix and path.startswith(route_prefix):
+                        path = path[len(route_prefix) :] or "/"
+                        scope = dict(scope)
+                        scope["path"] = path
+                        scope["root_path"] = route_prefix
+
                     self.logger.info(f"Received request for path: {path}")
 
                     try:
@@ -544,7 +577,8 @@ class DorisServer:
                             return
 
                         if (
-                            path.rstrip("/") in {"/health", "/live", "/ready"}
+                            path == "/"
+                            or path.rstrip("/") in {"/health", "/live", "/ready"}
                             or path.startswith("/auth/")
                             or path.startswith("/token/")
                             or path.startswith("/.well-known/")
@@ -713,6 +747,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--route-prefix",
+        type=str,
+        default=os.getenv("ROUTE_PREFIX", _default_config.route_prefix),
+        help=f"Route prefix for reverse proxy, e.g. /doris-mcp (default: {_default_config.route_prefix or 'none'})",
+    )
+
+    parser.add_argument(
         "--doris-host",
         "--db-host",
         type=str,
@@ -811,6 +852,13 @@ def update_configuration(config: DorisConfig) -> None:
         config.workers = args.workers
         _mark_source(config, "workers", "cli")
 
+    # Route prefix for reverse proxy; normalize to "/<segment>" (or empty)
+    # to match the normalization in DorisConfig.from_env().
+    if hasattr(args, "route_prefix") and cli_has("--route-prefix"):
+        route_prefix = args.route_prefix.strip().strip("/")
+        config.route_prefix = ("/" + route_prefix) if route_prefix else ""
+        _mark_source(config, "route_prefix", "cli")
+
 
 async def main() -> int:
     """Main function"""
@@ -838,6 +886,8 @@ async def main() -> int:
     logger.info("Starting Doris MCP Server...")
     logger.info(f"Transport: {config.transport}")
     logger.info(f"Log Level: {config.logging.level}")
+    if config.route_prefix:
+        logger.info(f"Route Prefix: {config.route_prefix}")
 
     try:
         effective_auth = normalize_effective_auth_config(

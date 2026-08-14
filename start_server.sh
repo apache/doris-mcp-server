@@ -109,6 +109,9 @@ export SERVER_HOST="${SERVER_HOST:-${MCP_HOST:-127.0.0.1}}"
 export MCP_HOST="${SERVER_HOST}"
 export SERVER_PORT="${SERVER_PORT:-3000}"  # Changed from MCP_PORT to SERVER_PORT
 export WORKERS="${WORKERS:-1}"
+# Optional reverse-proxy route prefix, e.g. ROUTE_PREFIX=doris-mcp behind an
+# nginx `location /doris-mcp/`. Empty (default) serves from the root path.
+export ROUTE_PREFIX="${ROUTE_PREFIX:-}"
 export ALLOWED_ORIGINS="${ALLOWED_ORIGINS:-*}"
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 export MCP_ALLOW_CREDENTIALS="${MCP_ALLOW_CREDENTIALS:-false}"
@@ -117,17 +120,28 @@ export MCP_ALLOW_CREDENTIALS="${MCP_ALLOW_CREDENTIALS:-false}"
 export MCP_DEBUG_ADAPTER="true"
 export PYTHONPATH="$(pwd):$PYTHONPATH"
 
+# Build the URL path prefix for the echoed endpoints below.
+ROUTE_PATH_PREFIX=""
+ROUTE_PREFIX_ARGS=()
+if [ -n "${ROUTE_PREFIX}" ]; then
+    ROUTE_PATH_PREFIX="/${ROUTE_PREFIX#/}"
+    ROUTE_PREFIX_ARGS=(--route-prefix "${ROUTE_PREFIX}")
+fi
+
 echo -e "${GREEN}Starting MCP server (Streamable HTTP mode)...${NC}"
-echo -e "${YELLOW}Service will run on http://${SERVER_HOST}:${SERVER_PORT}/mcp${NC}"
-echo -e "${YELLOW}Liveness: http://${SERVER_HOST}:${SERVER_PORT}/live${NC}"
-echo -e "${YELLOW}Readiness: http://${SERVER_HOST}:${SERVER_PORT}/ready${NC}"
-echo -e "${YELLOW}MCP Endpoint: http://${SERVER_HOST}:${SERVER_PORT}/mcp${NC}"
-echo -e "${YELLOW}Local access: http://localhost:${SERVER_PORT}/mcp${NC}"
+echo -e "${YELLOW}Service will run on http://${SERVER_HOST}:${SERVER_PORT}${ROUTE_PATH_PREFIX}/mcp${NC}"
+echo -e "${YELLOW}Liveness: http://${SERVER_HOST}:${SERVER_PORT}${ROUTE_PATH_PREFIX}/live${NC}"
+echo -e "${YELLOW}Readiness: http://${SERVER_HOST}:${SERVER_PORT}${ROUTE_PATH_PREFIX}/ready${NC}"
+echo -e "${YELLOW}MCP Endpoint: http://${SERVER_HOST}:${SERVER_PORT}${ROUTE_PATH_PREFIX}/mcp${NC}"
+echo -e "${YELLOW}Local access: http://localhost:${SERVER_PORT}${ROUTE_PATH_PREFIX}/mcp${NC}"
 echo -e "${YELLOW}Workers: ${WORKERS}${NC}"
+if [ -n "${ROUTE_PREFIX}" ]; then
+    echo -e "${YELLOW}Route Prefix: /${ROUTE_PREFIX#/}${NC}"
+fi
 echo -e "${YELLOW}Use Ctrl+C to stop the service${NC}"
 
 # Start the server in HTTP mode (Streamable HTTP)
-python -m doris_mcp_server.main --transport http --host "${SERVER_HOST}" --port "${SERVER_PORT}" --workers "${WORKERS}"
+python -m doris_mcp_server.main --transport http --host "${SERVER_HOST}" --port "${SERVER_PORT}" --workers "${WORKERS}" "${ROUTE_PREFIX_ARGS[@]}"
 
 # Check exit status
 if [ $? -ne 0 ]; then
@@ -139,5 +153,5 @@ fi
 echo -e "${YELLOW}Tip: If the page displays abnormally, please clear your browser cache or use incognito mode${NC}"
 echo -e "${YELLOW}Chrome browser clear cache shortcut: Ctrl+Shift+Del (Windows) or Cmd+Shift+Del (Mac)${NC}"
 echo -e "${CYAN}For testing HTTP endpoints, you can use:${NC}"
-echo -e "${CYAN}  curl --fail http://127.0.0.1:${SERVER_PORT}/live${NC}"
-echo -e "${CYAN}  curl --fail http://127.0.0.1:${SERVER_PORT}/ready${NC}"
+echo -e "${CYAN}  curl --fail http://127.0.0.1:${SERVER_PORT}${ROUTE_PATH_PREFIX}/live${NC}"
+echo -e "${CYAN}  curl --fail http://127.0.0.1:${SERVER_PORT}${ROUTE_PATH_PREFIX}/ready${NC}"
