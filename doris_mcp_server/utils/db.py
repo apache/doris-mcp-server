@@ -895,6 +895,34 @@ class DorisConnectionManager:
         except Exception as e:
             self.logger.debug(f"Error force closing connection after {reason}: {e}")
 
+    async def _discard_pool_connection(
+        self, pool: Pool | None, raw_connection: Any, reason: str
+    ) -> None:
+        """Close a checked-out pool connection AND release its slot.
+
+        aiomysql's Pool tracks every acquired connection in an internal
+        "in use" set and only removes it from that set inside release().
+        Calling ensure_closed()/close() on a checked-out connection WITHOUT
+        release() leaves the slot permanently counted as in-use, which
+        exhausts the pool after ``maxsize`` such leaks. This helper closes
+        the underlying socket first (so the bad connection is never handed
+        back out) and then releases the slot so the pool can reclaim it.
+        """
+        if not raw_connection:
+            return
+        await self._force_close_raw_connection(raw_connection, reason)
+        if pool is not None:
+            release = getattr(pool, "release", None)
+            if release:
+                try:
+                    release(raw_connection)
+                except Exception as release_error:
+                    self.logger.debug(
+                        "pool.release() failed during discard (%s): %s",
+                        reason,
+                        release_error,
+                    )
+
     async def _close_auth_connection(self, conn: Any) -> None:
         if not conn:
             return
@@ -2182,14 +2210,12 @@ class DorisConnectionManager:
 
         except Exception as e:
             self.logger.error(f"Pool warmup failed: {e}")
-            # Clean up any remaining connections
+            # Clean up any remaining connections. 🔧 FIX: release them back to
+            # the pool (close-then-release) instead of only ensure_closed(),
+            # otherwise every warmup connection held during a failure leaks a
+            # pool slot.
             for conn in warmup_connections:
-                try:
-                    await conn.ensure_closed()
-                except Exception as cleanup_error:
-                    self.logger.warning(
-                        f"Failed to close warmup connection: {cleanup_error}"
-                    )
+                await self._discard_pool_connection(pool, conn, "pool warmup failure")
 
     async def _pool_health_monitor(self) -> None:
         """Background task to monitor pool health"""
@@ -2273,27 +2299,21 @@ class DorisConnectionManager:
 
                         # Connection is healthy, release it
                         pool.release(conn)
+                        conn = None
 
                     except TimeoutError:
                         self.logger.debug(f"Stale connection test {i + 1} timed out")
-                        if conn is not None:
-                            try:
-                                await conn.ensure_closed()
-                            except Exception as cleanup_error:
-                                self.logger.debug(
-                                    "Failed to close timed-out connection "
-                                    f"{i + 1}: {cleanup_error}"
-                                )
                     except Exception as e:
                         self.logger.debug(f"Stale connection test {i + 1} failed: {e}")
+                    finally:
+                        # 🔧 CRITICAL FIX: always close-then-release bad
+                        # connections. ensure_closed() alone keeps the
+                        # connection in the pool's internal "in use" set
+                        # forever, leaking the pool slot.
                         if conn is not None:
-                            try:
-                                await conn.ensure_closed()
-                            except Exception as cleanup_error:
-                                self.logger.debug(
-                                    "Failed to close unhealthy connection "
-                                    f"{i + 1}: {cleanup_error}"
-                                )
+                            await self._discard_pool_connection(
+                                pool, conn, "stale connection cleanup"
+                            )
 
                 self.logger.debug(
                     f"Stale connection cleanup completed, tested {test_count} connections"
@@ -2747,6 +2767,16 @@ class DorisConnectionManager:
             # Check connection state before release
             if connection.connection.closed:
                 self.logger.debug(f"Connection already closed for session {session_id}")
+                # Still notify the pool so its internal "in use" counters stay
+                # correct: a checked-out closed connection that is never
+                # released() permanently occupies a pool slot. release()
+                # safely drops closed connections instead of re-queuing them.
+                try:
+                    self.pool.release(connection.connection)
+                except Exception as release_error:
+                    self.logger.debug(
+                        f"Pool release of closed connection failed: {release_error}"
+                    )
                 return
 
             # 🔧 FIX: Simplified release operation without thread wrapper
