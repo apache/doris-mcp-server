@@ -26,3 +26,6 @@ coverage.xml
 tokens.json.lock
 /.secrets/
 /tmp/
+.claude/
+.sisyphus/
+.pytest_cache/
