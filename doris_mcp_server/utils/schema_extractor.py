@@ -1844,7 +1844,12 @@ class MetadataExtractor:
         db_name: str | None = None,
         catalog_name: str | None = None,
     ) -> str:
-        """Async version: get the comment for a table."""
+        """Async version: get the comment for a table.
+
+        Some older Doris versions do not expose TABLE_COMMENT in
+        information_schema.tables ("Unknown column 'table_comment'"). Fall back
+        to SHOW TABLE STATUS, which has a Comment column on all versions.
+        """
         try:
             effective_db = db_name or self.db_name
             effective_catalog = catalog_name or self.catalog_name
@@ -1868,22 +1873,78 @@ class MetadataExtractor:
                 AND TABLE_NAME = %s
             """
 
-            result = await self._execute_query_with_catalog_async(
-                query,
-                effective_db,
-                effective_catalog,
-                params=(effective_db, table_name),
-            )
+            try:
+                result = await self._execute_query_with_catalog_async(
+                    query,
+                    effective_db,
+                    effective_catalog,
+                    params=(effective_db, table_name),
+                )
+            except Exception as query_error:
+                # Older Doris versions lack TABLE_COMMENT; fall back to
+                # SHOW TABLE STATUS.
+                if (
+                    "unknown column" in str(query_error).lower()
+                    or "table_comment" in str(query_error).lower()
+                ):
+                    logger.debug(
+                        "information_schema.tables has no TABLE_COMMENT on this "
+                        "Doris version; falling back to SHOW TABLE STATUS for %s",
+                        table_name,
+                    )
+                    result = await self._get_table_comment_via_show_status_async(
+                        table_name, effective_db, effective_catalog
+                    )
+                else:
+                    raise
+
             if not result or not result[0]:
                 self._raise_if_doris_oauth_table_not_visible(
                     table_name, effective_db, effective_catalog
                 )
                 return ""
-            return result[0].get("TABLE_COMMENT", "") or ""
+            row = result[0]
+            # SHOW TABLE STATUS returns "Comment"; information_schema returns
+            # "TABLE_COMMENT".
+            return row.get("TABLE_COMMENT") or row.get("Comment") or ""
         except Exception as e:
-            logger.error(f"Failed to get table comment asynchronously: {e}")
+            logger.debug(f"Failed to get table comment asynchronously: {e}")
             self._reraise_if_doris_oauth_metadata_error(e)
             return ""
+
+    async def _get_table_comment_via_show_status_async(
+        self,
+        table_name: str,
+        db_name: str,
+        catalog_name: str | None,
+    ) -> list:
+        """Fallback comment retrieval via SHOW TABLE STATUS (cross-version safe)."""
+        quoted_db = quote_identifier(db_name, "database name")
+        query = f"SHOW TABLE STATUS FROM {quoted_db} LIKE '{table_name}'"
+        try:
+            result = await self._execute_query_with_catalog_async(
+                query, db_name, catalog_name
+            )
+            # Normalize the Comment column name to TABLE_COMMENT for uniform
+            # parsing.
+            if result:
+                normalized = []
+                for row in result:
+                    if isinstance(row, dict):
+                        normalized.append(
+                            {
+                                **row,
+                                "TABLE_COMMENT": row.get(
+                                    "Comment", row.get("TABLE_COMMENT", "")
+                                ),
+                            }
+                        )
+                    else:
+                        normalized.append(row)
+                return normalized
+            return result
+        except Exception:
+            return []
 
     async def get_column_comments_async(
         self,
