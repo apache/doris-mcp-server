@@ -165,3 +165,57 @@ class TestToolsClientServer:
             return result
         
         await client.connect_and_run(test_callback)
+
+    @pytest.mark.asyncio
+    async def test_call_invalid_tool_via_client(self, client, test_config):
+        """Test calling an invalid tool name through client"""
+        async def test_callback(client_instance):
+            result = await client_instance.call_tool("nonexistent_tool", {})
+
+            # Should return a result (either success or error)
+            assert "success" in result or "error" in result, "Result should contain 'success' or 'error' field"
+            if "error" in result:
+                assert "Unknown tool" in result["error"] or "not found" in result["error"].lower()
+            return result
+
+        await client.connect_and_run(test_callback)
+
+    @pytest.mark.asyncio
+    async def test_exec_query_missing_sql_param_via_client(self, client, test_config):
+        """Test exec_query called without required sql parameter"""
+        async def test_callback(client_instance):
+            result = await client_instance.call_tool("exec_query", {})
+
+            assert "success" in result or "error" in result, "Result should contain 'success' or 'error' field"
+            if result.get("success") is False:
+                assert "error" in result, "Failed result should contain 'error' field"
+            return result
+
+        await client.connect_and_run(test_callback)
+
+    @pytest.mark.asyncio
+    async def test_get_db_table_list_via_client(self, client, test_config):
+        """Test calling get_db_table_list tool through client"""
+        async def test_callback(client_instance):
+            result = await client_instance.call_tool("get_db_table_list", {"db_name": "information_schema"})
+
+            assert "success" in result, "Result should contain 'success' field"
+            if result["success"]:
+                assert "result" in result, "Successful result should contain 'result' field"
+                assert isinstance(result["result"], list), "Database table list should be a list"
+            else:
+                assert "error" in result, "Failed result should contain 'error' field"
+            return result
+
+        await client.connect_and_run(test_callback)
+
+    @pytest.mark.asyncio
+    async def test_catalog_list_tool_via_client(self, client, test_config):
+        """Test get_catalog_list tool"""
+        async def test_callback(client_instance):
+            # Catalog list
+            cat_result = await client_instance.call_tool("get_catalog_list", {})
+            assert "success" in cat_result, "Result should contain 'success' field"
+            return cat_result
+
+        await client.connect_and_run(test_callback)
