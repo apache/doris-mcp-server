@@ -518,6 +518,7 @@ class DorisLoggerManager:
             )
             app_handler.setLevel(getattr(logging, level.upper()))
             app_handler.addFilter(_sensitive_data_filter)
+            app_handler.addFilter(RequestAuthContextFilter())
             app_formatter = TimestampedFormatter()
             app_handler.setFormatter(app_formatter)
             handlers.append(app_handler)
