@@ -39,6 +39,10 @@ under **Unreleased** until a new version is selected and published.
 
 ### Changed
 
+- Refreshed the locked authentication and development toolchain by upgrading
+  Authlib to 1.6.12, Pytest to 9.0.3, and Black to 26.3.1, with the complete
+  quality, test, protocol-conformance, and wheel-smoke gates rerun on the
+  combined dependency graph.
 - Expanded the stable public contract from 47 to 55 children while retaining
   the same eight top-level domains and progressive-disclosure budgets.
 - Lowered the project-wide Doris baseline from 3.0.0 to 2.0.0 and moved
@@ -65,6 +69,22 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Preserved fail-closed distribution provenance across version parsing,
+  brandless FE/BE component fallback, and certification evidence validation,
+  preventing unknown or mismatched brands from inheriting Apache Doris
+  certification.
+- Updated the locked Marshmallow and Virtualenv transitive dependencies to
+  releases that address CVE-2025-68480 and symlink-based TOCTOU vulnerabilities
+  in development-environment creation.
+- Required at least two recorded time buckets before exposing or executing
+  resource-growth analysis, so readable-but-empty audit and partition metadata
+  no longer masquerade as historical evidence.
+- Aligned `doris_cluster.list_active_tasks` capability detection with its
+  read-only execution fallbacks, so restricted Doris accounts can use the
+  `information_schema.active_queries` or process-list source when
+  `SHOW PROC \"/current_queries\"` is unavailable. The public input schema now
+  advertises only the query and compaction task types implemented by the
+  runtime.
 - Prevented MetricFlow sidecar processes from inheriting Doris credentials,
   bearer tokens, OAuth/JWT secrets, and unrelated MCP Server environment
   configuration by launching each provider with a fixed minimal environment.

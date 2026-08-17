@@ -131,6 +131,18 @@ def test_adbc_is_inside_query_and_cluster_has_exactly_eleven_children() -> None:
     assert len(cluster.children) == 11
 
 
+def test_cluster_active_task_contract_matches_runtime_sources() -> None:
+    child = DORIS_DOMAIN_CATALOG.resolve_child(
+        "doris_cluster",
+        "list_active_tasks",
+    )
+    task_types = _wire_input(child)["properties"]["task_types"]
+
+    assert task_types["items"]["enum"] == ["query", "compaction"]
+    assert "load" not in child.canonical_description.casefold()
+    assert "schema-change" not in child.canonical_description.casefold()
+
+
 def test_every_child_uses_the_exact_feature_matrix_contract() -> None:
     feature_contracts = {
         feature.feature_id: feature.support_contract

@@ -20,30 +20,53 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 from ..utils.db import DorisConnection
+from ..utils.version_brands import (
+    DEFAULT_VERSION_BRAND,
+    normalize_version_brand_aliases,
+)
 
 DORIS_VERSION_COMMENT_QUERY = "SELECT @@version_comment;"
 _VERSION_COMMENT_COLUMN = "@@version_comment"
 _VERSION_COMMENT_MAX_BYTES = 4096
 
-_VERSION_PATTERN = re.compile(
-    r"""
-    (?<![A-Za-z0-9_])
-    (?:apache\s+)?doris
-    (?:\s*,?\s*version)?
-    (?:\s+doris-|\s*-\s*|\s+)
-    (?P<core>\d+\.\d+\.\d+)
-    (?:-(?P<prerelease>rc\d+|alpha\d*|beta\d*))?
-    (?:-(?P<commit>[0-9a-f]{7,40}))?
-    (?=\s|\(|,|$)
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
+_DEFAULT_BRAND = DEFAULT_VERSION_BRAND
+
+# Brand tokens whose version comments follow the Apache Doris three-part
+# core version scheme. Only ``doris`` is recognized by default; derived
+# distributions that report their own brand token can register it through
+# ``configure_version_brands`` so the comment participates in every numeric
+# version check (minimum version, patch ranges, mixed-component
+# evaluation). Comments without a recognized brand still fail closed.
+_known_brands: tuple[str, ...] = (_DEFAULT_BRAND,)
+
+
+def _compile_version_pattern(brands: tuple[str, ...]) -> re.Pattern[str]:
+    brand_alternatives = "|".join(
+        (r"apache\s+doris", *(re.escape(brand) for brand in brands))
+    )
+    prefix_alternatives = "|".join(re.escape(brand) for brand in brands)
+    return re.compile(
+        rf"""
+        (?<![A-Za-z0-9_])
+        (?P<brand>{brand_alternatives})
+        (?:\s*,?\s*version)?
+        (?:\s+(?P<version_brand>{prefix_alternatives})-|\s*-\s*|\s+)
+        (?P<core>\d+\.\d+\.\d+)
+        (?:-(?P<prerelease>rc\d+|alpha\d*|beta\d*))?
+        (?:-(?P<commit>[0-9a-f]{{7,40}}))?
+        (?=\s|\(|,|$)
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+
+_VERSION_PATTERN = _compile_version_pattern(_known_brands)
 _DEPLOYMENT_PATTERNS = (
     ("cloud", re.compile(r"\bcloud\s+mode\b", re.IGNORECASE)),
     ("shared_data", re.compile(r"\bshared[-\s]+data\b", re.IGNORECASE)),
@@ -65,11 +88,17 @@ class DorisVersion:
     prerelease: str | None = None
     commit: str | None = None
     deployment_hint: str | None = None
+    brand: str | None = None
     parse_status: DorisVersionParseStatus = DorisVersionParseStatus.UNKNOWN
 
     @property
     def is_parsed(self) -> bool:
         return self.parse_status is DorisVersionParseStatus.PARSED
+
+    @property
+    def brand_verified(self) -> bool:
+        """Whether the version comment carries the Apache Doris brand."""
+        return self.brand == "doris"
 
     @property
     def core(self) -> str | None:
@@ -107,10 +136,36 @@ class DorisVersion:
         return (self.major, self.minor, self.patch)
 
 
+def known_version_brands() -> tuple[str, ...]:
+    """Return the currently recognized version-comment brand tokens."""
+    return _known_brands
+
+
+def configure_version_brands(aliases: Iterable[str]) -> tuple[str, ...]:
+    """Register extra version-comment brand tokens and rebuild the pattern.
+
+    The ``doris`` brand is always recognized. Aliases replace any
+    previously configured set, so passing an empty iterable restores the
+    default doris-only behavior. Aliases are normalized and validated with
+    the same contract used by configuration validation.
+    """
+    global _known_brands, _VERSION_PATTERN
+
+    extras = normalize_version_brand_aliases(aliases)
+    _known_brands = tuple(dict.fromkeys((_DEFAULT_BRAND, *extras)))
+    _VERSION_PATTERN = _compile_version_pattern(_known_brands)
+    return _known_brands
+
+
 def parse_doris_version_comment(comment: str) -> DorisVersion:
     deployment_hint = _detect_deployment_hint(comment)
     match = _VERSION_PATTERN.search(comment)
     if match is None:
+        return DorisVersion(raw=comment, deployment_hint=deployment_hint)
+
+    brand = _normalize_brand(match.group("brand"))
+    version_brand = match.group("version_brand")
+    if version_brand is not None and _normalize_brand(version_brand) != brand:
         return DorisVersion(raw=comment, deployment_hint=deployment_hint)
 
     major, minor, patch = (int(part) for part in match.group("core").split("."))
@@ -125,8 +180,14 @@ def parse_doris_version_comment(comment: str) -> DorisVersion:
         prerelease=prerelease.lower() if prerelease else None,
         commit=commit.lower() if commit else None,
         deployment_hint=deployment_hint,
+        brand=brand,
         parse_status=DorisVersionParseStatus.PARSED,
     )
+
+
+def _normalize_brand(value: str) -> str:
+    normalized = " ".join(value.casefold().split())
+    return "doris" if normalized == "apache doris" else normalized
 
 
 def parse_doris_version_rows(

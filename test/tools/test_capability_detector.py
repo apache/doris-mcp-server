@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -32,7 +33,12 @@ from doris_mcp_server.tools.capability_detector import (
     DorisCapabilityDetector,
     _classify_profile_api_response,
 )
-from doris_mcp_server.tools.doris_feature_matrix import DORIS_FEATURE_MATRIX
+from doris_mcp_server.tools.doris_feature_matrix import (
+    DORIS_FEATURE_MATRIX,
+    DORIS_PATCH_CERTIFICATION_MATRIX,
+    VersionCertificationStatus,
+)
+from doris_mcp_server.tools.doris_version import configure_version_brands
 from doris_mcp_server.utils.db import DorisRouteIdentity
 from doris_mcp_server.utils.doris_http_client import DorisHTTPResponse
 from doris_mcp_server.utils.security import AuthContext
@@ -44,6 +50,25 @@ _SEARCH_TARGET_DISCOVERY_SQL = (
     "AND TABLE_SCHEMA NOT IN ('information_schema', 'mysql') "
     "ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION LIMIT 8"
 )
+_AUDIT_HISTORY_PROBE_SQL = (
+    "SELECT COUNT(DISTINCT DATE(`time`)) AS evidence_bucket_count "
+    "FROM internal.__internal_schema.audit_log "
+    "WHERE `time` >= DATE_SUB(NOW(), INTERVAL 3650 DAY)"
+)
+_STORAGE_HISTORY_PROBE_SQL = (
+    "SELECT COUNT(DISTINCT DATE(CREATE_TIME)) AS evidence_bucket_count "
+    "FROM information_schema.partitions "
+    "WHERE CREATE_TIME >= DATE_SUB(NOW(), INTERVAL 3650 DAY)"
+)
+
+
+@pytest.fixture
+def enterprise_brand_alias() -> Iterator[str]:
+    configure_version_brands(("enterprisedb",))
+    try:
+        yield "enterprisedb"
+    finally:
+        configure_version_brands(())
 
 
 class _ProbeConnection:
@@ -113,6 +138,8 @@ class _ProbeConnection:
                     "DATA_LENGTH": 8,
                 }
             ],
+            _AUDIT_HISTORY_PROBE_SQL: [{"evidence_bucket_count": 3}],
+            _STORAGE_HISTORY_PROBE_SQL: [{"evidence_bucket_count": 2}],
         }
         return SimpleNamespace(data=self.row_overrides.get(sql, rows.get(sql, [])))
 
@@ -222,10 +249,7 @@ async def test_detector_builds_version_vector_and_extends_domains_lazily() -> No
 @pytest.mark.asyncio
 async def test_cluster_history_keeps_storage_fallback_without_audit_access() -> None:
     connection = _ProbeConnection()
-    audit_probe = (
-        "SELECT `time` FROM internal.__internal_schema.audit_log LIMIT 1"
-    )
-    connection.failures[audit_probe] = RuntimeError(
+    connection.failures[_AUDIT_HISTORY_PROBE_SQL] = RuntimeError(
         "Access denied; user lacks SELECT privilege"
     )
     manager = _ProbeConnectionManager(connection)
@@ -249,6 +273,73 @@ async def test_cluster_history_keeps_storage_fallback_without_audit_access() -> 
     storage = cluster.probe("resource_growth_storage_history_readable")
     assert storage.status is CapabilityProbeStatus.DEGRADED
     assert storage.reason_code == "PARTITION_CREATION_HISTORY_ONLY"
+
+
+@pytest.mark.asyncio
+async def test_cluster_history_requires_two_recorded_time_buckets() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides[_AUDIT_HISTORY_PROBE_SQL] = [
+        {"evidence_bucket_count": 1}
+    ]
+    connection.row_overrides[_STORAGE_HISTORY_PROBE_SQL] = [
+        {"evidence_bucket_count": 0}
+    ]
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.cluster",
+    )
+
+    cluster = await detector.detect_domain(base, "doris_cluster", None)
+
+    audit = cluster.probe("metrics_history_readable")
+    storage = cluster.probe("resource_storage_history_readable")
+    assert audit is not None
+    assert audit.status is CapabilityProbeStatus.UNKNOWN
+    assert audit.reason_code == "AUDIT_HISTORY_INSUFFICIENT"
+    assert storage is not None
+    assert storage.status is CapabilityProbeStatus.UNKNOWN
+    assert storage.reason_code == "PARTITION_CREATION_HISTORY_INSUFFICIENT"
+    assert (
+        cluster.probe("resource_history_all_sources_readable").status
+        is CapabilityProbeStatus.UNKNOWN
+    )
+    assert (
+        cluster.probe("resource_history_all_sources_readable").reason_code
+        == "RESOURCE_HISTORY_UNAVAILABLE"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cluster_active_tasks_accepts_read_only_query_view_fallback() -> None:
+    connection = _ProbeConnection()
+    proc_probe = 'SHOW PROC "/current_queries"'
+    connection.failures[proc_probe] = RuntimeError(
+        "Access denied; user lacks ADMIN privilege"
+    )
+    manager = _ProbeConnectionManager(connection)
+    detector = DorisCapabilityDetector(manager)  # type: ignore[arg-type]
+    base = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.cluster",
+    )
+
+    cluster = await detector.detect_domain(base, "doris_cluster", None)
+
+    assert (
+        cluster.probe("current_queries_proc_readable").status
+        is not CapabilityProbeStatus.SUPPORTED
+    )
+    assert (
+        cluster.probe("active_queries_view_readable").status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    active_tasks = cluster.probe("legacy_task_views_readable")
+    assert active_tasks.status is CapabilityProbeStatus.SUPPORTED
+    assert active_tasks.reason_code == "LEGACY_TASK_VIEW_READABLE"
 
 
 @pytest.mark.asyncio
@@ -991,6 +1082,209 @@ async def test_detector_uses_fallback_for_unknown_master_and_retains_follower() 
     assert snapshot.version_vector.follower_fes[0].is_parsed is False
     assert evaluation.compatible is False
     assert evaluation.reason_code == "DORIS_VERSION_UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_detector_propagates_comment_brand_to_brandless_components(
+    enterprise_brand_alias: str,
+) -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides["SELECT @@version_comment;"] = [
+        {"@@version_comment": f"{enterprise_brand_alias} version 4.0.5"}
+    ]
+    connection.row_overrides["SHOW FRONTENDS"] = [
+        {
+            "Name": "fe-1",
+            "IsMaster": "true",
+            "Version": "4.0.5",
+        },
+    ]
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {
+            "BackendId": "1",
+            "Version": "4.0.5-rc01-59de8c4c524",
+        },
+    ]
+    detector = DorisCapabilityDetector(  # type: ignore[arg-type]
+        _ProbeConnectionManager(connection)
+    )
+
+    snapshot = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+    report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(snapshot.version_vector)
+
+    # Brandless component versions inherit the @@version_comment brand, so
+    # Apache Doris patch certification must not transfer to a distribution.
+    assert snapshot.version_vector.master_fe.brand == enterprise_brand_alias
+    assert snapshot.version_vector.master_fe.brand_verified is False
+    assert snapshot.version_vector.backends[0].brand == enterprise_brand_alias
+    assert report.uniform_observed_version == "4.0.5"
+    assert report.status is VersionCertificationStatus.TARGET_UNCERTIFIED
+    assert report.reason_code == "PATCH_CERTIFICATION_DISTRIBUTION_UNVERIFIED"
+    assert report.certified is False
+
+
+@pytest.mark.asyncio
+async def test_unknown_brand_keeps_brandless_components_unknown() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides["SELECT @@version_comment;"] = [
+        {"@@version_comment": "unregistereddb version 4.0.5"}
+    ]
+    connection.row_overrides["SHOW FRONTENDS"] = [
+        {
+            "Name": "fe-1",
+            "IsMaster": "true",
+            "Version": "4.0.5",
+        },
+    ]
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {
+            "BackendId": "1",
+            "Version": "4.0.5",
+        },
+    ]
+    detector = DorisCapabilityDetector(  # type: ignore[arg-type]
+        _ProbeConnectionManager(connection)
+    )
+
+    snapshot = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+    feature = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_tables",
+        versions=snapshot.version_vector,
+    )
+    report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(snapshot.version_vector)
+
+    assert snapshot.version_vector.master_fe.is_parsed is False
+    assert snapshot.version_vector.master_fe.brand is None
+    assert snapshot.version_vector.backends[0].is_parsed is False
+    assert snapshot.version_vector.backends[0].brand is None
+    assert feature.compatible is False
+    assert feature.reason_code == "DORIS_VERSION_UNKNOWN"
+    assert feature.certified is False
+    assert report.status is VersionCertificationStatus.UNKNOWN
+    assert report.certified is False
+    assert report.evidence_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_detector_does_not_treat_commit_substrings_as_brand_tokens() -> None:
+    configure_version_brands(("db",))
+    try:
+        connection = _ProbeConnection()
+        connection.row_overrides["SHOW FRONTENDS"] = [
+            {
+                "Name": "fe-1",
+                "IsMaster": "true",
+                "Version": "4.0.5-adb1234",
+            },
+        ]
+        detector = DorisCapabilityDetector(  # type: ignore[arg-type]
+            _ProbeConnectionManager(connection)
+        )
+
+        snapshot = await detector.detect_base(
+            None,
+            capability_generation=1,
+            provider_generation="provider.a",
+        )
+
+        assert snapshot.version_vector.master_fe.is_parsed is True
+        assert snapshot.version_vector.master_fe.brand == "doris"
+        assert snapshot.version_vector.master_fe.core == "4.0.5"
+    finally:
+        configure_version_brands(())
+
+
+@pytest.mark.asyncio
+async def test_detector_defaults_brandless_components_to_doris_brand() -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides["SHOW FRONTENDS"] = [
+        {
+            "Name": "fe-1",
+            "IsMaster": "true",
+            "Version": "4.0.5",
+        },
+    ]
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {
+            "BackendId": "1",
+            "Version": "4.0.5-rc01-59de8c4c524",
+        },
+    ]
+    detector = DorisCapabilityDetector(  # type: ignore[arg-type]
+        _ProbeConnectionManager(connection)
+    )
+
+    snapshot = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+    report = DORIS_PATCH_CERTIFICATION_MATRIX.evaluate(snapshot.version_vector)
+
+    assert snapshot.version_vector.master_fe.brand == "doris"
+    assert snapshot.version_vector.master_fe.brand_verified is True
+    assert snapshot.version_vector.backends[0].brand == "doris"
+    assert report.status is VersionCertificationStatus.CERTIFIED
+    assert report.certified is True
+
+
+@pytest.mark.asyncio
+async def test_detector_parses_enterprise_brand_versions(
+    enterprise_brand_alias: str,
+) -> None:
+    connection = _ProbeConnection()
+    connection.row_overrides["SELECT @@version_comment;"] = [
+        {"@@version_comment": f"{enterprise_brand_alias} version 4.0.6"}
+    ]
+    connection.row_overrides["SHOW FRONTENDS"] = [
+        {
+            "Name": "fe-1",
+            "IsMaster": "true",
+            "Version": f"{enterprise_brand_alias}-4.0.6-abc1234",
+        },
+    ]
+    connection.row_overrides["SHOW BACKENDS"] = [
+        {
+            "BackendId": "1",
+            "Version": f"{enterprise_brand_alias}-4.0.6-abc1234",
+        },
+    ]
+    detector = DorisCapabilityDetector(  # type: ignore[arg-type]
+        _ProbeConnectionManager(connection)
+    )
+
+    snapshot = await detector.detect_base(
+        None,
+        capability_generation=1,
+        provider_generation="provider.a",
+    )
+    evaluation = DORIS_FEATURE_MATRIX.evaluate(
+        domain="doris_catalog",
+        child_name="list_catalogs",
+        versions=snapshot.version_vector,
+    )
+
+    assert snapshot.version_vector.master_fe.is_parsed is True
+    assert snapshot.version_vector.master_fe.core == "4.0.6"
+    assert snapshot.version_vector.master_fe.brand == enterprise_brand_alias
+    assert snapshot.version_vector.master_fe.brand_verified is False
+    assert snapshot.version_vector.backends[0].is_parsed is True
+    assert snapshot.mixed_versions is False
+    assert (
+        snapshot.probes["version_probe_completed"].status
+        is CapabilityProbeStatus.SUPPORTED
+    )
+    assert evaluation.compatible is True
+    assert evaluation.reason_code == "VERSION_RANGE_MATCHED"
 
 
 @pytest.mark.asyncio

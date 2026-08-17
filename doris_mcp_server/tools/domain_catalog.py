@@ -1415,10 +1415,13 @@ DOMAIN_DEFINITIONS = (
                 "doris_cluster",
                 "list_active_tasks",
                 "List active tasks",
-                "List visible query, load, schema-change, and compaction tasks.",
+                "List visible active query and compaction tasks.",
                 _input_schema(
                     {
-                        "task_types": _string_array("Task types to include."),
+                        "task_types": _string_array(
+                            "Task types to include.",
+                            enum=("query", "compaction"),
+                        ),
                         "states": _string_array("Task states to include."),
                         "limit": _integer("Maximum results.", minimum=1),
                     }
@@ -1510,7 +1513,8 @@ DOMAIN_DEFINITIONS = (
                 "analyze_resource_growth",
                 "Analyze resource growth",
                 "Analyze recorded resource-growth evidence without inventing "
-                "missing history. For an unqualified cluster-history request, "
+                "missing history. A series requires at least two recorded time "
+                "buckets. For an unqualified cluster-history request, "
                 "omit resource so every currently usable recorded series is "
                 "attempted and partial evidence is preserved.",
                 _input_schema(

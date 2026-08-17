@@ -179,6 +179,41 @@ async def test_list_cluster_nodes_normalizes_real_fe_and_be_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_active_tasks_falls_back_to_read_only_active_queries_view() -> None:
+    proc_statement = 'SHOW PROC "/current_queries"'
+    view_statement = "SELECT * FROM information_schema.active_queries"
+    runtime, manager, _ = _runtime(
+        rows={
+            view_statement: [
+                {
+                    "QUERY_ID": "query-1",
+                    "STATE": "RUNNING",
+                    "COMMAND": "Query",
+                }
+            ]
+        },
+        failures={proc_statement: RuntimeError(1105, "access denied")},
+    )
+
+    result = await runtime.list_active_tasks(
+        task_types=["query"],
+        states=None,
+        limit=10,
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["items"] == [
+        {
+            "query_id": "query-1",
+            "state": "RUNNING",
+            "command": "Query",
+            "task_type": "query",
+        }
+    ]
+    assert manager.calls == [proc_statement, view_statement]
+
+
+@pytest.mark.asyncio
 async def test_memory_stats_only_returns_observed_metrics() -> None:
     runtime, _, _ = _runtime()
 
@@ -311,3 +346,33 @@ async def test_resource_growth_rejects_unknown_resource_before_sql() -> None:
 
     assert error.value.reason_code == "CLUSTER_ARGUMENT_INVALID"
     assert manager.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [{"bucket": "2026-07-31", "value": 15}],
+    ],
+)
+async def test_resource_growth_rejects_insufficient_recorded_history(
+    rows: list[dict[str, Any]],
+) -> None:
+    query_sql = (
+        "SELECT DATE(`time`) AS bucket, COUNT(*) AS value "
+        "FROM internal.__internal_schema.audit_log "
+        "WHERE `time` >= DATE_SUB(NOW(), INTERVAL %s DAY) "
+        "GROUP BY bucket ORDER BY bucket"
+    )
+    runtime, manager, _ = _runtime(rows={query_sql: rows})
+
+    with pytest.raises(ClusterRuntimeFailure) as error:
+        await runtime.analyze_resource_growth(
+            resource="query_volume",
+            window_days=30,
+            granularity="day",
+        )
+
+    assert error.value.reason_code == "RESOURCE_HISTORY_UNAVAILABLE"
+    assert manager.calls == [query_sql]

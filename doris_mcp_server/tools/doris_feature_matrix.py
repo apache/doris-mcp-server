@@ -28,6 +28,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, StringConstraints, model_validator
 
+from ..utils.version_brands import normalize_version_brand_aliases
 from .domain_models import (
     CapabilityVariant,
     ChildSupportContract,
@@ -399,10 +400,17 @@ class PatchCertificationCase(ContractModel):
 
 
 class PatchCertificationEvidence(ContractModel):
-    """Committed proof required before one three-part Doris patch is certified."""
+    """Committed proof required before one three-part Doris patch is certified.
+
+    ``brand`` identifies which distribution the evidence certifies. The
+    default ``doris`` brand denotes Apache Doris real-cluster evidence; a
+    derived distribution is only certified by evidence recorded under its
+    own brand token.
+    """
 
     certification_id: Identifier
     version: NonEmptyText
+    brand: NonEmptyText = "doris"
     master_fe_version_comment: NonEmptyText
     follower_fe_version_comments: tuple[NonEmptyText, ...] = ()
     backend_version_comments: Annotated[
@@ -443,20 +451,29 @@ class PatchCertificationEvidence(ContractModel):
                 "certification evidence requires a three-part target version"
             )
         target_literal = _version_literal(target)
+        if normalize_version_brand_aliases((self.brand,)) != (self.brand,):
+            raise ValueError(
+                "certification evidence brand must be a canonical lowercase "
+                "brand token"
+            )
         comments = (
             self.master_fe_version_comment,
             *self.follower_fe_version_comments,
             *self.backend_version_comments,
         )
         for comment in comments:
-            observed = parse_doris_version_comment(comment)
-            if (
-                not observed.is_parsed
-                or observed.core != target_literal
+            # Evidence validation is independent of the mutable runtime brand
+            # registry. Every comment must carry the exact declared brand and
+            # three-part core version before it can certify that distribution.
+            if not _certification_comment_matches(
+                comment,
+                brand=self.brand,
+                core=target_literal,
             ):
+                display_brand = "Doris" if self.brand == "doris" else self.brand
                 raise ValueError(
-                    "every certified FE and BE must report the Doris core "
-                    f"version {target_literal}"
+                    f"every certified FE and BE must report the {display_brand} "
+                    f"core version {target_literal}"
                 )
 
         expected_cases = {
@@ -525,12 +542,18 @@ class DorisPatchCertificationMatrix(ContractModel):
                 "certification targets must use three-part versions"
             )
         _require_unique(targets, "patch certification targets")
-        evidence_versions = tuple(record.version for record in self.evidence)
-        _require_unique(evidence_versions, "patch certification evidence versions")
+        evidence_keys = tuple(
+            f"{record.brand}:{record.version}" for record in self.evidence
+        )
+        _require_unique(
+            evidence_keys,
+            "patch certification evidence brand/version pairs",
+        )
         _require_unique(
             tuple(record.certification_id for record in self.evidence),
             "patch certification evidence IDs",
         )
+        evidence_versions = tuple(record.version for record in self.evidence)
         if not set(evidence_versions).issubset(targets):
             raise ValueError(
                 "patch certification evidence must reference target versions"
@@ -583,11 +606,19 @@ class DorisPatchCertificationMatrix(ContractModel):
         literal = observed.core
         if literal is None:
             raise AssertionError("parsed Doris version must expose a core version")
+        component_brands = {version.brand for version in components}
+        uniform_brand = (
+            component_brands.pop() if len(component_brands) == 1 else None
+        )
         target = literal in self.target_versions
+        # Certification evidence is provenance-aware: Apache Doris evidence
+        # only certifies clusters whose components all carry the doris brand,
+        # and a derived distribution is only certified by evidence recorded
+        # under its own brand token.
         matches = tuple(
             record
             for record in self.evidence
-            if record.version == literal
+            if record.version == literal and record.brand == uniform_brand
         )
         if matches:
             return self._report(
@@ -603,6 +634,21 @@ class DorisPatchCertificationMatrix(ContractModel):
                 ),
             )
         if target:
+            if uniform_brand != "doris":
+                return self._report(
+                    observed_fe,
+                    observed_be,
+                    uniform_version=literal,
+                    status=VersionCertificationStatus.TARGET_UNCERTIFIED,
+                    reason_code="PATCH_CERTIFICATION_DISTRIBUTION_UNVERIFIED",
+                    targeted=True,
+                    limitations=(
+                        "The observed components do not all carry the Apache "
+                        "Doris brand, so Apache Doris patch certification does "
+                        "not transfer; a distribution requires its own "
+                        "committed certification evidence.",
+                    ),
+                )
             return self._report(
                 observed_fe,
                 observed_be,
@@ -934,13 +980,64 @@ def _ordered_unique(values: Iterable[object]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(value) for value in values))
 
 
+def _certification_comment_matches(
+    comment: str,
+    *,
+    brand: str,
+    core: str,
+) -> bool:
+    """Match one evidence brand and core without the mutable alias registry."""
+    escaped_brand = re.escape(brand)
+    leading_brand = (
+        rf"(?:apache\s+{escaped_brand}|{escaped_brand})"
+        if brand == "doris"
+        else escaped_brand
+    )
+    escaped_core = re.escape(core)
+    pattern = re.compile(
+        rf"""
+        (?<![A-Za-z0-9_])
+        {leading_brand}
+        (?:\s*,?\s*version)?
+        (?:\s+{escaped_brand}-|\s*-\s*|\s+)
+        {escaped_core}
+        (?:-(?:rc\d+|alpha\d*|beta\d*))?
+        (?:-[0-9a-f]{{7,40}})?
+        (?=\s|\(|,|$)
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+    return pattern.search(comment) is not None
+
+
 def _certification_status(
     version: DorisVersion | None,
     matrix: DorisFeatureMatrix,
+    versions: DorisClusterVersionVector | None = None,
 ) -> VersionCertificationStatus:
     if version is None or version.core is None:
         return VersionCertificationStatus.UNKNOWN
     literal = version.core
+    # Apache Doris certification evidence only applies when every observed
+    # component carries the Apache Doris brand; a registered distribution is
+    # at best target-uncertified until its own evidence is committed.
+    provenance_verified = version.brand_verified
+    if provenance_verified and versions is not None:
+        components = (
+            versions.master_fe,
+            *versions.follower_fes,
+            *versions.backends,
+        )
+        provenance_verified = all(
+            component.is_parsed and component.brand_verified
+            for component in components
+        )
+    if not provenance_verified:
+        return (
+            VersionCertificationStatus.TARGET_UNCERTIFIED
+            if literal in matrix.certification_targets
+            else VersionCertificationStatus.OUTSIDE_TARGET
+        )
     if literal in matrix.certified_versions:
         return VersionCertificationStatus.CERTIFIED
     if literal in matrix.certification_targets:
@@ -961,7 +1058,7 @@ def _evaluation(
     matched_variants: tuple[str, ...] = (),
     matched_ranges: tuple[str, ...] = (),
 ) -> FeatureVersionEvaluation:
-    certification_status = _certification_status(effective, matrix)
+    certification_status = _certification_status(effective, matrix, versions)
     return FeatureVersionEvaluation(
         feature_id=feature.feature_id,
         requested_variant=variant_name,
@@ -2190,8 +2287,13 @@ DORIS_PATCH_CERTIFICATION_MATRIX = DorisPatchCertificationMatrix(
     evidence=PATCH_CERTIFICATION_EVIDENCE,
 )
 
-CERTIFIED_DORIS_VERSIONS = (
-    DORIS_PATCH_CERTIFICATION_MATRIX.certified_versions
+# Feature-level certification claims Apache Doris real-cluster evidence
+# only; distribution-branded evidence never certifies the Apache feature
+# matrix.
+CERTIFIED_DORIS_VERSIONS = tuple(
+    record.version
+    for record in PATCH_CERTIFICATION_EVIDENCE
+    if record.brand == "doris"
 )
 
 DORIS_FEATURE_MATRIX = DorisFeatureMatrix(
