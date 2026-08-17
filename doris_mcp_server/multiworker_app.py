@@ -416,6 +416,8 @@ async def doris_oauth_api_refresh(request: Request) -> Response:
 
 async def root_info(request: Request) -> JSONResponse:
     """Root endpoint"""
+    route_prefix = os.getenv("ROUTE_PREFIX", "").strip().strip("/")
+    route_prefix = ("/" + route_prefix) if route_prefix else ""
     return JSONResponse(
         {
             "service": "doris-mcp-server",
@@ -423,11 +425,14 @@ async def root_info(request: Request) -> JSONResponse:
             "worker_pid": os.getpid(),
             "mcp_initialized": _worker_initialized,
             "version": __version__,
+            "route_prefix": route_prefix or None,
             "endpoints": {
-                "health": "/health",
-                "live": "/live",
-                "ready": "/ready",
-                "mcp": MODERN_MCP_PATH,
+                "health": f"{route_prefix}/health" if route_prefix else "/health",
+                "live": f"{route_prefix}/live" if route_prefix else "/live",
+                "ready": f"{route_prefix}/ready" if route_prefix else "/ready",
+                "mcp": f"{route_prefix}{MODERN_MCP_PATH}"
+                if route_prefix
+                else MODERN_MCP_PATH,
             },
         }
     )
@@ -620,6 +625,21 @@ auxiliary_app = protect_auxiliary_http_app(basic_app)
 async def app(scope: Scope, receive: Receive, send: Send) -> None:
     """Main ASGI app that routes requests"""
     path = scope.get("path", "/")
+
+    # Strip the route prefix (reverse-proxy deployments) before internal
+    # routing. The master process propagates ROUTE_PREFIX via
+    # _multiworker_environment(); read the env directly so stripping works
+    # even before the worker rebuilds its config. We deliberately do NOT use
+    # uvicorn's root_path option: it *prepends* the prefix to scope["path"]
+    # rather than letting us strip it here.
+    route_prefix = os.getenv("ROUTE_PREFIX", "").strip().strip("/")
+    if route_prefix:
+        route_prefix = "/" + route_prefix
+    if route_prefix and path.startswith(route_prefix):
+        path = path[len(route_prefix) :] or "/"
+        scope = dict(scope)
+        scope["path"] = path
+        scope["root_path"] = route_prefix
 
     legacy_adapter_enabled = bool(
         _worker_http_transport

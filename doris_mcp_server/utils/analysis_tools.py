@@ -62,78 +62,87 @@ class TableAnalyzer:
 
         auth_context = get_auth_context()
         connection = await self.connection_manager.get_connection("query")
+        try:
+            # Get table basic information using parameterized query
+            table_info_sql = """
+            SELECT
+                table_name,
+                table_comment,
+                table_rows,
+                create_time,
+                engine
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+            AND table_name = %s
+            """
 
-        # Get table basic information using parameterized query
-        table_info_sql = """
-        SELECT
-            table_name,
-            table_comment,
-            table_rows,
-            create_time,
-            engine
-        FROM information_schema.tables
-        WHERE table_schema = DATABASE()
-        AND table_name = %s
-        """
-
-        table_info_result = await connection.execute(
-            table_info_sql, params=(table_name,), auth_context=auth_context
-        )
-        if not table_info_result.data:
-            raise ValueError(f"Table {table_name} does not exist")
-
-        table_info = table_info_result.data[0]
-
-        # Get column information using parameterized query
-        columns_sql = """
-        SELECT
-            column_name,
-            data_type,
-            is_nullable,
-            column_comment
-        FROM information_schema.columns
-        WHERE table_schema = DATABASE()
-        AND table_name = %s
-        ORDER BY ordinal_position
-        """
-
-        columns_result = await connection.execute(
-            columns_sql, params=(table_name,), auth_context=auth_context
-        )
-
-        summary = {
-            "table_name": table_info["table_name"],
-            "comment": table_info.get("table_comment"),
-            "row_count": table_info.get("table_rows", 0),
-            "create_time": str(table_info.get("create_time")),
-            "engine": table_info.get("engine"),
-            "column_count": len(columns_result.data),
-            "columns": columns_result.data,
-        }
-
-        # Get sample data using quoted identifier
-        safe_sample_size = validate_integer(
-            sample_size,
-            "sample size",
-            minimum=0,
-            maximum=10000,
-        )
-        if include_sample and safe_sample_size > 0:
-            quoted_table = quote_identifier(table_name, "table name")
-            # SQL sink audit: caller integer -> bounded validation + quoted
-            # identifier -> DorisConnection.execute.
-            sample_sql = f"SELECT * FROM {quoted_table} LIMIT {safe_sample_size}"  # nosec B608
-            sample_result = await connection.execute(
-                sample_sql, auth_context=auth_context
+            table_info_result = await connection.execute(
+                table_info_sql, params=(table_name,), auth_context=auth_context
             )
-            summary["sample_data"] = sample_result.data
+            if not table_info_result.data:
+                raise ValueError(f"Table {table_name} does not exist")
 
-        return summary
+            table_info = table_info_result.data[0]
+
+            # Get column information using parameterized query
+            columns_sql = """
+            SELECT
+                column_name,
+                data_type,
+                is_nullable,
+                column_comment
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+            AND table_name = %s
+            ORDER BY ordinal_position
+            """
+
+            columns_result = await connection.execute(
+                columns_sql, params=(table_name,), auth_context=auth_context
+            )
+
+            summary = {
+                "table_name": table_info["table_name"],
+                "comment": table_info.get("table_comment"),
+                "row_count": table_info.get("table_rows", 0),
+                "create_time": str(table_info.get("create_time")),
+                "engine": table_info.get("engine"),
+                "column_count": len(columns_result.data),
+                "columns": columns_result.data,
+            }
+
+            # Get sample data using quoted identifier
+            safe_sample_size = validate_integer(
+                sample_size,
+                "sample size",
+                minimum=0,
+                maximum=10000,
+            )
+            if include_sample and safe_sample_size > 0:
+                quoted_table = quote_identifier(table_name, "table name")
+                # SQL sink audit: caller integer -> bounded validation + quoted
+                # identifier -> DorisConnection.execute.
+                sample_sql = f"SELECT * FROM {quoted_table} LIMIT {safe_sample_size}"  # nosec B608
+                sample_result = await connection.execute(
+                    sample_sql, auth_context=auth_context
+                )
+                summary["sample_data"] = sample_result.data
+
+            return summary
+        finally:
+            # 🔧 FIX: release the connection on every exit path (including
+            # exceptions) to prevent pool exhaustion.
+            release_connection = getattr(
+                self.connection_manager, "release_connection", None
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
 
     async def analyze_column(
         self, table_name: str, column_name: str, analysis_type: str = "basic"
     ) -> dict[str, Any]:
         """Analyze column statistics"""
+        connection = None
         try:
             safe_table = quote_identifier(table_name, "table name")
             safe_column = quote_identifier(column_name, "column name")
@@ -223,54 +232,70 @@ class TableAnalyzer:
                 "column_name": column_name,
                 "table_name": table_name,
             }
+        finally:
+            # 🔧 FIX: release the connection on every exit path to prevent
+            # pool exhaustion.
+            release_connection = getattr(
+                self.connection_manager, "release_connection", None
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("query", connection)
 
     async def analyze_table_relationships(
         self, table_name: str, depth: int = 2
     ) -> dict[str, Any]:
         """Analyze table relationships"""
         connection = await self.connection_manager.get_connection("system")
+        try:
+            # Get table basic information
+            table_info_sql = """
+            SELECT
+                table_name,
+                table_comment,
+                table_rows
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+            AND table_name = %s
+            """
 
-        # Get table basic information
-        table_info_sql = """
-        SELECT
-            table_name,
-            table_comment,
-            table_rows
-        FROM information_schema.tables
-        WHERE table_schema = DATABASE()
-        AND table_name = %s
-        """
+            auth_context = get_auth_context()
+            table_result = await connection.execute(
+                table_info_sql,
+                params=(table_name,),
+                auth_context=auth_context,
+            )
+            if not table_result.data:
+                raise ValueError(f"Table {table_name} does not exist")
 
-        auth_context = get_auth_context()
-        table_result = await connection.execute(
-            table_info_sql,
-            params=(table_name,),
-            auth_context=auth_context,
-        )
-        if not table_result.data:
-            raise ValueError(f"Table {table_name} does not exist")
+            # Get all tables list (for analyzing potential relationships)
+            all_tables_sql = """
+            SELECT
+                table_name,
+                table_comment
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+            AND table_type = 'BASE TABLE'
+            AND table_name != %s
+            """
 
-        # Get all tables list (for analyzing potential relationships)
-        all_tables_sql = """
-        SELECT
-            table_name,
-            table_comment
-        FROM information_schema.tables
-        WHERE table_schema = DATABASE()
-        AND table_type = 'BASE TABLE'
-        AND table_name != %s
-        """
+            all_tables_result = await connection.execute(
+                all_tables_sql, params=(table_name,), auth_context=auth_context
+            )
 
-        all_tables_result = await connection.execute(
-            all_tables_sql, params=(table_name,), auth_context=auth_context
-        )
-
-        return {
-            "center_table": table_result.data[0],
-            "related_tables": all_tables_result.data,
-            "depth": depth,
-            "note": "Table relationship analysis based on column name similarity and business logic inference",
-        }
+            return {
+                "center_table": table_result.data[0],
+                "related_tables": all_tables_result.data,
+                "depth": depth,
+                "note": "Table relationship analysis based on column name similarity and business logic inference",
+            }
+        finally:
+            # 🔧 FIX: release the connection on every exit path to prevent
+            # pool exhaustion.
+            release_connection = getattr(
+                self.connection_manager, "release_connection", None
+            )
+            if connection is not None and callable(release_connection):
+                await release_connection("system", connection)
 
 
 class PerformanceMonitor:
@@ -284,84 +309,97 @@ class PerformanceMonitor:
     ) -> dict[str, Any]:
         """Get performance statistics"""
         connection = await self.connection_manager.get_connection("system")
+        try:
+            if metric_type == "queries":
+                # Query performance metrics
+                stats = {
+                    "metric_type": "queries",
+                    "time_range": time_range,
+                    "timestamp": datetime.now().isoformat(),
+                    "total_queries": 0,
+                    "avg_execution_time": 0.0,
+                    "slow_queries": 0,
+                    "error_queries": 0,
+                    "note": "Query performance statistics (simulated data)",
+                }
 
-        if metric_type == "queries":
-            # Query performance metrics
-            stats = {
-                "metric_type": "queries",
-                "time_range": time_range,
-                "timestamp": datetime.now().isoformat(),
-                "total_queries": 0,
-                "avg_execution_time": 0.0,
-                "slow_queries": 0,
-                "error_queries": 0,
-                "note": "Query performance statistics (simulated data)",
-            }
+            elif metric_type == "connections":
+                # Connection statistics
+                connection_metrics = await self.connection_manager.get_metrics()
+                stats = {
+                    "metric_type": "connections",
+                    "time_range": time_range,
+                    "timestamp": datetime.now().isoformat(),
+                    "total_connections": connection_metrics.total_connections,
+                    "active_connections": connection_metrics.active_connections,
+                    "idle_connections": connection_metrics.idle_connections,
+                    "failed_connections": connection_metrics.failed_connections,
+                    "connection_errors": connection_metrics.connection_errors,
+                    "avg_connection_time": connection_metrics.avg_connection_time,
+                    "last_health_check": (
+                        connection_metrics.last_health_check.isoformat()
+                        if connection_metrics.last_health_check
+                        else None
+                    ),
+                }
 
-        elif metric_type == "connections":
-            # Connection statistics
-            connection_metrics = await self.connection_manager.get_metrics()
-            stats = {
-                "metric_type": "connections",
-                "time_range": time_range,
-                "timestamp": datetime.now().isoformat(),
-                "total_connections": connection_metrics.total_connections,
-                "active_connections": connection_metrics.active_connections,
-                "idle_connections": connection_metrics.idle_connections,
-                "failed_connections": connection_metrics.failed_connections,
-                "connection_errors": connection_metrics.connection_errors,
-                "avg_connection_time": connection_metrics.avg_connection_time,
-                "last_health_check": connection_metrics.last_health_check.isoformat()
-                if connection_metrics.last_health_check
-                else None,
-            }
+            elif metric_type == "tables":
+                # Table-level statistics
+                tables_sql = """
+                SELECT
+                    table_name,
+                    table_rows,
+                    data_length,
+                    index_length,
+                    create_time,
+                    update_time
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE()
+                AND table_type = 'BASE TABLE'
+                ORDER BY table_rows DESC
+                LIMIT 20
+                """
 
-        elif metric_type == "tables":
-            # Table-level statistics
-            tables_sql = """
-            SELECT
-                table_name,
-                table_rows,
-                data_length,
-                index_length,
-                create_time,
-                update_time
-            FROM information_schema.tables
-            WHERE table_schema = DATABASE()
-            AND table_type = 'BASE TABLE'
-            ORDER BY table_rows DESC
-            LIMIT 20
-            """
+                auth_context = get_auth_context()
+                tables_result = await connection.execute(
+                    tables_sql, auth_context=auth_context
+                )
+                stats = {
+                    "metric_type": "tables",
+                    "time_range": time_range,
+                    "timestamp": datetime.now().isoformat(),
+                    "table_count": len(tables_result.data),
+                    "tables": tables_result.data,
+                }
 
-            auth_context = get_auth_context()
-            tables_result = await connection.execute(
-                tables_sql, auth_context=auth_context
+            elif metric_type == "system":
+                # System-level metrics (simulated)
+                stats = {
+                    "metric_type": "system",
+                    "time_range": time_range,
+                    "timestamp": datetime.now().isoformat(),
+                    "cpu_usage": 45.2,
+                    "memory_usage": 68.5,
+                    "disk_usage": 72.1,
+                    "network_io": {
+                        "bytes_sent": 1024000,
+                        "bytes_received": 2048000,
+                    },
+                    "note": "System metrics (simulated data)",
+                }
+
+            else:
+                raise ValueError(f"Unsupported metric type: {metric_type}")
+
+            return stats
+        finally:
+            # 🔧 FIX: release the connection on every exit path to prevent
+            # pool exhaustion.
+            release_connection = getattr(
+                self.connection_manager, "release_connection", None
             )
-            stats = {
-                "metric_type": "tables",
-                "time_range": time_range,
-                "timestamp": datetime.now().isoformat(),
-                "table_count": len(tables_result.data),
-                "tables": tables_result.data,
-            }
-
-        elif metric_type == "system":
-            # System-level metrics (simulated)
-            stats = {
-                "metric_type": "system",
-                "time_range": time_range,
-                "timestamp": datetime.now().isoformat(),
-                "cpu_usage": 45.2,
-                "memory_usage": 68.5,
-                "disk_usage": 72.1,
-                "network_io": {"bytes_sent": 1024000, "bytes_received": 2048000},
-                "note": "System metrics (simulated data)",
-            }
-
-        else:
-            raise ValueError(f"Unsupported metric type: {metric_type}")
-
-        return stats
+            if connection is not None and callable(release_connection):
+                await release_connection("system", connection)
 
     async def get_query_history(
         self, limit: int = 50, order_by: str = "time"

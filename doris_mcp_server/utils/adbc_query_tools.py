@@ -21,10 +21,11 @@ High-performance data querying using Apache Arrow Flight SQL protocol
 """
 
 import asyncio
+import decimal
 import os
 import socket
 import time
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from ..result_limits import (
@@ -43,12 +44,20 @@ logger = get_logger(__name__)
 
 
 def _convert_numpy_types(obj: Any) -> Any:
-    """Convert numpy types to native Python types for JSON serialization"""
+    """Convert numpy/pandas/decimal types to native Python types for JSON serialization"""
     try:
         # Import numpy only when needed
         import numpy as np
         import pandas as pd
 
+        # 🔧 FIX: ADBC/Arrow exposes DECIMAL columns as Python decimal.Decimal.
+        # json.dumps() cannot serialize Decimal, so coerce to float (or str if
+        # too big to preserve precision).
+        if isinstance(obj, decimal.Decimal):
+            try:
+                return float(obj)
+            except (ValueError, OverflowError):
+                return str(obj)
         if isinstance(obj, np.integer):
             return int(obj)
         elif isinstance(obj, np.floating):
@@ -59,12 +68,35 @@ def _convert_numpy_types(obj: Any) -> Any:
             return obj.tolist()
         elif isinstance(obj, pd.Timestamp | pd.NaT.__class__):
             return str(obj)
-        elif pd.isna(obj):
-            return None
+        elif isinstance(obj, datetime | date):
+            return obj.isoformat()
+        elif isinstance(obj, bytes | bytearray):
+            try:
+                return obj.decode("utf-8")
+            except UnicodeDecodeError:
+                return obj.hex()
         else:
+            # pd.isna() raises on some container types; only call it for scalars.
+            try:
+                if pd.isna(obj):
+                    return None
+            except (TypeError, ValueError):
+                pass
             return obj
     except ImportError:
-        # If numpy/pandas not available, return as-is
+        # If numpy/pandas not available, still handle Decimal/datetime/bytes.
+        if isinstance(obj, decimal.Decimal):
+            try:
+                return float(obj)
+            except (ValueError, OverflowError):
+                return str(obj)
+        if isinstance(obj, datetime | date):
+            return obj.isoformat()
+        if isinstance(obj, bytes | bytearray):
+            try:
+                return obj.decode("utf-8")
+            except UnicodeDecodeError:
+                return obj.hex()
         return obj
 
 
