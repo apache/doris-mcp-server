@@ -552,7 +552,7 @@ def configure_successful_pool_recovery(manager, monkeypatch, *, delay=0):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pool_state", ["missing", "closed"])
-async def test_pool_recovery_completes_without_reentrant_lock_deadlock(
+async def test_global_connection_recovers_without_reentrant_lock_deadlock(
     manager,
     monkeypatch,
     pool_state,
@@ -565,8 +565,12 @@ async def test_pool_recovery_completes_without_reentrant_lock_deadlock(
 
     recovered_pool = configure_successful_pool_recovery(manager, monkeypatch)
 
-    await asyncio.wait_for(manager._recover_pool_with_lock(), timeout=1)
+    connection = await asyncio.wait_for(
+        manager._get_global_connection(f"{pool_state}-pool-recovery"),
+        timeout=1,
+    )
 
+    assert connection.connection.label == "recovered:1"
     assert manager.pool is recovered_pool
     assert manager.pool_recovering is False
 

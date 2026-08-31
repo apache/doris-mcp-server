@@ -69,6 +69,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Prevented global connection-pool recovery from deadlocking when the pool is
+  missing, closed, or times out by making the recovery routine the sole owner
+  of its lock and deduplicating concurrent recovery by pool generation.
 - Preserved fail-closed distribution provenance across version parsing,
   brandless FE/BE component fallback, and certification evidence validation,
   preventing unknown or mismatched brands from inheriting Apache Doris
