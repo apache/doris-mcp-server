@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -532,3 +533,85 @@ async def test_configure_for_token_validates_dedicated_route_without_global_muta
     release_connection.assert_awaited_once_with(token, connection)
     assert manager.original_db_config == original_config
     assert manager.active_db_config == active_config
+
+
+def configure_successful_pool_recovery(manager, monkeypatch, *, delay=0):
+    recovered_pool = FakePool("recovered")
+
+    async def create_global_pool(*, timeout=None):
+        if delay:
+            await asyncio.sleep(delay)
+        manager.pool = recovered_pool
+        manager._mark_global_pool_created()
+
+    monkeypatch.setattr(manager, "_create_global_pool", create_global_pool)
+    monkeypatch.setattr(manager, "_test_pool_health", AsyncMock(return_value=True))
+    monkeypatch.setattr(manager, "_warmup_pool", AsyncMock())
+    return recovered_pool
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pool_state", ["missing", "closed"])
+async def test_global_connection_recovers_without_reentrant_lock_deadlock(
+    manager,
+    monkeypatch,
+    pool_state,
+):
+    if pool_state == "missing":
+        manager.pool = None
+    else:
+        manager.pool = FakePool("closed")
+        manager.pool.closed = True
+
+    recovered_pool = configure_successful_pool_recovery(manager, monkeypatch)
+
+    connection = await asyncio.wait_for(
+        manager._get_global_connection(f"{pool_state}-pool-recovery"),
+        timeout=1,
+    )
+
+    assert connection.connection.label == "recovered:1"
+    assert manager.pool is recovered_pool
+    assert manager.pool_recovering is False
+
+
+@pytest.mark.asyncio
+async def test_acquisition_timeout_recovers_and_retries(manager, monkeypatch):
+    timed_out_pool = FakePool("timed-out")
+    timed_out_pool.acquire = AsyncMock(side_effect=TimeoutError)
+    manager.pool = timed_out_pool
+    recovered_pool = configure_successful_pool_recovery(manager, monkeypatch)
+
+    connection = await asyncio.wait_for(
+        manager._get_global_connection("recovery-test"),
+        timeout=1,
+    )
+
+    assert connection.connection.label == "recovered:1"
+    assert manager.pool is recovered_pool
+    assert timed_out_pool.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_pool_recovery_creates_only_one_new_generation(
+    manager,
+    monkeypatch,
+):
+    manager.pool = None
+    recovered_pool = configure_successful_pool_recovery(
+        manager,
+        monkeypatch,
+        delay=0.01,
+    )
+    initial_generation = manager._global_pool_generation
+
+    await asyncio.wait_for(
+        asyncio.gather(
+            manager._recover_pool_with_lock(),
+            manager._recover_pool_with_lock(),
+        ),
+        timeout=1,
+    )
+
+    assert manager.pool is recovered_pool
+    assert manager._global_pool_generation == initial_generation + 1
