@@ -2304,8 +2304,15 @@ class DorisConnectionManager:
 
     async def _recover_pool(self) -> None:
         """Recover connection pool when health check fails"""
-        # Use lock to prevent concurrent recovery attempts
-        async with self.pool_recovery_lock:
+        observed_generation = self._global_pool_generation
+
+        # Use a single lock owner to prevent concurrent recovery attempts.
+        async with self._recovery_lock:
+            # Another waiter may already have recreated the pool while this
+            # coroutine was waiting for the lock.
+            if self._global_pool_generation != observed_generation:
+                return
+
             # Check if another recovery is already in progress
             if self.pool_recovering:
                 self.logger.debug("Pool recovery already in progress, waiting...")
@@ -2408,10 +2415,8 @@ class DorisConnectionManager:
                 self.pool_recovering = False
 
     async def _recover_pool_with_lock(self) -> None:
-        """🔧 FIX: Recovery method that uses the new recovery lock to prevent races"""
-        async with self._recovery_lock:
-            if not self.pool_recovering:  # Only recover if not already in progress
-                await self._recover_pool()
+        """Recover the pool through the method that owns the recovery lock."""
+        await self._recover_pool()
 
     def _get_effective_auth_context(
         self,
