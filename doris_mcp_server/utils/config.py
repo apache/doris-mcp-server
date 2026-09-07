@@ -409,6 +409,11 @@ class DatabaseConfig:
     be_hosts: list[str] = field(default_factory=list)
     be_webserver_port: int = 8040
 
+    # Optional statement executed once on every NEW pooled connection
+    # (aiomysql `init_command`), e.g. a session-narrowing switch or a SET of
+    # session variables. None (default) keeps pool creation byte-identical.
+    init_command: str | None = None
+
     # Shared FE/BE HTTP safety limits. Runtime enforcement also applies hard
     # caps so unsafe config values cannot remove the boundary.
     http_connect_timeout_seconds: float = 3.0
