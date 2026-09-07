@@ -68,6 +68,9 @@ class DatabaseConfig:
     http_read_timeout_seconds: float = 15.0
     http_total_timeout_seconds: float = 30.0
     http_max_response_bytes: int = 4 * 1024 * 1024
+    # Optional statement executed once on every NEW pooled connection of this
+    # token's pool (aiomysql `init_command`). None keeps pool creation unchanged.
+    init_command: str | None = None
 
 
 @dataclass
@@ -350,6 +353,7 @@ class TokenManager:
                         'http_max_response_bytes',
                         4 * 1024 * 1024,
                     ),
+                    init_command=db_config.get('init_command'),
                 )
 
             # Create token info

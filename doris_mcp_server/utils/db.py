@@ -127,6 +127,7 @@ class DatabasePoolConfig(TypedDict):
     password: str
     database: str
     charset: str
+    init_command: NotRequired[str | None]
 
 
 @dataclass
@@ -639,6 +640,9 @@ class DorisConnectionManager:
             "database": config.database.database,
             "charset": config.database.charset,
         }
+        init_command = getattr(config.database, "init_command", None)
+        if init_command:
+            self.original_db_config["init_command"] = init_command
 
         # Current active database config (may be overridden by token-bound config)
         # NOTE: This is kept for backward compatibility with non-token requests
@@ -758,6 +762,9 @@ class DorisConnectionManager:
                 "database": token_db_config.database,
                 "charset": token_db_config.charset,
             }
+            init_command = getattr(token_db_config, "init_command", None)
+            if init_command:
+                db_config["init_command"] = init_command
             token_hosts = getattr(token_db_config, "hosts", [])
             if token_hosts:
                 db_config["hosts"] = self._ordered_hosts(
@@ -843,6 +850,11 @@ class DorisConnectionManager:
             # still use fully qualified names or select a DB later.
             "database": "information_schema",
             "charset": self.original_db_config["charset"],
+            **(
+                {"init_command": self.original_db_config["init_command"]}
+                if "init_command" in self.original_db_config
+                else {}
+            ),
             "maxsize": self._get_doris_user_pool_maxsize(),
         }
 
@@ -1260,6 +1272,9 @@ class DorisConnectionManager:
                         "database": token_db_config.database,
                         "charset": token_db_config.charset,
                     }
+                    init_command = getattr(token_db_config, "init_command", None)
+                    if init_command:
+                        db_config["init_command"] = init_command
                     token_hosts = getattr(token_db_config, "hosts", [])
                     if token_hosts:
                         db_config["hosts"] = self._ordered_hosts(
@@ -1384,6 +1399,7 @@ class DorisConnectionManager:
                         connect_timeout=self.connect_timeout,
                         autocommit=True,
                         pool_recycle=self.pool_recycle,
+                        init_command=db_config.get("init_command"),
                     ),
                     timeout=pool_timeout,
                 )
