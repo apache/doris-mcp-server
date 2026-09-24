@@ -23,7 +23,9 @@ from unittest.mock import patch
 import pytest
 from mcp.types import Tool
 
+from doris_mcp_server.result_limits import DEFAULT_MAX_RESULT_BYTES
 from doris_mcp_server.schema_validation import (
+    DEFAULT_SCHEMA_LIMITS,
     JSON_SCHEMA_2020_12,
     SchemaLimits,
     ToolArgumentsValidationError,
@@ -238,3 +240,51 @@ def test_output_schema_requires_structured_content():
     compiled = ToolSchemaGuard().compile_tool(_advanced_tool())
     with pytest.raises(ToolOutputValidationError, match="no structured content"):
         compiled.validate_output(None)
+
+
+def test_limits_for_result_bytes_follow_the_result_ceiling():
+    base = DEFAULT_SCHEMA_LIMITS
+    ceiling = 16 * 1024 * 1024
+    limits = SchemaLimits.for_result_bytes(ceiling)
+
+    assert limits.max_instance_bytes == ceiling + base.max_instance_bytes
+    assert limits.max_instance_nodes == limits.max_instance_bytes // 2
+    assert limits.max_instance_string_length == ceiling
+    assert limits.max_instance_depth == base.max_instance_depth
+    assert limits.max_schema_bytes == base.max_schema_bytes
+
+    # Nothing shrinks below the base, whatever the ceiling.
+    small = SchemaLimits.for_result_bytes(0)
+    assert small.max_instance_bytes == base.max_instance_bytes
+    assert small.max_instance_nodes == base.max_instance_bytes // 2
+    assert small.max_instance_string_length == base.max_instance_string_length
+
+    custom = SchemaLimits.for_result_bytes(
+        1024, base=SchemaLimits(max_instance_bytes=4096, max_instance_nodes=4)
+    )
+    assert custom.max_instance_bytes == 4096 + 1024
+    assert custom.max_instance_nodes == (4096 + 1024) // 2
+
+
+def test_default_guard_refuses_a_result_inside_the_default_result_ceiling():
+    tool = Tool(
+        name="rows",
+        description="Rows under the default result ceiling.",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+    )
+    # 6,000 small rows: far below DEFAULT_MAX_RESULT_BYTES, above the default
+    # node budget; one 300 KiB cell: below the ceiling, above the string budget.
+    payloads = [
+        {"rows": [{"n": index} for index in range(6_000)]},
+        {"cell": "x" * 300_000},
+    ]
+    default_schema = ToolSchemaGuard().compile_tool(tool)
+    derived_schema = ToolSchemaGuard(
+        SchemaLimits.for_result_bytes(DEFAULT_MAX_RESULT_BYTES)
+    ).compile_tool(tool)
+
+    for payload in payloads:
+        with pytest.raises(ToolOutputValidationError, match="exceeds output limits"):
+            default_schema.validate_output(payload)
+        derived_schema.validate_output(payload)

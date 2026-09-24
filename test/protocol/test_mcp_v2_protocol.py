@@ -200,6 +200,23 @@ class StubPromptsManager:
         )
 
 
+def test_server_schema_limits_follow_the_tools_manager():
+    from doris_mcp_server.protocol import _manager_schema_limits
+    from doris_mcp_server.schema_validation import DEFAULT_SCHEMA_LIMITS, SchemaLimits
+
+    class WideToolsManager(StubToolsManager):
+        schema_limits = SchemaLimits.for_result_bytes(16 * 1024 * 1024)
+
+    class OddToolsManager(StubToolsManager):
+        schema_limits = "not limits"
+
+    assert _manager_schema_limits(WideToolsManager()) == SchemaLimits.for_result_bytes(
+        16 * 1024 * 1024
+    )
+    assert _manager_schema_limits(StubToolsManager()) is DEFAULT_SCHEMA_LIMITS
+    assert _manager_schema_limits(OddToolsManager()) is DEFAULT_SCHEMA_LIMITS
+
+
 def create_test_server(
     required_client_capabilities: dict[str, ClientCapabilities] | None = None,
     required_tool_capabilities: dict[str, ClientCapabilities] | None = None,

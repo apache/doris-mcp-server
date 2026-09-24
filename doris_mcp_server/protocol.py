@@ -288,6 +288,12 @@ def _tools_for_protocol(
     ]
 
 
+def _manager_schema_limits(tools_manager: object) -> SchemaLimits:
+    """The limits a tools manager resolved from its configuration, else defaults."""
+    limits = getattr(tools_manager, "schema_limits", None)
+    return limits if isinstance(limits, SchemaLimits) else DEFAULT_SCHEMA_LIMITS
+
+
 def create_doris_mcp_server(
     *,
     resources_manager: ResourcesManager,
@@ -299,7 +305,7 @@ def create_doris_mcp_server(
     list_page_size: int = DEFAULT_LIST_PAGE_SIZE,
     state_handle_secret: str | bytes | None = None,
     state_handle_ttl_seconds: int = DEFAULT_STATE_HANDLE_TTL_SECONDS,
-    schema_limits: SchemaLimits = DEFAULT_SCHEMA_LIMITS,
+    schema_limits: SchemaLimits | None = None,
     required_client_capabilities: Mapping[str, ClientCapabilities] | None = None,
     required_tool_capabilities: Mapping[str, ClientCapabilities] | None = None,
 ) -> Server:
@@ -314,7 +320,11 @@ def create_doris_mcp_server(
         ),
         default_ttl_seconds=state_handle_ttl_seconds,
     )
-    schema_guard = ToolSchemaGuard(schema_limits)
+    schema_guard = ToolSchemaGuard(
+        schema_limits
+        if schema_limits is not None
+        else _manager_schema_limits(tools_manager)
+    )
 
     async def list_resources(
         ctx: ServerRequestContext,

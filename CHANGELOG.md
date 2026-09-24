@@ -69,6 +69,12 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Derived the tool-schema guard's instance limits from the configured result
+  ceiling (`PerformanceConfig.max_result_bytes`) in `DorisToolsManager` and
+  `create_doris_mcp_server`, so a result the query runtime has already bounded
+  is no longer refused as `CHILD_RESULT_INVALID` by the guard's own defaults;
+  the refusal now carries its reason in `details.reason`, and
+  `DorisToolsManager` accepts an explicit `schema_limits`.
 - Preserved fail-closed distribution provenance across version parsing,
   brandless FE/BE component fallback, and certification evidence validation,
   preventing unknown or mismatched brands from inheriting Apache Doris

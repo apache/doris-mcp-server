@@ -23,7 +23,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from doris_mcp_server.schema_validation import ToolSchemaGuard
+from doris_mcp_server.result_limits import DEFAULT_MAX_RESULT_BYTES
+from doris_mcp_server.schema_validation import SchemaLimits, ToolSchemaGuard
 from doris_mcp_server.tools.domain_dispatcher import ToolNotFoundError
 from doris_mcp_server.tools.doris_feature_matrix import (
     EXPECTED_DOMAIN_CHILDREN,
@@ -394,3 +395,37 @@ class TestDorisToolsManager:
         compiled = ToolSchemaGuard().compile_catalog(tools)
 
         assert set(compiled) == {tool.name for tool in tools}
+
+
+def _connection_manager_with_result_bytes(max_result_bytes):
+    connection_manager = Mock()
+    connection_manager.get_connection = AsyncMock()
+    connection_manager.config.adbc.default_max_rows = 1000
+    connection_manager.config.adbc.default_timeout = 30
+    connection_manager.config.adbc.default_return_format = "dict"
+    connection_manager.config.performance.max_result_bytes = max_result_bytes
+    return connection_manager
+
+
+def test_schema_limits_follow_the_configured_result_ceiling():
+    manager = DorisToolsManager(_connection_manager_with_result_bytes(16 * 1024 * 1024))
+
+    assert manager.schema_limits == SchemaLimits.for_result_bytes(16 * 1024 * 1024)
+
+
+def test_schema_limits_default_to_the_default_result_ceiling():
+    manager = DorisToolsManager(_connection_manager_with_result_bytes(None))
+
+    assert manager.schema_limits == SchemaLimits.for_result_bytes(
+        DEFAULT_MAX_RESULT_BYTES
+    )
+
+
+def test_explicit_schema_limits_win_over_the_configured_ceiling():
+    explicit = SchemaLimits(max_instance_nodes=8)
+    manager = DorisToolsManager(
+        _connection_manager_with_result_bytes(16 * 1024 * 1024),
+        schema_limits=explicit,
+    )
+
+    assert manager.schema_limits is explicit
