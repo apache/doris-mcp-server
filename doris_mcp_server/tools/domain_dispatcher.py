@@ -791,7 +791,7 @@ class DomainDispatcher:
                     "status_code": exc.status_code,
                 },
             )
-        except ToolOutputValidationError:
+        except ToolOutputValidationError as exc:
             logger.exception("Formal child output validation failed for %s", feature_id)
             self._audit(
                 feature_id,
@@ -805,7 +805,7 @@ class DomainDispatcher:
                 "Child result did not match the declared schema.",
                 child_tool=child.name,
                 manifest_version=manifest.manifest_version,
-                details={"rediscover": False},
+                details={"rediscover": False, "reason": str(exc)},
             )
         except Exception as exc:
             logger.error(

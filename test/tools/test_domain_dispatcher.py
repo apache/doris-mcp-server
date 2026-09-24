@@ -1203,6 +1203,37 @@ async def test_output_schema_violation_becomes_stable_server_error() -> None:
 
     assert result.mode == "error"
     assert result.error.code is DomainErrorCode.CHILD_RESULT_INVALID
+    assert "output schema" in result.error.details["reason"]
+
+
+@pytest.mark.asyncio
+async def test_output_over_the_guard_limits_names_the_limit_in_the_error() -> None:
+    manager = DorisToolsManager(
+        _connection_manager(),
+        domain_availability_provider=SelectiveAvailabilityProvider(
+            {"doris_query.execute_query"}
+        ),
+        schema_limits=SchemaLimits(max_instance_nodes=8),
+    )
+    manager._exec_query_tool = AsyncMock(return_value=_successful_query())
+
+    with patch.object(
+        manager.domain_dispatcher,
+        "_normalize_child_result",
+        return_value={"rows": [{"n": index} for index in range(64)]},
+    ):
+        result = await manager.domain_dispatcher.call_domain(
+            "doris_query",
+            {
+                "child_tool": "execute_query",
+                "arguments": {"sql": "SELECT 1"},
+            },
+            None,
+        )
+
+    assert result.mode == "error"
+    assert result.error.code is DomainErrorCode.CHILD_RESULT_INVALID
+    assert "output limits" in result.error.details["reason"]
 
 
 @pytest.mark.asyncio

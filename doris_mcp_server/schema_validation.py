@@ -22,7 +22,7 @@ import hashlib
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import unquote
 
@@ -58,6 +58,36 @@ class SchemaLimits:
     max_instance_string_length: int = 262_144
     max_validation_errors: int = 16
     max_cached_schemas: int = 256
+
+    @classmethod
+    def for_result_bytes(
+        cls,
+        max_result_bytes: int,
+        *,
+        base: SchemaLimits | None = None,
+    ) -> SchemaLimits:
+        """Return limits that admit a structured result of ``max_result_bytes``.
+
+        Query children bound their rows by the configured result ceiling
+        (``PerformanceConfig.max_result_bytes``), while the output guard applies
+        instance limits of its own. When the two disagree, the guard refuses a
+        result the executor has already accepted and truncated. This derives the
+        guard from the ceiling instead: the instance budget grows to the ceiling
+        plus ``base.max_instance_bytes`` (the envelope around the rows: column
+        descriptors, metadata, the result wrapper), the node budget follows the
+        bytes (a JSON node is never shorter than two bytes, so the byte limit
+        stays the binding one), and one string may be as long as the result
+        itself. Every other limit is ``base``'s, and nothing shrinks below it.
+        """
+        base = base if base is not None else DEFAULT_SCHEMA_LIMITS
+        ceiling = max(int(max_result_bytes), 0)
+        instance_bytes = max(base.max_instance_bytes, ceiling + base.max_instance_bytes)
+        return replace(
+            base,
+            max_instance_bytes=instance_bytes,
+            max_instance_nodes=max(base.max_instance_nodes, instance_bytes // 2),
+            max_instance_string_length=max(base.max_instance_string_length, ceiling),
+        )
 
 
 DEFAULT_SCHEMA_LIMITS = SchemaLimits()

@@ -27,6 +27,8 @@ from typing import Any
 from mcp.types import Tool
 
 from ..auth.operation_policy import authorize_operation
+from ..result_limits import configured_result_limits
+from ..schema_validation import SchemaLimits, ToolSchemaGuard
 from ..state_handles import StateHandleCodec
 from ..utils.adbc_query_tools import DorisADBCQueryTools
 from ..utils.analysis_tools import SQLAnalyzer, TableAnalyzer
@@ -96,9 +98,19 @@ class DorisToolsManager(
         tool_providers: Iterable[CustomToolProvider] | None = None,
         domain_availability_provider: DomainAvailabilityProvider | None = None,
         tool_exposure_mode: str | ToolExposureMode | None = None,
+        schema_limits: SchemaLimits | None = None,
     ) -> None:
         self.connection_manager = connection_manager
         config = getattr(connection_manager, "config", None)
+        # The output guard follows the configured result ceiling: a result the
+        # executor was allowed to return must be one the guard accepts.
+        self.schema_limits = (
+            schema_limits
+            if schema_limits is not None
+            else SchemaLimits.for_result_bytes(
+                configured_result_limits(config).max_bytes
+            )
+        )
         self._tool_provider_runtime = ToolProviderRuntime.create(config, tool_providers)
         self.query_executor = DorisQueryExecutor(connection_manager)
         self.table_analyzer = TableAnalyzer(connection_manager)
@@ -216,6 +228,7 @@ class DorisToolsManager(
         self._domain_dispatcher = DomainDispatcher(
             self,
             self._domain_manifest_service,
+            schema_guard=ToolSchemaGuard(self.schema_limits),
             state_handle_codec=StateHandleCodec(
                 state_handle_secret,
                 default_ttl_seconds=state_handle_ttl,
