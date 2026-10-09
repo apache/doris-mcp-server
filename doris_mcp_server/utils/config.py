@@ -22,6 +22,7 @@ Implements configuration loading, validation and management functionality
 
 import json
 import logging
+import math
 import multiprocessing
 import os
 import secrets
@@ -2252,14 +2253,23 @@ class DorisConfig:
         if not (1 <= self.database.be_webserver_port <= 65535):
             errors.append("Doris BE HTTP port must be in the range 1-65535")
 
-        if self.database.http_connect_timeout_seconds <= 0:
-            errors.append("Doris HTTP connect timeout must be greater than 0")
+        if (
+            not math.isfinite(self.database.http_connect_timeout_seconds)
+            or self.database.http_connect_timeout_seconds <= 0
+        ):
+            errors.append("Doris HTTP connect timeout must be finite and greater than 0")
 
-        if self.database.http_read_timeout_seconds <= 0:
-            errors.append("Doris HTTP read timeout must be greater than 0")
+        if (
+            not math.isfinite(self.database.http_read_timeout_seconds)
+            or self.database.http_read_timeout_seconds <= 0
+        ):
+            errors.append("Doris HTTP read timeout must be finite and greater than 0")
 
-        if self.database.http_total_timeout_seconds <= 0:
-            errors.append("Doris HTTP total timeout must be greater than 0")
+        if (
+            not math.isfinite(self.database.http_total_timeout_seconds)
+            or self.database.http_total_timeout_seconds <= 0
+        ):
+            errors.append("Doris HTTP total timeout must be finite and greater than 0")
 
         if self.database.http_max_response_bytes <= 0:
             errors.append("Doris HTTP response byte limit must be greater than 0")
