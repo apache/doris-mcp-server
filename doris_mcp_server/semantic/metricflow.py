@@ -23,6 +23,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast
@@ -165,9 +166,13 @@ class MetricFlowSidecarProvider:
                 process.communicate(payload),
                 timeout=self._timeout_seconds,
             )
-        except TimeoutError as exc:
-            process.kill()
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            if process.returncode is None:
+                with suppress(ProcessLookupError):
+                    process.kill()
             await process.wait()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
             raise MetricFlowProviderFailure(
                 "METRICFLOW_PROVIDER_TIMEOUT",
                 "MetricFlow provider timed out.",
