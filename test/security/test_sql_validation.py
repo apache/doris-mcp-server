@@ -109,6 +109,62 @@ class TestSQLSecurityValidator:
 
         assert result.is_valid is True
 
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT 'ios_created_time_parse_failure' AS metric",
+            "SELECT 'CREATE DROP DELETE INSERT UPDATE EXECUTE' AS label",
+            'SELECT created_time AS "CREATE" FROM users',
+            "SELECT `CREATE`, `DROP`, `KILL` FROM `UPDATE`",
+            "SELECT created_time, updated_time FROM users",
+            "SELECT 1 /* CREATE TABLE example */",
+            "SELECT 1 /* note: DROP INSERT CREATE UPDATE */",
+            "SELECT 1 -- CREATE TABLE example\n",
+            "SELECT 1 # CREATE TABLE example\n",
+            "WITH p AS (SELECT created_time FROM users) "
+            "SELECT 'ios_created_time_parse_failure' AS metric FROM p",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_blocked_words_in_non_executable_tokens_are_allowed(
+        self, sql_validator, analyst_context, sql
+    ):
+        result = await sql_validator.validate(sql, analyst_context)
+
+        assert result.is_valid is True, result.error_message
+        assert result.blocked_operations == []
+
+    @pytest.mark.parametrize(
+        ("sql", "operation"),
+        [
+            ("CREATE OR REPLACE VIEW v AS SELECT 1", "CREATE"),
+            ("/* note */ cReAtE TABLE example (id INT)", "CREATE"),
+            ("/* note */ DROP TABLE example", "DROP"),
+            ("/* note */ UPDATE example SET id = 1", "UPDATE"),
+            ("/* note */ KILL 1", "KILL"),
+            ("/* note */ SHUTDOWN", "SHUTDOWN"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_actual_operations_still_report_blocked_keywords(
+        self, sql_validator, analyst_context, sql, operation
+    ):
+        result = await sql_validator.validate(sql, analyst_context)
+
+        assert result.is_valid is False
+        assert operation in result.blocked_operations
+
+    @pytest.mark.asyncio
+    async def test_configured_combined_keyword_still_blocked(
+        self, sql_validator, analyst_context
+    ):
+        sql_validator.blocked_keywords = {"UNION ALL"}
+
+        result = await sql_validator.validate("SELECT 1 UNION ALL SELECT 2", analyst_context)
+
+        assert result.is_valid is False
+        assert result.blocked_operations == ["UNION ALL"]
+
     @pytest.mark.asyncio
     async def test_legitimate_union_is_allowed(self, sql_validator, analyst_context):
         """Test ordinary UNION queries are not rejected as sensitive extraction."""

@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 import sqlparse
 from sqlparse.sql import Statement
-from sqlparse.tokens import Keyword, Name
+from sqlparse.tokens import Comment, Keyword, Name
 
 from .auth_credentials import (
     EMPTY_CREDENTIAL,
@@ -1306,32 +1306,35 @@ class SQLSecurityValidator:
 
     async def _check_blocked_keywords(self, parsed: Statement) -> ValidationResult:
         """Check blocked keywords"""
-        blocked_operations = []
+        blocked_operations: set[str] = set()
+        first_code_token = True
 
-        # Check all tokens in the parsed statement
         for token in parsed.flatten():
-            # Check if token is a keyword (including DML/DDL) or name that matches blocked operations
-            if (
-                token.ttype is Keyword
-                or token.ttype is Name
-                or (token.ttype and str(token.ttype).startswith("Token.Keyword"))
-            ):
-                token_value = token.value.upper().strip()
+            if token.is_whitespace or token.ttype in Comment:
+                continue
+            if token.ttype in Keyword:
+                # sqlparse combines some keyword tokens, such as CREATE OR
+                # REPLACE. Honor both configured compound and individual words.
+                if token.normalized in self.blocked_keywords:
+                    blocked_operations.add(token.normalized)
+                blocked_operations.update(
+                    self.blocked_keywords.intersection(token.normalized.split())
+                )
+            elif first_code_token and token.ttype in Name:
+                # KILL/SHUTDOWN are parsed as names. Only an unquoted command
+                # at the start of a statement is an operation, not a column or
+                # table identifier elsewhere in a read-only query.
+                token_value = token.value.upper()
                 if token_value in self.blocked_keywords:
-                    blocked_operations.append(token_value)
-            # Also check for DDL/DML keywords in token values
-            elif hasattr(token, "value") and token.value:
-                token_value = token.value.upper().strip()
-                for blocked_keyword in self.blocked_keywords:
-                    if blocked_keyword in token_value:
-                        blocked_operations.append(blocked_keyword)
+                    blocked_operations.add(token_value)
+            first_code_token = False
 
         if blocked_operations:
             return ValidationResult(
                 is_valid=False,
-                error_message=f"Contains blocked operations: {', '.join(set(blocked_operations))}",
+                error_message=f"Contains blocked operations: {', '.join(sorted(blocked_operations))}",
                 risk_level="high",
-                blocked_operations=list(set(blocked_operations)),
+                blocked_operations=sorted(blocked_operations),
             )
 
         return ValidationResult(is_valid=True)
