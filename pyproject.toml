@@ -43,7 +43,7 @@ classifiers = [
 
 dependencies = [
     # Core MCP dependencies
-    "mcp>=2.0.0,<2.1.0",
+    "mcp>=2.0.0,<2.3.0",
     # Database drivers
     "aiomysql>=0.3.0",
     "PyMySQL>=1.1.0",
