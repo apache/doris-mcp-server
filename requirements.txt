@@ -1,7 +1,7 @@
 # Runtime dependencies - auto-generated from pyproject.toml
 # Do not edit manually; run `python generate_requirements.py`.
 
-mcp>=2.0.0,<2.1.0
+mcp>=2.0.0,<2.3.0
 aiomysql>=0.3.0
 PyMySQL>=1.1.0
 adbc-driver-manager>=0.8.0
