@@ -58,7 +58,7 @@ def _compile_version_pattern(brands: tuple[str, ...]) -> re.Pattern[str]:
         (?:\s*,?\s*version)?
         (?:\s+(?P<version_brand>{prefix_alternatives})-|\s*-\s*|\s+)
         (?P<core>\d+\.\d+\.\d+)
-        (?:-(?P<prerelease>rc\d+|alpha\d*|beta\d*))?
+        (?:-(?P<prerelease>release|rc\d+|alpha\d*|beta\d*))?
         (?:-(?P<commit>[0-9a-f]{{7,40}}))?
         (?=\s|\(|,|$)
         """,

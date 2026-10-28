@@ -72,6 +72,38 @@ def test_version_probe_uses_version_comment() -> None:
             None,
             "4.1.3",
         ),
+        (
+            "doris-4.1.5-release-917b20be838",
+            "4.1.5",
+            "release",
+            "917b20be838",
+            None,
+            "4.1.5",
+        ),
+        (
+            "Doris version doris-4.1.5-release-917b20be838 (Cloud Mode)",
+            "4.1.5",
+            "release",
+            "917b20be838",
+            "cloud",
+            "4.1.5",
+        ),
+        (
+            "Doris version doris-4.1.5-release",
+            "4.1.5",
+            "release",
+            None,
+            None,
+            "4.1.5",
+        ),
+        (
+            "Apache Doris version 4.1.5-RELEASE-917B20BE838",
+            "4.1.5",
+            "release",
+            "917b20be838",
+            None,
+            "4.1.5",
+        ),
     ],
 )
 def test_parse_supported_version_comments(
@@ -98,6 +130,7 @@ def test_parse_supported_version_comments(
     [
         "enterprisedb version 2.1.5",
         "enterprisedb-4.0.6-abc1234",
+        "enterprisedb-4.1.5-release-917b20be838",
     ],
 )
 def test_unregistered_brand_comments_fail_closed(comment: str) -> None:
@@ -114,6 +147,7 @@ def test_unregistered_brand_comments_fail_closed(comment: str) -> None:
         ("enterprisedb version 2.1.5", "2.1.5"),
         ("enterprisedb version enterprisedb-2.1.5-rc04", "2.1.5"),
         ("enterprisedb-4.0.6-abc1234", "4.0.6"),
+        ("enterprisedb-4.1.5-release-917b20be838", "4.1.5"),
     ],
 )
 def test_registered_brand_alias_comments_parse_three_part_version(
@@ -135,6 +169,8 @@ def test_registered_brand_alias_comments_parse_three_part_version(
     [
         "Doris version enterprisedb-4.0.5",
         "enterprisedb version doris-4.0.5",
+        "Doris version enterprisedb-4.1.5-release-917b20be838",
+        "enterprisedb version doris-4.1.5-release-917b20be838",
     ],
 )
 def test_mismatched_leading_and_version_brands_fail_closed(
@@ -215,6 +251,9 @@ def test_apache_doris_comments_carry_verified_brand(comment: str) -> None:
         "Doris version unknown",
         "Doris version 4.1.3-preview1",
         "Doris version 4.1",
+        "Doris version doris-4.1.5-releasecandidate",
+        "Doris version doris-4.1.5-release-notacommit",
+        "Doris version doris-4.1.5-release-917b20be838-extra",
     ],
 )
 def test_unknown_version_comments_fail_closed(comment: str) -> None:
@@ -230,6 +269,9 @@ def test_comparison_uses_only_three_part_version() -> None:
     alpha = parse_doris_version_comment("Doris version 3.0.3-alpha1")
     beta = parse_doris_version_comment("Doris version 3.0.3-beta2")
     release_candidate = parse_doris_version_comment("Doris version 3.0.3-rc03")
+    release_build = parse_doris_version_comment(
+        "Doris version doris-3.0.3-release-43f06a5e26"
+    )
     stable_a = parse_doris_version_comment("Doris version 3.0.3-43f06a5e26")
     stable_b = parse_doris_version_comment("Doris version 3.0.3-abcdef1234")
 
@@ -237,6 +279,7 @@ def test_comparison_uses_only_three_part_version() -> None:
     assert release_candidate.compare(beta) == 0
     assert stable_a.compare(release_candidate) == 0
     assert stable_a.compare(stable_b) == 0
+    assert release_build.compare(stable_a) == 0
     assert stable_a.is_at_least(release_candidate) is True
 
 
