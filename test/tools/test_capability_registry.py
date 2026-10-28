@@ -196,6 +196,39 @@ def test_evaluator_requires_version_probes_handler_and_call_permission() -> None
     assert allowed.callable is True
 
 
+def test_release_build_query_capability_is_callable() -> None:
+    evaluator = CapabilityEvaluator(
+        matrix=DORIS_FEATURE_MATRIX,
+        bound_handlers=_BoundHandlers(
+            "doris_query.execute_query"
+        ),  # type: ignore[arg-type]
+    )
+    domain, child = _query_contract()
+    version_comment = "Doris version doris-4.1.5-release-917b20be838"
+    snapshot = replace(
+        _snapshot(probes=_query_probes()),
+        version_vector=DorisClusterVersionVector.from_comments(
+            master_fe=version_comment,
+            follower_fes=(version_comment,),
+            backends=(version_comment,),
+        ),
+    )
+
+    availability = evaluator.evaluate(
+        snapshot=snapshot,
+        providers=CapabilityProviderRegistry({}).snapshot(),
+        domain=domain,
+        child=child,
+        auth_context=None,
+    )
+
+    assert availability.status is AvailabilityStatus.AVAILABLE
+    assert availability.callable is True
+    assert availability.active_variant == "mysql_read_only"
+    assert availability.reason_code == "CAPABILITY_VERIFIED_UNCERTIFIED"
+    assert availability.detected_versions == {"master_fe": ("4.1.5",)}
+
+
 @pytest.mark.parametrize(
     ("domain_name", "child_name", "expected_components"),
     (
