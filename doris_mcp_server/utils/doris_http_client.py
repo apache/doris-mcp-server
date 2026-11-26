@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
 import socket
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -168,7 +169,7 @@ def _bounded_float(value: Any, default: float) -> float:
         parsed = float(value)
     except (TypeError, ValueError):
         return default
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         return default
     return min(parsed, MAX_TIMEOUT_SECONDS)
 

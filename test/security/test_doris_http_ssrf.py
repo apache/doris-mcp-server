@@ -300,6 +300,61 @@ async def test_read_and_total_timeouts_are_enforced() -> None:
             )
 
 
+@pytest.mark.parametrize(
+    ("setting", "label"),
+    [
+        ("DORIS_HTTP_CONNECT_TIMEOUT_SECONDS", "connect"),
+        ("DORIS_HTTP_READ_TIMEOUT_SECONDS", "read"),
+        ("DORIS_HTTP_TOTAL_TIMEOUT_SECONDS", "total"),
+    ],
+)
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "1e309"])
+def test_http_timeout_configuration_rejects_non_finite_values(
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    label: str,
+    value: str,
+) -> None:
+    monkeypatch.setenv(setting, value)
+    config = DorisConfig.from_env()
+    assert any(
+        error.startswith(f"Doris HTTP {label} timeout")
+        for error in config.validate()
+    )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_http_client_uses_safe_defaults_for_non_finite_timeouts(value: float) -> None:
+    client = _http_client(
+        "127.0.0.1",
+        8030,
+        connect_timeout=value,
+        read_timeout=value,
+        total_timeout=value,
+    )
+    assert client.connect_timeout_seconds == doris_http_client_module.DEFAULT_CONNECT_TIMEOUT_SECONDS
+    assert client.read_timeout_seconds == doris_http_client_module.DEFAULT_READ_TIMEOUT_SECONDS
+    assert client.total_timeout_seconds == doris_http_client_module.DEFAULT_TOTAL_TIMEOUT_SECONDS
+
+
+async def test_nan_total_timeout_cannot_disable_the_http_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(doris_http_client_module, "DEFAULT_TOTAL_TIMEOUT_SECONDS", 0.05)
+    async with _http_server(body=b"ok", delay_seconds=0.2) as port:
+        client = _http_client("127.0.0.1", port, total_timeout=float("nan"))
+        with pytest.raises(DorisHTTPRequestError, match="timed out"):
+            await asyncio.wait_for(
+                client.get(
+                    role="fe",
+                    host="127.0.0.1",
+                    port=port,
+                    path="/metrics",
+                ),
+                timeout=1,
+            )
+
+
 async def test_monitoring_does_not_discover_be_http_nodes_from_sql() -> None:
     manager = _manager(
         _database_config(

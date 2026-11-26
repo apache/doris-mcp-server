@@ -69,6 +69,9 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Rejected non-finite Doris HTTP timeout configuration and restored safe
+  timeout defaults at the client boundary, preventing NaN values from
+  disabling the total request deadline.
 - Preserved fail-closed distribution provenance across version parsing,
   brandless FE/BE component fallback, and certification evidence validation,
   preventing unknown or mismatched brands from inheriting Apache Doris
