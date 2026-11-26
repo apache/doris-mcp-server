@@ -69,6 +69,8 @@ under **Unreleased** until a new version is selected and published.
 
 ### Fixed
 
+- Reaped MetricFlow sidecar processes before propagating request cancellation,
+  and preserved the provider timeout error when the sidecar has already exited.
 - Preserved fail-closed distribution provenance across version parsing,
   brandless FE/BE component fallback, and certification evidence validation,
   preventing unknown or mismatched brands from inheriting Apache Doris
