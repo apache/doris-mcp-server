@@ -32,6 +32,8 @@ github:
   features:
     issues: true
     projects: true
+  dependabot_alerts: true
+  dependabot_updates: true
   rulesets:
     - name: "Default Branch Protection"
       type: branch
@@ -45,6 +47,61 @@ github:
         - root
       restrict_deletion: true
       restrict_force_push: true
+
+    # The ASF root team's bypass applies only to the ruleset above.
+    - name: "Protected Branch Reviews"
+      type: branch
+      branches:
+        includes:
+          - "~DEFAULT_BRANCH"
+          - "release/*"
+          - "rel/*"
+      restrict_deletion: false
+      restrict_force_push: false
+      required_pull_request_reviews:
+        dismiss_stale_reviews: true
+        required_approving_review_count: 1
+
+    # Release branches may have a different set of CI jobs.
+    - name: "Default Branch CI"
+      type: branch
+      restrict_deletion: false
+      restrict_force_push: false
+      required_status_checks:
+        - name: Quality
+          app_slug: github-actions
+        - name: Tests
+          app_slug: github-actions
+        - name: Build and wheel smoke
+          app_slug: github-actions
+        - name: MCP 2026-07-28 conformance
+          app_slug: github-actions
+
+    - name: "Release Tag Protection"
+      target: tag
+      enforcement: active
+      conditions:
+        ref_name:
+          include:
+            - "refs/tags/[0-9]*.[0-9]*.[0-9]*"
+          exclude: []
+      rules:
+        - type: deletion
+        - type: update
+          parameters:
+            update_allows_fetch_and_merge: false
+
+    # A tag pointing at an old commit could still trigger the legacy release workflow.
+    - name: "Block Legacy Release Tags"
+      target: tag
+      enforcement: active
+      conditions:
+        ref_name:
+          include:
+            - "refs/tags/doris-mcp-server-*"
+          exclude: []
+      rules:
+        - type: creation
 notifications:
   issues: commits@doris.apache.org
   commits: commits@doris.apache.org
